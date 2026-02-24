@@ -1,0 +1,10 @@
+[package]
+name = "sigint-tui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sigint-core = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

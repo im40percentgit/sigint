@@ -1,0 +1,12 @@
+[package]
+name = "sigint-tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sigint-core = { workspace = true }
+sigint-sandbox = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
