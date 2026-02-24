@@ -8,3 +8,4 @@ sigint-core = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+hakoniwa = "1.3"

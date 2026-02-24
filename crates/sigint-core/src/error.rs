@@ -26,6 +26,9 @@ pub enum Error {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("Sandbox error: {0}")]
+    Sandbox(String),
+
     #[error("{0}")]
     Other(String),
 }

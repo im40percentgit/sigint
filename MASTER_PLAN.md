@@ -61,12 +61,12 @@ sigint/
 
 ### Phase 1: Foundation ← ACTIVE
 - [x] Project bootstrap (git, MASTER_PLAN.md)
-- [ ] Cargo workspace with all crate stubs
-- [ ] sigint-core: Config (TOML), error types, domain types, event bus
-- [ ] sigint-llm: Ollama provider with SSE streaming
-- [ ] sigint-cli: `sigint chat` interactive command
-- [ ] sigint-store: SQLite schema + migrations + basic CRUD
-- [ ] Prototype: sandbox harness (nmap in hakoniwa)
+- [x] Cargo workspace with all crate stubs
+- [x] sigint-core: Config (TOML), error types, domain types, event bus
+- [x] sigint-llm: Ollama provider with SSE streaming
+- [x] sigint-cli: `sigint chat` interactive command
+- [x] sigint-store: SQLite schema + migrations + basic CRUD
+- [x] Prototype: sandbox harness (nmap in hakoniwa)
 
 ### Phase 2: Agent System + Sandboxing
 - [ ] Agent trait, Orchestrator, ConversationState with tool-call loop
@@ -107,6 +107,10 @@ sigint/
 | DEC-SAND-001 | hakoniwa for sandboxing | accepted | Native Linux namespaces, no Docker overhead |
 | DEC-LLM-001 | Ollama-first, cloud fallback | accepted | Local-first privacy, cloud for capability |
 | DEC-EMBED-001 | fastembed with all-MiniLM-L6-v2 | accepted | Local embeddings, no API calls, ONNX runtime |
+| DEC-SAND-002 | Generic SandboxedCommand builder | accepted | Consuming builder over hakoniwa's &mut self API; tool-agnostic, profiles specialize |
+| DEC-SAND-003 | Runtime capability detection via /proc | accepted | Probes namespaces + AppArmor + PATH at runtime for actionable error messages |
+| DEC-SAND-004 | Per-tool sandbox profiles | accepted | Nmap (Pasta + 300s) and Offline (None + 60s) presets; extensible for future tools |
+| DEC-SAND-005 | Integration tests against real namespaces | accepted | No mocking OS primitives; nmap test #[ignore] for CI without passt/network |
 
 ## Risks
 
