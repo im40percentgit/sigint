@@ -1,0 +1,11 @@
+/target
+/tmp
+*.swp
+*.swo
+*~
+.DS_Store
+*.db
+*.db-journal
+*.db-wal
+.env
+.worktrees/
