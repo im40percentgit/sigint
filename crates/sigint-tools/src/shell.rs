@@ -25,11 +25,19 @@ use crate::tool::Tool;
 /// Commands the LLM agent is permitted to run via ShellTool.
 ///
 /// Only read-only / analysis tools are permitted. Write and network commands
-/// are excluded. curl is included but runs inside the offline sandbox profile
-/// so it cannot reach external hosts.
+/// are excluded. Recon commands (whois, dig, etc.) run in the Recon sandbox
+/// profile which provides Pasta networking for DNS/WHOIS resolution.
 const ALLOWED_COMMANDS: &[&str] = &[
     "grep", "awk", "sed", "cat", "head", "tail", "sort", "uniq", "wc", "jq",
     "curl", "find", "ls", "file", "strings", "xxd",
+    // Recon commands — DNS, WHOIS, certificate inspection
+    "whois", "dig", "host", "nslookup", "openssl",
+];
+
+/// Commands that require network access and use the Recon sandbox profile
+/// instead of the Offline profile.
+const NETWORK_COMMANDS: &[&str] = &[
+    "whois", "dig", "host", "nslookup", "curl", "openssl",
 ];
 
 /// Sandboxed shell command wrapper with an allowlist.
@@ -58,10 +66,12 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Run a whitelisted shell command for processing and analysis. \
+        "Run a whitelisted shell command for processing, analysis, and passive recon. \
          Available commands: grep, awk, sed, cat, head, tail, sort, uniq, wc, \
-         jq, curl, find, ls, file, strings, xxd. \
-         No network access — runs in an offline sandbox."
+         jq, curl, find, ls, file, strings, xxd, whois, dig, host, nslookup, openssl. \
+         Recon commands (whois, dig, host, nslookup, curl, openssl) have network access \
+         for DNS/WHOIS lookups. Other commands run in an offline sandbox. \
+         IMPORTANT: Do NOT use shell to run nmap — use the dedicated nmap tool instead."
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -73,7 +83,7 @@ impl Tool for ShellTool {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Command to run (must be in the allowlist: grep, awk, sed, cat, head, tail, sort, uniq, wc, jq, curl, find, ls, file, strings, xxd)"
+                        "description": "Command to run (must be in the allowlist: grep, awk, sed, cat, head, tail, sort, uniq, wc, jq, curl, find, ls, file, strings, xxd, whois, dig, host, nslookup, openssl). Recon commands (whois, dig, host, nslookup, curl, openssl) have network access. Do NOT use shell to run nmap — use the nmap tool."
                     },
                     "args": {
                         "type": "array",
@@ -121,8 +131,18 @@ impl Tool for ShellTool {
             "executing shell command"
         );
 
-        // Build the sandboxed command using the offline profile.
-        let mut cmd = SandboxProfile::offline().apply(&command);
+        // Select sandbox profile: Recon (with network) for DNS/WHOIS commands,
+        // Offline (no network) for everything else.
+        let basename = std::path::Path::new(&command)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&command);
+        let profile = if NETWORK_COMMANDS.contains(&basename) {
+            SandboxProfile::recon()
+        } else {
+            SandboxProfile::offline()
+        };
+        let mut cmd = profile.apply(&command);
         for arg in cmd_args {
             cmd = cmd.arg(arg);
         }

@@ -48,12 +48,19 @@ impl Agent for ResearcherAgent {
          Your goal is to gather as much information as possible about the target without \
          triggering intrusion detection systems. \
          \n\n\
-         You have access to the following tools: nmap (port scanning and service detection), \
-         shell (for DNS lookups, WHOIS queries, certificate inspection, and other recon tasks). \
+         You have access to the following tools:\n\
+         - **nmap** (ALWAYS use this tool for port scanning and service detection — never run nmap via shell)\n\
+         - **shell** (for DNS lookups with dig/host/nslookup, WHOIS queries, certificate inspection with openssl, \
+           and text processing with grep/awk/jq/sed)\n\
+         \n\n\
+         CRITICAL RULES:\n\
+         - For ANY port scanning or service detection, use the nmap tool directly. NEVER run nmap through shell.\n\
+         - For DNS/WHOIS/certificate queries, use shell with: whois, dig, host, nslookup, openssl, curl.\n\
+         - For processing output, use shell with: grep, awk, sed, jq, sort, uniq.\n\
          \n\n\
          Approach:\n\
-         1. Start with passive techniques: WHOIS, DNS enumeration, certificate transparency logs.\n\
-         2. Progress to active scanning: nmap SYN scan for common ports, then service version detection.\n\
+         1. Start with passive techniques: use shell for WHOIS, DNS enumeration, certificate transparency logs.\n\
+         2. Progress to active scanning: use the nmap tool for SYN scan of common ports, then service version detection.\n\
          3. Note every open port, service banner, and technology indicator.\n\
          4. Summarise your findings clearly so the Strategist can plan the next phase.\n\
          \n\

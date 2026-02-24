@@ -19,6 +19,9 @@ pub enum SandboxProfile {
     Nmap,
     /// Offline profile: no network, 1-minute timeout.
     Offline,
+    /// Recon profile: pasta networking, 1-minute timeout.
+    /// For passive recon commands (whois, dig, host, curl) that need DNS/network.
+    Recon,
 }
 
 impl SandboxProfile {
@@ -32,6 +35,11 @@ impl SandboxProfile {
         SandboxProfile::Offline
     }
 
+    /// Convenience constructor for the recon profile.
+    pub fn recon() -> Self {
+        SandboxProfile::Recon
+    }
+
     /// Apply this profile's settings to `program`, returning a configured
     /// `SandboxedCommand` ready for further `.arg()` calls or `.execute()`.
     pub fn apply(&self, program: &str) -> SandboxedCommand {
@@ -41,6 +49,9 @@ impl SandboxProfile {
                 .timeout(300),
             SandboxProfile::Offline => SandboxedCommand::new(program)
                 .network(NetworkMode::None)
+                .timeout(60),
+            SandboxProfile::Recon => SandboxedCommand::new(program)
+                .network(NetworkMode::Pasta)
                 .timeout(60),
         }
     }
@@ -64,5 +75,13 @@ mod tests {
         let cmd = SandboxProfile::offline().apply("/usr/bin/dig");
         assert_eq!(cmd.network, NetworkMode::None);
         assert_eq!(cmd.timeout_secs, 60);
+    }
+
+    #[test]
+    fn recon_profile_settings() {
+        let cmd = SandboxProfile::recon().apply("/usr/bin/whois");
+        assert_eq!(cmd.network, NetworkMode::Pasta);
+        assert_eq!(cmd.timeout_secs, 60);
+        assert_eq!(cmd.program, "/usr/bin/whois");
     }
 }
