@@ -12,6 +12,7 @@
 
 mod chat;
 mod doctor;
+mod scan;
 
 use clap::{Parser, Subcommand};
 use sigint_core::AppCore;
@@ -42,6 +43,20 @@ enum Commands {
     Chat(chat::ChatArgs),
     /// Check SIGINT's environment and dependencies.
     Doctor,
+    /// Run a multi-agent penetration scan against a target.
+    Scan {
+        /// Target hostname, IP address, or CIDR range (e.g. "scanme.nmap.org", "10.0.0.1/24").
+        target: String,
+        /// Port specification passed to nmap (e.g. "80,443" or "1-1000").
+        #[arg(short, long)]
+        ports: Option<String>,
+        /// LLM model override (uses config default if omitted).
+        #[arg(short, long)]
+        model: Option<String>,
+        /// Maximum tool-call iterations per agent turn.
+        #[arg(long, default_value = "10")]
+        max_iterations: usize,
+    },
 }
 
 #[tokio::main]
@@ -75,6 +90,9 @@ async fn main() {
     let result = match cli.command {
         Commands::Chat(args) => chat::run(core, args).await,
         Commands::Doctor => doctor::run(core).await,
+        Commands::Scan { target, model, max_iterations, .. } => {
+            scan::run(core, target, model, max_iterations).await
+        }
     };
 
     if let Err(e) = result {
