@@ -8,6 +8,15 @@
 //! Phase 2. This implementation directly parses each JSON line as it arrives,
 //! yielding StreamChunk items. Connection errors produce a clear Error::Llm
 //! message rather than panicking, satisfying the `sigint chat` error UX spec.
+//!
+//! @decision DEC-LLM-003
+//! @title Tool calls threaded through OllamaMessage and accumulated in streaming
+//! @status accepted
+//! @rationale Ollama's tool-call response embeds tool_calls inside the message
+//! object (same field as content). For non-streaming chat(), we parse them
+//! directly from the response. For streaming, tool_calls appear only on the
+//! final done=true chunk, so we propagate them on that chunk's StreamChunk.
+//! StreamChunk gains a tool_calls field (empty by default) for backward compat.
 
 use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
@@ -15,7 +24,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::provider::{ChunkStream, LlmProvider};
-use crate::types::{ChatMessage, ChatRequest, ChatResponse, StreamChunk, TokenUsage};
+use crate::types::{
+    ChatMessage, ChatRequest, ChatResponse, FunctionCall, StreamChunk, ToolCall,
+    ToolDefinition, TokenUsage,
+};
 use sigint_core::Error;
 
 // ── Wire types ────────────────────────────────────────────────────────────────
@@ -28,12 +40,18 @@ struct OllamaRequest<'a> {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
+    /// Tool definitions. Omitted from wire format when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ToolDefinition>,
 }
 
 #[derive(Debug, Serialize)]
 struct OllamaMessage {
     role: String,
     content: String,
+    /// Tool calls from an assistant turn. Omitted when None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,9 +72,41 @@ struct OllamaStreamLine {
     eval_count: u32,
 }
 
+/// The message object inside an Ollama response line.
 #[derive(Debug, Deserialize)]
 struct OllamaMessageContent {
+    #[serde(default)]
     content: String,
+    /// Tool calls requested by the model. Present only when the model chose
+    /// to invoke tools rather than (or in addition to) generating text.
+    #[serde(default)]
+    tool_calls: Vec<OllamaToolCall>,
+}
+
+/// Wire-level tool call from Ollama — wraps a function call.
+#[derive(Debug, Deserialize)]
+struct OllamaToolCall {
+    function: OllamaFunctionCall,
+}
+
+/// Wire-level function call from Ollama.
+#[derive(Debug, Deserialize)]
+struct OllamaFunctionCall {
+    name: String,
+    arguments: serde_json::Value,
+}
+
+// ── Conversion helpers ────────────────────────────────────────────────────────
+
+fn wire_tool_calls_to_domain(wire: Vec<OllamaToolCall>) -> Vec<ToolCall> {
+    wire.into_iter()
+        .map(|tc| ToolCall {
+            function: FunctionCall {
+                name: tc.function.name,
+                arguments: tc.function.arguments,
+            },
+        })
+        .collect()
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
@@ -99,6 +149,7 @@ impl OllamaProvider {
             .map(|m| OllamaMessage {
                 role: m.role.clone(),
                 content: m.content.clone(),
+                tool_calls: m.tool_calls.clone(),
             })
             .collect()
     }
@@ -124,6 +175,7 @@ impl LlmProvider for OllamaProvider {
             messages: &ollama_msgs,
             stream: false,
             options: self.build_options(request.max_tokens),
+            tools: request.tools.clone(),
         };
 
         debug!("Ollama non-streaming request to {}", self.chat_url());
@@ -146,10 +198,10 @@ impl LlmProvider for OllamaProvider {
             Error::Llm(format!("Failed to parse Ollama response: {}", e))
         })?;
 
-        let content = line
-            .message
-            .map(|m| m.content)
-            .unwrap_or_default();
+        let (content, tool_calls) = match line.message {
+            Some(m) => (m.content, wire_tool_calls_to_domain(m.tool_calls)),
+            None => (String::new(), vec![]),
+        };
 
         let usage = Some(TokenUsage {
             prompt_tokens: line.prompt_eval_count,
@@ -159,6 +211,7 @@ impl LlmProvider for OllamaProvider {
 
         Ok(ChatResponse {
             content,
+            tool_calls,
             usage,
             model: request.model,
         })
@@ -171,6 +224,7 @@ impl LlmProvider for OllamaProvider {
             messages: &ollama_msgs,
             stream: true,
             options: self.build_options(request.max_tokens),
+            tools: request.tools.clone(),
         };
 
         debug!("Ollama streaming request to {}", self.chat_url());
@@ -247,10 +301,10 @@ fn newline_json_stream(
 
                 match serde_json::from_str::<OllamaStreamLine>(&line) {
                     Ok(parsed) => {
-                        let delta = parsed
-                            .message
-                            .map(|m| m.content)
-                            .unwrap_or_default();
+                        let (delta, tool_calls) = match parsed.message {
+                            Some(m) => (m.content, wire_tool_calls_to_domain(m.tool_calls)),
+                            None => (String::new(), vec![]),
+                        };
 
                         let usage = if parsed.done && parsed.eval_count > 0 {
                             Some(TokenUsage {
@@ -266,6 +320,7 @@ fn newline_json_stream(
                             delta,
                             done: parsed.done,
                             usage,
+                            tool_calls,
                         });
 
                         if parsed.done {
@@ -286,6 +341,7 @@ fn newline_json_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use sigint_core::config::LlmConfig;
 
     #[test]
@@ -323,9 +379,116 @@ mod tests {
     }
 
     #[test]
+    fn build_messages_passes_through_tool_calls() {
+        let mut msg = ChatMessage::assistant("");
+        msg.tool_calls = Some(vec![ToolCall {
+            function: FunctionCall {
+                name: "get_weather".into(),
+                arguments: json!({"location": "Paris"}),
+            },
+        }]);
+        let built = OllamaProvider::build_messages(&[msg]);
+        assert!(built[0].tool_calls.is_some());
+        assert_eq!(built[0].tool_calls.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
     fn provider_name() {
         let p = OllamaProvider::new("http://localhost:11434", "llama3.2", 0.7);
         assert_eq!(p.name(), "ollama");
+    }
+
+    #[test]
+    fn ollama_request_serializes_tools() {
+        let tool = ToolDefinition::function(
+            "get_weather",
+            "Get weather",
+            json!({"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}),
+        );
+        let msg = OllamaMessage { role: "user".into(), content: "What is the weather?".into(), tool_calls: None };
+        let req = OllamaRequest {
+            model: "llama3.2",
+            messages: &[msg],
+            stream: false,
+            options: None,
+            tools: vec![tool],
+        };
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert!(serialized.get("tools").is_some());
+        assert_eq!(serialized["tools"][0]["type"], "function");
+        assert_eq!(serialized["tools"][0]["function"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn ollama_request_omits_tools_when_empty() {
+        let msg = OllamaMessage { role: "user".into(), content: "hello".into(), tool_calls: None };
+        let req = OllamaRequest {
+            model: "llama3.2",
+            messages: &[msg],
+            stream: false,
+            options: None,
+            tools: vec![],
+        };
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert!(serialized.get("tools").is_none(), "tools key should be absent when empty");
+    }
+
+    #[test]
+    fn parse_ollama_response_with_tool_calls() {
+        let json_str = r#"{
+            "model": "llama3.2",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": {"location": "Paris"}
+                    }
+                }]
+            },
+            "done": true,
+            "prompt_eval_count": 10,
+            "eval_count": 5
+        }"#;
+        let parsed: OllamaStreamLine = serde_json::from_str(json_str).unwrap();
+        let msg = parsed.message.expect("message should be present");
+        assert_eq!(msg.content, "");
+        assert_eq!(msg.tool_calls.len(), 1);
+        assert_eq!(msg.tool_calls[0].function.name, "get_weather");
+        assert_eq!(msg.tool_calls[0].function.arguments["location"], "Paris");
+    }
+
+    #[test]
+    fn parse_ollama_response_without_tool_calls() {
+        let json_str = r#"{
+            "model": "llama3.2",
+            "message": {
+                "role": "assistant",
+                "content": "Hello, world!"
+            },
+            "done": true,
+            "prompt_eval_count": 10,
+            "eval_count": 5
+        }"#;
+        let parsed: OllamaStreamLine = serde_json::from_str(json_str).unwrap();
+        let msg = parsed.message.expect("message should be present");
+        assert_eq!(msg.content, "Hello, world!");
+        assert!(msg.tool_calls.is_empty(), "tool_calls should be empty when absent");
+    }
+
+    #[test]
+    fn wire_to_domain_tool_call_conversion() {
+        let wire = vec![OllamaToolCall {
+            function: OllamaFunctionCall {
+                name: "get_weather".into(),
+                arguments: json!({"location": "Paris"}),
+            },
+        }];
+        let domain = wire_tool_calls_to_domain(wire);
+        assert_eq!(domain.len(), 1);
+        assert_eq!(domain[0].function.name, "get_weather");
+        assert_eq!(domain[0].function.arguments["location"], "Paris");
     }
 
     /// Verify that chat_stream returns a clear error when Ollama is not running.

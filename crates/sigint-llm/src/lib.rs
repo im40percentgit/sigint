@@ -13,4 +13,7 @@ pub mod types;
 
 pub use provider::LlmProvider;
 pub use ollama::OllamaProvider;
-pub use types::{ChatMessage, ChatRequest, ChatResponse, StreamChunk, TokenUsage};
+pub use types::{
+    ChatMessage, ChatRequest, ChatResponse, StreamChunk, TokenUsage,
+    ToolDefinition, FunctionDef, ToolCall, FunctionCall,
+};

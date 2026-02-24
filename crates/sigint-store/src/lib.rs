@@ -11,5 +11,7 @@ pub mod db;
 pub mod migrations;
 pub mod sessions;
 pub mod messages;
+pub mod scans;
 
 pub use db::Database;
+pub use scans::ScanRecord;

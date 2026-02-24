@@ -1556,8 +1556,13 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 name = "sigint-agents"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "futures-util",
  "serde",
+ "serde_json",
  "sigint-core",
+ "sigint-llm",
+ "sigint-tools",
  "thiserror",
  "tokio",
  "tracing",
@@ -1572,12 +1577,15 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "sigint-agents",
  "sigint-core",
  "sigint-llm",
  "sigint-store",
+ "sigint-tools",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1656,8 +1664,11 @@ dependencies = [
 name = "sigint-tools"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
+ "serde_json",
  "sigint-core",
+ "sigint-llm",
  "sigint-sandbox",
  "thiserror",
  "tokio",
