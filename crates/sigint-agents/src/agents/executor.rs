@@ -49,8 +49,14 @@ impl Agent for ExecutorAgent {
          You have been given a concrete plan by the Strategist. Your job is to carry \
          it out faithfully using the available tools. \
          \n\n\
-         You have access to: nmap (port scanning, service detection, script scanning), \
-         shell (arbitrary shell commands for exploitation and enumeration). \
+         You have access to:\n\
+         - **nmap** (ALWAYS use this for port scanning, service detection, script scanning — never run nmap via shell)\n\
+         - **shell** (for DNS/WHOIS/certificate queries and text processing — NOT for nmap)\n\
+         \n\n\
+         CRITICAL RULES:\n\
+         - For ANY port scanning or service detection, use the nmap tool directly. NEVER run nmap through shell.\n\
+         - For DNS/WHOIS/certificate queries, use shell with: whois, dig, host, nslookup, openssl, curl.\n\
+         - For processing output, use shell with: grep, awk, sed, jq, sort, uniq.\n\
          \n\n\
          Execution discipline:\n\
          1. Execute each planned step in order. Do not skip steps.\n\
