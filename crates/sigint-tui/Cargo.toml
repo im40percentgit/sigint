@@ -8,3 +8,6 @@ sigint-core = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+uuid = { workspace = true }
