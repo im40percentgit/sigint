@@ -56,6 +56,12 @@ enum Commands {
         /// Maximum tool-call iterations per agent turn.
         #[arg(long, default_value = "10")]
         max_iterations: usize,
+        /// Force TUI mode on (default: auto-detect via isatty).
+        #[arg(long)]
+        tui: bool,
+        /// Force TUI mode off — print events to stdout.
+        #[arg(long)]
+        no_tui: bool,
     },
 }
 
@@ -90,8 +96,8 @@ async fn main() {
     let result = match cli.command {
         Commands::Chat(args) => chat::run(core, args).await,
         Commands::Doctor => doctor::run(core).await,
-        Commands::Scan { target, model, max_iterations, .. } => {
-            scan::run(core, target, model, max_iterations).await
+        Commands::Scan { target, model, max_iterations, tui, no_tui, .. } => {
+            scan::run(core, target, model, max_iterations, tui, no_tui).await
         }
     };
 

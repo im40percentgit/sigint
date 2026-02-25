@@ -1,7 +1,15 @@
 //! sigint-tui — Ratatui terminal user interface.
 //!
-//! Phase 3 will implement: agent chat panel, tool output pane,
-//! findings panel, task queue — all fed by AppCore event bus.
+//! Provides a 5-panel TUI driven by the AppCore event bus:
+//!   - Agent status bar (top)
+//!   - Chat panel (left 60%) + Tool output panel (right 40%)
+//!   - Findings table (bottom section)
+//!   - Input bar (bottom)
+//!
+//! Entry point: `TuiApp::new(event_rx)?.run().await`
 
-/// Placeholder init — will be replaced by full TUI in Phase 3.
-pub fn init() {}
+pub mod app;
+pub mod state;
+pub mod ui;
+
+pub use app::TuiApp;

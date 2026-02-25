@@ -27,6 +27,7 @@
 //! awaited — when the function returns and the EventBus is dropped, the broadcast
 //! channel closes and the spawned task exits naturally via `RecvError::Closed`.
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 use sigint_agents::{Orchestrator, ToolRegistry};
@@ -51,11 +52,20 @@ const DEFAULT_CONTEXT_WINDOW: usize = 8192;
 /// * `target`         — Hostname, IP, or CIDR range to scan.
 /// * `model`          — Optional model override (uses config default if None).
 /// * `max_iterations` — Hard cap on tool-call rounds per agent turn.
+/// * `force_tui`      — `--tui` flag: force TUI mode on.
+/// * `force_no_tui`   — `--no-tui` flag: force stdout mode.
+///
+/// TUI auto-detection: if neither flag is set, TUI is used when stdout is a
+/// terminal (isatty). In CI or when piped, falls back to stdout event printer.
+///
+/// @decision DEC-P3-003
 pub async fn run(
     core: AppCore,
     target: String,
     model: Option<String>,
     max_iterations: usize,
+    force_tui: bool,
+    force_no_tui: bool,
 ) -> Result<(), Error> {
     let model = model.unwrap_or_else(|| core.config.llm.model.clone());
 
@@ -67,41 +77,34 @@ pub async fn run(
     println!("  agents : researcher → strategist → executor → analyst → reporter");
     println!();
 
-    // ── Event display task ────────────────────────────────────────────────────
+    // ── TUI / stdout event display ────────────────────────────────────────────
     // Subscribe before the scan starts so no events are missed.
-    let mut event_rx = core.events.subscribe();
+    // DEC-P3-003: auto-detect via isatty; --tui/--no-tui override.
+    let use_tui = if force_tui {
+        true
+    } else if force_no_tui {
+        false
+    } else {
+        std::io::stdout().is_terminal()
+    };
 
-    tokio::spawn(async move {
-        loop {
-            match event_rx.recv().await {
-                Ok(Event::ToolStarted { name, .. }) => {
-                    println!("[tool] Running {}...", name);
-                }
-                Ok(Event::ToolOutput { name, output }) => {
-                    let preview = if output.len() > 200 {
-                        format!("{}...", &output[..200])
-                    } else {
-                        output.clone()
-                    };
-                    println!("[tool] {}: {}", name, preview);
-                }
-                Ok(Event::ToolCompleted { name, exit_code }) => {
-                    println!("[tool] {} completed (exit {})", name, exit_code);
-                }
-                Ok(Event::Status(msg)) => {
-                    println!("[status] {}", msg);
-                }
-                // Ignore other event variants; stop on channel close.
-                Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("event display: dropped {} events (lagged)", n);
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    break;
-                }
+    if use_tui {
+        match sigint_tui::TuiApp::new(core.events.subscribe()) {
+            Ok(tui) => {
+                tokio::spawn(async move {
+                    if let Err(e) = tui.run().await {
+                        tracing::error!("TUI error: {e}");
+                    }
+                });
+            }
+            Err(e) => {
+                warn!("TUI init failed, falling back to stdout: {e}");
+                spawn_stdout_printer(core.events.subscribe());
             }
         }
-    });
+    } else {
+        spawn_stdout_printer(core.events.subscribe());
+    }
 
     // ── Tool registry ─────────────────────────────────────────────────────────
     let mut registry = ToolRegistry::new();
@@ -148,6 +151,42 @@ pub async fn run(
     persist_scan(&core, &target, &report).await;
 
     Ok(())
+}
+
+/// Spawn a detached task that prints tool/status events to stdout.
+///
+/// Used when TUI is disabled or unavailable.
+fn spawn_stdout_printer(mut event_rx: tokio::sync::broadcast::Receiver<Event>) {
+    tokio::spawn(async move {
+        loop {
+            match event_rx.recv().await {
+                Ok(Event::ToolStarted { name, .. }) => {
+                    println!("[tool] Running {}...", name);
+                }
+                Ok(Event::ToolOutput { name, output }) => {
+                    let preview = if output.len() > 200 {
+                        format!("{}...", &output[..200])
+                    } else {
+                        output.clone()
+                    };
+                    println!("[tool] {}: {}", name, preview);
+                }
+                Ok(Event::ToolCompleted { name, exit_code }) => {
+                    println!("[tool] {} completed (exit {})", name, exit_code);
+                }
+                Ok(Event::Status(msg)) => {
+                    println!("[status] {}", msg);
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("event display: dropped {} events (lagged)", n);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
+            }
+        }
+    });
 }
 
 /// Persist the scan session and one summary record to SQLite.
@@ -235,13 +274,17 @@ mod tests {
             model: Option<String>,
             #[arg(long, default_value = "10")]
             max_iterations: usize,
+            #[arg(long)]
+            tui: bool,
+            #[arg(long)]
+            no_tui: bool,
         },
     }
 
     #[test]
     fn parse_minimal_scan_command() {
         let cli = TestCli::parse_from(["sigint", "scan", "scanme.nmap.org"]);
-        let TestCommands::Scan { target, ports, model, max_iterations } = cli.command;
+        let TestCommands::Scan { target, ports, model, max_iterations, .. } = cli.command;
         assert_eq!(target, "scanme.nmap.org");
         assert!(ports.is_none());
         assert!(model.is_none());
@@ -256,7 +299,7 @@ mod tests {
             "--model", "llama3.2",
             "--max-iterations", "5",
         ]);
-        let TestCommands::Scan { target, ports, model, max_iterations } = cli.command;
+        let TestCommands::Scan { target, ports, model, max_iterations, .. } = cli.command;
         assert_eq!(target, "192.168.1.1");
         assert_eq!(ports.as_deref(), Some("80,443"));
         assert_eq!(model.as_deref(), Some("llama3.2"));
@@ -327,7 +370,7 @@ mod tests {
     #[ignore]
     async fn integration_scan_scanme_nmap_org() {
         let core = AppCore::default_for_test();
-        run(core, "scanme.nmap.org".into(), None, 3)
+        run(core, "scanme.nmap.org".into(), None, 3, false, true)
             .await
             .expect("scan should complete without error");
     }
