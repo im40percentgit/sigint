@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Top-level configuration for SIGINT.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// LLM provider settings.
     #[serde(default)]
@@ -67,16 +67,6 @@ pub struct LogConfig {
 }
 
 // ── Default implementations ──────────────────────────────────────────────────
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            llm: LlmConfig::default(),
-            store: StoreConfig::default(),
-            log: LogConfig::default(),
-        }
-    }
-}
 
 impl Default for LlmConfig {
     fn default() -> Self {
@@ -150,9 +140,9 @@ impl Config {
     /// Expand `~` in `store.db_path` to the actual home directory.
     pub fn resolved_db_path(&self) -> PathBuf {
         let raw = &self.store.db_path;
-        if raw.starts_with("~/") {
+        if let Some(stripped) = raw.strip_prefix("~/") {
             if let Some(home) = dirs_home() {
-                return home.join(&raw[2..]);
+                return home.join(stripped);
             }
         }
         PathBuf::from(raw)

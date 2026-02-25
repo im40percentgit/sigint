@@ -117,6 +117,72 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         );
         ",
     ),
+    (
+        2,
+        "fts5 full-text search",
+        "
+        -- FTS5 for messages: standalone table with source_id UUID column.
+        -- We cannot use content=messages / content_rowid=id because `id` is
+        -- a UUID TEXT, not an INTEGER rowid. Standalone FTS5 stores content
+        -- copies; triggers keep the index in sync.
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            source_id UNINDEXED,
+            content,
+            tokenize='porter ascii'
+        );
+        CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(source_id, content)
+                VALUES (new.id, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+            DELETE FROM messages_fts WHERE source_id = old.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+            DELETE FROM messages_fts WHERE source_id = old.id;
+            INSERT INTO messages_fts(source_id, content)
+                VALUES (new.id, new.content);
+        END;
+
+        -- FTS5 for findings: indexes title + description.
+        CREATE VIRTUAL TABLE IF NOT EXISTS findings_fts USING fts5(
+            source_id UNINDEXED,
+            title,
+            description,
+            tokenize='porter ascii'
+        );
+        CREATE TRIGGER IF NOT EXISTS findings_fts_ai AFTER INSERT ON findings BEGIN
+            INSERT INTO findings_fts(source_id, title, description)
+                VALUES (new.id, new.title, new.description);
+        END;
+        CREATE TRIGGER IF NOT EXISTS findings_fts_ad AFTER DELETE ON findings BEGIN
+            DELETE FROM findings_fts WHERE source_id = old.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS findings_fts_au AFTER UPDATE ON findings BEGIN
+            DELETE FROM findings_fts WHERE source_id = old.id;
+            INSERT INTO findings_fts(source_id, title, description)
+                VALUES (new.id, new.title, new.description);
+        END;
+
+        -- FTS5 for scan_history: indexes output text.
+        CREATE VIRTUAL TABLE IF NOT EXISTS scan_history_fts USING fts5(
+            source_id UNINDEXED,
+            output,
+            tokenize='porter ascii'
+        );
+        CREATE TRIGGER IF NOT EXISTS scan_history_fts_ai AFTER INSERT ON scan_history BEGIN
+            INSERT INTO scan_history_fts(source_id, output)
+                VALUES (new.id, COALESCE(new.output, ''));
+        END;
+        CREATE TRIGGER IF NOT EXISTS scan_history_fts_ad AFTER DELETE ON scan_history BEGIN
+            DELETE FROM scan_history_fts WHERE source_id = old.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS scan_history_fts_au AFTER UPDATE ON scan_history BEGIN
+            DELETE FROM scan_history_fts WHERE source_id = old.id;
+            INSERT INTO scan_history_fts(source_id, output)
+                VALUES (new.id, COALESCE(new.output, ''));
+        END;
+        ",
+    ),
 ];
 
 /// Run all pending migrations against the given connection.
@@ -217,5 +283,46 @@ mod tests {
             )
             .unwrap();
         assert_eq!(desc, "initial schema");
+    }
+
+    #[test]
+    fn fts5_virtual_tables_created() {
+        let conn = in_memory();
+        run_migrations(&conn).unwrap();
+
+        // FTS5 virtual tables appear in sqlite_master with type='table'
+        for table in &["messages_fts", "findings_fts", "scan_history_fts"] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    rusqlite::params![table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "FTS5 table '{}' should exist after migration 2", table);
+        }
+    }
+
+    #[test]
+    fn fts5_sync_triggers_exist() {
+        let conn = in_memory();
+        run_migrations(&conn).unwrap();
+
+        let expected_triggers = [
+            "messages_fts_ai", "messages_fts_ad", "messages_fts_au",
+            "findings_fts_ai", "findings_fts_ad", "findings_fts_au",
+            "scan_history_fts_ai", "scan_history_fts_ad", "scan_history_fts_au",
+        ];
+
+        for trigger in &expected_triggers {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name=?1",
+                    rusqlite::params![trigger],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "Trigger '{}' should exist after migration 2", trigger);
+        }
     }
 }
