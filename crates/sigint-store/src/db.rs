@@ -22,6 +22,10 @@ use tracing::info;
 use sigint_core::Error;
 
 use crate::migrations::run_migrations;
+use crate::query::sessions::SessionQuery;
+use crate::query::findings::FindingQuery;
+use crate::query::messages::MessageQuery;
+use crate::query::scans::ScanQuery;
 
 /// Default pool size for file-backed databases.
 const FILE_POOL_SIZE: u32 = 4;
@@ -118,6 +122,28 @@ impl Database {
             .get()
             .map_err(|e| Error::Database(format!("Cannot acquire connection from pool: {e}")))?;
         f(&conn)
+    }
+
+    /// Begin a typed query builder for Session records.
+    pub fn sessions(&self) -> SessionQuery<'_> {
+        SessionQuery::new(self)
+    }
+
+    /// Begin a typed query builder for Finding records.
+    pub fn findings(&self) -> FindingQuery<'_> {
+        FindingQuery::new(self)
+    }
+
+    /// Begin a typed query builder for Message records.
+    ///
+    /// Named `messages_query` to avoid collision with the existing `get_messages` method.
+    pub fn messages_query(&self) -> MessageQuery<'_> {
+        MessageQuery::new(self)
+    }
+
+    /// Begin a typed query builder for ScanRecord records.
+    pub fn scans_query(&self) -> ScanQuery<'_> {
+        ScanQuery::new(self)
     }
 }
 
