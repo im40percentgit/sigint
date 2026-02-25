@@ -96,7 +96,7 @@ impl Database {
     }
 }
 
-fn role_from_str(s: &str) -> Role {
+pub(crate) fn role_from_str(s: &str) -> Role {
     match s {
         "system" => Role::System,
         "user" => Role::User,
@@ -106,7 +106,7 @@ fn role_from_str(s: &str) -> Role {
     }
 }
 
-fn row_to_message(row: &rusqlite::Row<'_>) -> Result<Message, Error> {
+pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> Result<Message, Error> {
     let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
     let sid_str: String = row.get(1).map_err(|e| Error::Database(e.to_string()))?;
     let role_str: String = row.get(2).map_err(|e| Error::Database(e.to_string()))?;

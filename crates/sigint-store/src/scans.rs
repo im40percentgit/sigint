@@ -112,7 +112,7 @@ impl Database {
     }
 }
 
-fn row_to_scan_record(row: &rusqlite::Row<'_>) -> Result<ScanRecord, Error> {
+pub(crate) fn row_to_scan_record(row: &rusqlite::Row<'_>) -> Result<ScanRecord, Error> {
     let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
     let session_id_str: String = row.get(1).map_err(|e| Error::Database(e.to_string()))?;
     let tool: String = row.get(2).map_err(|e| Error::Database(e.to_string()))?;
