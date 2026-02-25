@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 10 crates, shared `AppCore` backend, dual interface (TUI + Web), 5-role agent system with Orchestrator dispatch.
 
-**Current Phase:** Phase 3 — TUI + Memory + Embeddings
+**Current Phase:** Phase 4 — Attack Surface Mapping
 
 ### Architecture
 
@@ -37,8 +37,8 @@ sigint/
 
 - Phase 1 completed (commit 862f9e1)
 - Phase 2 completed (commits d8e5c4a–031276b, 4 hotfix rounds)
-- Phase 3 planning not yet started
-- Stale worktree: `fix/sandbox-fixes` needs cleanup
+- Phase 3 completed (commits 8bcf354–0fee08c) — TUI, memory, embeddings, session CLI, integration wiring
+- Phase 4 planning next — Attack Surface Mapping
 
 ---
 
@@ -181,6 +181,37 @@ Phase 2 transforms SIGINT from a passive chat interface into an autonomous multi
 | DEC-HOTFIX-003 | 2026-02-25 | Fix Nmap ACL name mismatch "nmap" vs "nmap_scan" | Tool registered as "nmap_scan" but agent ACL listed "nmap"; dispatcher couldn't find tool. Standardized on "nmap_scan". Commit 2b6317b |
 | DEC-HOTFIX-004 | 2026-02-25 | Add /dev mount for Pasta sandbox profile | Nmap requires /dev/null and /dev/urandom; missing mount caused runtime failures. Commit 031276b |
 | DEC-HOTFIX-005 | 2026-02-25 | ShellTool combined-command string splitting | ShellTool received combined command strings (e.g. "grep foo \| sort"); added shell-style splitting to handle pipes and redirections. Commit 031276b |
+| DEC-SAND-001 | 2026-02-25 | hakoniwa chosen over Docker for native Linux namespaces | Eliminates container daemon dependency, zero-overhead fork/exec, unprivileged user namespaces only — no setuid binaries required. |
+| DEC-SAND-002 | 2026-02-25 | SandboxedCommand is synchronous; callers use spawn_blocking | hakoniwa's fork(2) is incompatible with multi-threaded tokio runtimes. Blocking in a dedicated OS thread (via spawn_blocking) is the safe bridge. |
+| DEC-SAND-003 | 2026-02-25 | Capability detection via /proc and PATH walk at runtime | Probing at runtime lets the binary surface actionable error messages without failing to compile on misconfigured hosts. |
+| DEC-SAND-004 | 2026-02-25 | Named profiles encode tool-class defaults (nmap, offline) | Callers should not need to know nmap requires pasta networking and a 5-minute timeout — that knowledge lives in the profile. |
+| DEC-SAND-005 | 2026-02-25 | Integration tests run against real namespaces, no mocks | Sandbox correctness cannot be verified by mocking OS primitives; tests fork real child processes inside real namespaces. |
+| DEC-SAND-006 | 2026-02-25 | Resolve bare commands to absolute paths before execve | hakoniwa uses raw execve() (not execvp()); bare command names like "grep" fail with ENOENT. Resolved at build time, PATH injected into sandbox env. |
+| DEC-TOOL-001 | 2026-02-25 | Crate-local ToolError for tool-specific failure modes | Mirrors SandboxError pattern; lets sigint-tools express domain-specific failures without coupling to workspace-wide error types. |
+| DEC-TOOL-002 | 2026-02-25 | ToolResult mirrors SandboxOutput with optional structured data | Wraps stdout/stderr/exit_code/duration from sandbox layer; adds structured_data field for tools that parse their own output into JSON. |
+| DEC-TOOL-003 | 2026-02-25 | async_trait for object-safe async Tool methods | Rust RPITIT does not produce object-safe traits; async_trait rewrites async fn into Pin<Box<dyn Future>> enabling dyn Tool and dynamic dispatch at the agent layer. |
+| DEC-TOOL-004 | 2026-02-25 | NmapTool uses SandboxProfile::nmap() for pasta networking | nmap requires real network access; Pasta user-mode networking gives network access while remaining isolated from host filesystem and process tree. |
+| DEC-TOOL-005 | 2026-02-25 | ShellTool uses a static allowlist and offline sandbox profile | Static allowlist of read-only/analysis commands prevents LLM from running arbitrary binaries; offline sandbox prevents network egress. |
+| DEC-AGENT-007 | 2026-02-25 | ResearcherAgent system prompt focuses on OSINT/recon with nmap+shell tools | Agent specialization via system prompt and tool ACL; tools: nmap_scan, shell. |
+| DEC-AGENT-008 | 2026-02-25 | StrategistAgent is LLM-only (no tools) — reasoning-only role | Attack planning requires no tool execution; tool list is empty to prevent accidental tool calls during reasoning phases. |
+| DEC-AGENT-009 | 2026-02-25 | ExecutorAgent has access to all tools for hands-on exploitation | Executor role requires broadest tool access; tool ACL: nmap_scan, shell. |
+| DEC-AGENT-010 | 2026-02-25 | AnalystAgent uses shell-only tools for result parsing | Analysis requires parsing tool output; only shell (grep, awk, jq, etc.) is needed — no network tools. |
+| DEC-AGENT-011 | 2026-02-25 | ReporterAgent is LLM-only — report generation via text synthesis | Report generation requires no external tools; tool list is empty. ToolRegistry.for_role(Reporter) returns empty. |
+| DEC-AGENT-012 | 2026-02-25 | ScanReport carries context + summary string for Display rendering | Reporter's text output is the primary human-readable artifact; TaskContext provides structured data for programmatic access. |
+| DEC-AGENT-013 | 2026-02-25 | Agents instantiated locally inside run_scan, not as Orchestrator fields | Agent structs are stateless identity objects; local instantiation is zero-cost (stack allocation) and makes pipeline order explicit. |
+| DEC-AGENT-014 | 2026-02-25 | Orchestrator holds Arc<dyn LlmProvider> for cheap Clone across agent turns | Arc avoids lifetime parameters on Orchestrator struct and enables future parallel agent dispatch without copying the provider. |
+| DEC-STORE-001 | 2026-02-25 | SQLite with rusqlite bundled — no external database | Zero-config deployment; database is a single file. bundled feature compiles SQLite into the binary eliminating system libsqlite3 dependency. WAL mode enables concurrent reads. |
+| DEC-STORE-002 | 2026-02-25 | ScanRecord stored as denormalized row — one row per tool invocation | Enables per-tool queries, filtering by exit_code, and future diffing across scans without a separate arguments table. |
+| DEC-STORE-003 | 2026-02-25 | Findings stored with severity TEXT and optional asset/evidence columns | Severity as TEXT CHECK constraint matches message role pattern; asset and evidence are nullable TEXT. CASCADE DELETE on session_id. |
+| DEC-STORE-FTS | 2026-02-25 | Standalone FTS5 with UUID source_id — not external-content tables | FTS5 content_rowid requires INTEGER; UUID is TEXT. Standalone FTS table synced via triggers maintains FTS without rowid aliasing issues. |
+| DEC-P3-002 | 2026-02-25 | fastembed always-on with all-MiniLM-L6-v2 | Semantic search requires local embedding model; fastembed wraps ONNX Runtime for CPU inference. 384-dim vectors stored as raw f32 bytes via bytemuck::cast_slice. |
+| DEC-P3-003 | 2026-02-25 | TUI auto-detected via isatty(stdout); --tui/--no-tui override | When stdout is a TTY the user is interactive — show TUI. When piped or in CI, fall back to stdout event printer. Flags override the heuristic. |
+| DEC-P3-POOL | 2026-02-25 | r2d2 connection pool replaces Mutex<Connection> | WAL mode + r2d2 pool enables concurrent reads from TUI and agents without mutex contention. In-memory DBs use max_size(1) to share a single SQLite :memory: database. |
+| DEC-P3-QUERY | 2026-02-25 | Typed query builders replace ad-hoc SQL string construction | Builder pattern makes filters, pagination, and ordering composable and discoverable; bound parameters prevent SQL injection; builders borrow Database to ensure pool outlives query. |
+| DEC-P3-TUI-001 | 2026-02-25 | AppState as pure event-driven state machine | Separating state from rendering (ui.rs) and I/O (app.rs) lets every state transition be exercised by a unit test. Mirrors Elm architecture. |
+| DEC-P3-TUI-002 | 2026-02-25 | render() is a pure function of AppState with no side effects | Pure render function enables full layout testing via ratatui TestBackend without a real terminal. No mutable global state, no I/O in ui.rs. |
+| DEC-P3-TUI-003 | 2026-02-25 | TuiApp separates terminal I/O from state; state lives in AppState | Terminal setup/teardown and event loop are inherently impure; isolating them in app.rs lets state.rs and ui.rs remain pure and fully unit-testable. |
+| DEC-CLI-003 | 2026-02-25 | sessions subcommand uses best-effort database access, same as scan | Consistency with scan command's error handling; database errors reported with clear message and non-zero exit without panicking. --confirm flag on delete guards against accidental data loss. |
 
 ### Implementation Issues (Inline — No GitHub Remote)
 
@@ -477,16 +508,19 @@ Depends on: P2-5
 ---
 
 ### Phase 3: TUI + Memory + Embeddings
-**Status:** planning
-**Note:** Full PRD to be developed next session. All three sub-systems (Store DAL, Memory + Embeddings, Ratatui TUI) confirmed in scope.
-- [ ] Ratatui interface (agent chat, tool output, findings, task queue)
-- [ ] Real-time LLM streaming to TUI
-- [ ] FTS5 search, fastembed embeddings, cosine similarity UDF
-- [ ] Memory system: episodic + semantic + working
-- [ ] Session save/restore, finding export
+**Status:** completed
+**Sub-phases:** 3A (Store DAL) → 3B (Embeddings) + 3D (TUI) parallel → 3C (Memory) → 3E (Integration)
+**Plan:** `docs/plans/2026-02-25-phase-3-implementation.md`
+**Decisions:** DEC-P3-POOL, DEC-P3-QUERY, DEC-P3-TUI-001, DEC-P3-TUI-002, DEC-P3-TUI-003, DEC-P3-003, DEC-P3-001, DEC-P3-002, DEC-CLI-003
+
+- [x] Sub-Phase 3A: Store DAL — r2d2 connection pool, FTS5 search, typed query builders, findings CRUD
+- [x] Sub-Phase 3D: Ratatui TUI — AppState, 5-panel layout, event loop, isatty auto-detection
+- [x] Sub-Phase 3B: Embeddings — EmbeddingService, vector CRUD, cosine UDF, semantic search, background worker
+- [x] Sub-Phase 3C: Memory — MemoryService (episodic + semantic recall), token budget, orchestrator wiring
+- [x] Sub-Phase 3E: Integration — sessions CLI (list/export/delete), memory+embedding wiring in scan, TUI help overlay
 
 ### Phase 4: Attack Surface Mapping
-**Status:** planned
+**Status:** active
 - [ ] Discovery modules (DNS, port scan, web, cert, OSINT)
 - [ ] Asset correlator + change detector
 - [ ] Recon scheduler
@@ -526,6 +560,35 @@ Depends on: P2-5
 | DEC-HOTFIX-003 | Nmap ACL name standardization | accepted | Tool name "nmap_scan" must match ACL entries; was "nmap" vs "nmap_scan" |
 | DEC-HOTFIX-004 | /dev mount for Pasta sandbox | accepted | Nmap needs /dev/null, /dev/urandom; added /dev bind-mount |
 | DEC-HOTFIX-005 | ShellTool combined-command splitting | accepted | Handle piped/redirected commands via shell-style string splitting |
+| DEC-LLM-002 | Tool-calling types use OpenAI-compatible JSON Schema | accepted | Ollama tool API is OpenAI-compatible; same ToolDefinition/ToolCall shapes work with any OpenAI-compatible provider added later without conversion |
+| DEC-LLM-003 | Tool calls threaded through OllamaMessage, accumulated in streaming | accepted | Ollama embeds tool_calls in the message object; for streaming they appear only on the final done=true chunk, propagated via StreamChunk.tool_calls |
+| DEC-STORE-002 | ScanRecord as denormalized row — one row per tool invocation | accepted | Per-tool rows enable per-tool queries, exit_code filtering, and future diff across scans; args as JSON for readability without a separate table |
+| DEC-STORE-003 | Findings with severity TEXT and optional asset/evidence columns | accepted | Severity stored as TEXT matching the CHECK constraint pattern; asset and evidence are nullable TEXT; CASCADE DELETE on session_id |
+| DEC-STORE-FTS | Standalone FTS5 with UUID source_id instead of external-content tables | accepted | FTS5 content_rowid requires INTEGER; UUIDs are TEXT so external-content was infeasible; standalone FTS5 with UNINDEXED source_id column used instead |
+| DEC-P3-POOL | r2d2 connection pool replaces Mutex<Connection> | accepted | WAL mode + pool enables concurrent reads from TUI and agents without mutex contention; in-memory DBs use max_size(1) to avoid N independent schemas |
+| DEC-P3-QUERY | Typed query builders replace ad-hoc SQL string construction | accepted | Builder pattern makes filters, pagination, and ordering composable without exposing raw SQL; builders borrow Database to ensure pool outlives query |
+| DEC-P3-002 | fastembed always-on with all-MiniLM-L6-v2 (384-dim) | accepted | Local CPU inference via ONNX Runtime; vectors stored as raw f32 bytes via bytemuck::cast_slice — zero-copy with no schema overhead |
+| DEC-AGENT-007 | Non-streaming chat() for all tool-loop iterations | accepted | Tool calls require complete JSON; streaming adds latency and complexity with no user-visible benefit during intermediate iterations |
+| DEC-AGENT-008 | Event emission is best-effort; errors silently discarded | accepted | EventBus::emit already silences send errors; tool execution is the critical path, event delivery is observability-only |
+| DEC-AGENT-009 | Unknown tool name feeds error message back to LLM | accepted | Silently skipping hallucinated tool names leaves the model in inconsistent state; explicit error as tool-role turn lets model recover gracefully |
+| DEC-AGENT-010 | Analyst allowed tools: shell only | accepted | Analyst post-processes tool output via shell (grep, jq, awk); no network or scan tools needed in analysis phase |
+| DEC-AGENT-011 | ToolRegistry owns Box<dyn Tool>; for_agent returns borrowed slices | accepted | Boxed ownership means tools outlive any agent turn; borrowed references avoid Arc overhead on the hot path (tool lookup per loop iteration) |
+| DEC-AGENT-012 | ScanReport is plain data struct with Display; no builder pattern | accepted | Always constructed in one step at end of run_scan; plain struct avoids builder complexity tax; fmt::Display serves CLI stdout primary path |
+| DEC-AGENT-013 | Agents instantiated locally in run_scan, not stored as fields | accepted | Agent structs are stateless identity objects; local instantiation is zero-cost (stack), keeps Orchestrator lean, makes pipeline order explicit |
+| DEC-AGENT-014 | Orchestrator holds Arc<dyn LlmProvider> for cheap Clone across agent turns | accepted | Arc avoids lifetime parameters on Orchestrator struct; enables future parallel agent dispatch via fan-out |
+| DEC-SAND-006 | Resolve bare commands to absolute paths before execve | accepted | hakoniwa uses raw execve() not execvp(); bare names fail with ENOENT; resolved at build time via SANDBOX_PATH search |
+| DEC-TOOL-001 | Crate-local ToolError for tool-specific failure modes | accepted | Isolates tool errors from sigint-core Error type |
+| DEC-TOOL-002 | ToolResult mirrors SandboxOutput with optional structured data | accepted | Consistent with SandboxOutput; structured_data for parsed output |
+| DEC-TOOL-003 | async_trait for object-safe async Tool methods | accepted | async fn in traits requires async-trait for dyn dispatch |
+| DEC-TOOL-004 | NmapTool uses SandboxProfile::nmap() for pasta networking | accepted | Nmap needs network; pasta provides isolated network namespace |
+| DEC-TOOL-005 | ShellTool uses static allowlist and offline sandbox profile | accepted | Static allowlist of read-only commands prevents LLM from issuing destructive shell commands; offline sandbox prevents network egress |
+| DEC-CLI-001 | scan command uses best-effort database persistence | accepted | Scan against live target must not fail due to DB unavailability; all db.* calls wrapped in if-let or warned; stdout output always printed |
+| DEC-CLI-002 | Event display runs in detached tokio task; scan does not block on it | accepted | EventBus receiver loop must not block orchestrator.run_scan; tokio::spawn creates concurrent reader; task exits naturally when broadcast channel closes |
+| DEC-P3-TUI-001 | AppState as single source of truth for TUI rendering | accepted | All mutable TUI state lives in AppState; event loop receives Events from broadcast bus and applies pure state transitions; render() reads AppState without mutation |
+| DEC-P3-TUI-002 | render() is a pure function of AppState with no side effects | accepted | Pure render function (AppState -> Frame writes) enables full layout testing via ratatui TestBackend without a real terminal; 5-panel layout uses Constraint::Percentage + Constraint::Length for deterministic sizing |
+| DEC-P3-TUI-003 | TuiApp separates terminal I/O from state; state lives in AppState | accepted | Terminal setup/teardown and event loop are inherently impure (raw mode, alternate screen, panic hooks); isolating in app.rs lets state.rs and ui.rs remain pure and fully unit-testable |
+| DEC-P3-003 | TUI auto-detected via isatty(stdout); --tui/--no-tui override | accepted | When stdout is a TTY the user is interactive — show TUI; when piped or in CI fall back to stdout event printer; flags override heuristic for scripting and testing |
+| DEC-P3-001 | sigint-memory as separate crate | accepted | Memory subsystem (retrieval + prompt injection) is independently testable without LLM provider; avoids circular dependency agents → memory → store; sigint-agents gains soft dep at Orchestrator level only |
 
 ## References
 
