@@ -15,3 +15,6 @@ pub mod scans;
 
 pub use db::Database;
 pub use scans::ScanRecord;
+
+#[cfg(test)]
+mod pool_tests;

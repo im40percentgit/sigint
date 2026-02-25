@@ -105,7 +105,7 @@ impl Database {
     }
 }
 
-fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> {
+pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> {
     let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
     let name: String = row.get(1).map_err(|e| Error::Database(e.to_string()))?;
     let target: Option<String> = row.get(2).map_err(|e| Error::Database(e.to_string()))?;
