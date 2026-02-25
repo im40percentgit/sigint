@@ -24,7 +24,7 @@ pub struct ExecutorAgent {
 impl ExecutorAgent {
     pub fn new() -> Self {
         Self {
-            allowed_tools: vec!["nmap".to_string(), "shell".to_string()],
+            allowed_tools: vec!["nmap_scan".to_string(), "shell".to_string()],
         }
     }
 }
@@ -107,7 +107,7 @@ mod tests {
     fn executor_allowed_tools() {
         let agent = ExecutorAgent::new();
         let tools = agent.allowed_tools();
-        assert!(tools.contains(&"nmap".to_string()), "executor must have nmap");
+        assert!(tools.contains(&"nmap_scan".to_string()), "executor must have nmap_scan");
         assert!(tools.contains(&"shell".to_string()), "executor must have shell");
         assert_eq!(tools.len(), 2, "executor should have exactly 2 tools");
     }

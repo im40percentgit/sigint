@@ -23,7 +23,7 @@ pub struct ResearcherAgent {
 impl ResearcherAgent {
     pub fn new() -> Self {
         Self {
-            allowed_tools: vec!["nmap".to_string(), "shell".to_string()],
+            allowed_tools: vec!["nmap_scan".to_string(), "shell".to_string()],
         }
     }
 }
@@ -102,7 +102,7 @@ mod tests {
     fn researcher_allowed_tools() {
         let agent = ResearcherAgent::new();
         let tools = agent.allowed_tools();
-        assert!(tools.contains(&"nmap".to_string()), "researcher must have nmap");
+        assert!(tools.contains(&"nmap_scan".to_string()), "researcher must have nmap_scan");
         assert!(tools.contains(&"shell".to_string()), "researcher must have shell");
         assert_eq!(tools.len(), 2, "researcher should have exactly 2 tools");
     }

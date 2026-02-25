@@ -21,6 +21,7 @@ use std::collections::HashMap;
 
 use sigint_llm::types::ToolDefinition;
 use sigint_tools::tool::Tool;
+use tracing::warn;
 
 use crate::agent::Agent;
 
@@ -81,6 +82,12 @@ impl ToolRegistry {
             if let Some(tool) = self.tools.get(name) {
                 tool_refs.push(tool.as_ref());
                 tool_defs.push(tool.definition());
+            } else {
+                warn!(
+                    agent = agent.name(),
+                    tool = %name,
+                    "agent ACL references unregistered tool — check tool name matches"
+                );
             }
         }
 
@@ -154,10 +161,10 @@ mod tests {
     #[test]
     fn register_and_get_by_name() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(FakeTool::new("nmap")));
+        reg.register(Box::new(FakeTool::new("nmap_scan")));
 
-        let tool = reg.get("nmap").expect("should find nmap");
-        assert_eq!(tool.name(), "nmap");
+        let tool = reg.get("nmap_scan").expect("should find nmap_scan");
+        assert_eq!(tool.name(), "nmap_scan");
     }
 
     #[test]
@@ -169,29 +176,29 @@ mod tests {
     #[test]
     fn register_overwrites_same_name() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(FakeTool::new("nmap")));
-        reg.register(Box::new(FakeTool::new("nmap"))); // replace
-        assert!(reg.get("nmap").is_some());
+        reg.register(Box::new(FakeTool::new("nmap_scan")));
+        reg.register(Box::new(FakeTool::new("nmap_scan"))); // replace
+        assert!(reg.get("nmap_scan").is_some());
         assert_eq!(reg.definitions().len(), 1, "should still have exactly one entry");
     }
 
     #[test]
     fn definitions_returns_all_registered() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(FakeTool::new("nmap")));
+        reg.register(Box::new(FakeTool::new("nmap_scan")));
         reg.register(Box::new(FakeTool::new("shell")));
 
         let defs = reg.definitions();
         assert_eq!(defs.len(), 2);
         let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
-        assert!(names.contains(&"nmap"));
+        assert!(names.contains(&"nmap_scan"));
         assert!(names.contains(&"shell"));
     }
 
     #[test]
     fn for_agent_executor_returns_all_allowed_tools() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(FakeTool::new("nmap")));
+        reg.register(Box::new(FakeTool::new("nmap_scan")));
         reg.register(Box::new(FakeTool::new("shell")));
 
         let agent = ExecutorAgent::new();
@@ -200,14 +207,14 @@ mod tests {
         assert_eq!(tools.len(), 2, "executor should get both tools");
         assert_eq!(defs.len(), 2);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"nmap"));
+        assert!(names.contains(&"nmap_scan"));
         assert!(names.contains(&"shell"));
     }
 
     #[test]
     fn for_agent_strategist_returns_empty() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(FakeTool::new("nmap")));
+        reg.register(Box::new(FakeTool::new("nmap_scan")));
         reg.register(Box::new(FakeTool::new("shell")));
 
         let agent = StrategistAgent::new();
@@ -220,7 +227,7 @@ mod tests {
     #[test]
     fn for_agent_analyst_returns_only_shell() {
         let mut reg = ToolRegistry::new();
-        reg.register(Box::new(FakeTool::new("nmap")));
+        reg.register(Box::new(FakeTool::new("nmap_scan")));
         reg.register(Box::new(FakeTool::new("shell")));
 
         let agent = AnalystAgent::new();
@@ -234,7 +241,7 @@ mod tests {
 
     #[test]
     fn for_agent_skips_unregistered_tools_in_acl() {
-        // Agent's ACL includes "nmap" but only "shell" is registered.
+        // Agent's ACL includes "nmap_scan" but only "shell" is registered.
         let mut reg = ToolRegistry::new();
         reg.register(Box::new(FakeTool::new("shell")));
 
