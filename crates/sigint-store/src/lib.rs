@@ -16,11 +16,13 @@ pub mod findings;
 pub mod query;
 pub mod search;
 pub mod embeddings;
+pub mod worker;
 
 pub use db::Database;
 pub use scans::ScanRecord;
 pub use search::SearchResult;
 pub use embeddings::{EmbeddingService, SemanticResult, cosine_similarity};
+pub use worker::embedding_worker;
 
 #[cfg(test)]
 mod pool_tests;
