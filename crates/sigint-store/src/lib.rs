@@ -14,9 +14,11 @@ pub mod messages;
 pub mod scans;
 pub mod findings;
 pub mod query;
+pub mod search;
 
 pub use db::Database;
 pub use scans::ScanRecord;
+pub use search::SearchResult;
 
 #[cfg(test)]
 mod pool_tests;
