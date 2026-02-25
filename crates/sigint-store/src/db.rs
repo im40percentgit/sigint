@@ -21,6 +21,7 @@ use tracing::info;
 
 use sigint_core::Error;
 
+use crate::embeddings::register_cosine_similarity_udf;
 use crate::migrations::run_migrations;
 use crate::query::sessions::SessionQuery;
 use crate::query::findings::FindingQuery;
@@ -50,7 +51,12 @@ impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for ConnectionInit {
              PRAGMA synchronous = NORMAL;
              PRAGMA cache_size = -8000;
              PRAGMA busy_timeout = 5000;",
-        )
+        )?;
+        register_cosine_similarity_udf(conn)
+            .map_err(|e| rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+                Some(e.to_string()),
+            ))
     }
 }
 

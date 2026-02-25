@@ -182,7 +182,7 @@ impl LlmProvider for OllamaProvider {
 
         let resp = self
             .client
-            .post(&self.chat_url())
+            .post(self.chat_url())
             .json(&body)
             .send()
             .await
@@ -231,7 +231,7 @@ impl LlmProvider for OllamaProvider {
 
         let resp = self
             .client
-            .post(&self.chat_url())
+            .post(self.chat_url())
             .json(&body)
             .send()
             .await
