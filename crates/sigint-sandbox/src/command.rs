@@ -11,6 +11,10 @@
 //! Network when Pasta mode is requested. rootfs("/") bind-mounts /bin /etc /lib
 //! /lib64 /lib32 /sbin /usr read-only, giving tools access to system binaries.
 //! Timeout is set on the Command (not Container) via wait_timeout().
+//! The Pasta branch mounts /dev read-write (bindmount_rw) because tools like
+//! nmap require write access to /dev/null. rootfs("/") handles this automatically
+//! for the None branch, but the Pasta branch mounts directories individually and
+//! must explicitly include /dev.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -193,6 +197,10 @@ impl SandboxedCommand {
                     container.bindmount_ro(dir, dir);
                 }
             }
+            // /dev must be read-write: processes write to /dev/null, /dev/urandom, etc.
+            // nmap in particular fails with "Could not assign /dev/null to stdout for
+            // writing: No such file or directory" when /dev is absent.
+            container.bindmount_rw("/dev", "/dev");
             container.unshare(Namespace::Network);
             container.network(Pasta::default());
         } else {
@@ -342,6 +350,31 @@ mod tests {
             .expect("sandbox itself should not error");
         assert!(!out.success);
         assert_eq!(out.exit_code, 1);
+    }
+
+    /// Verify /dev/null is accessible in the Pasta sandbox.
+    /// nmap redirects stdout/stderr to /dev/null and fails if it is missing.
+    #[test]
+    fn dev_null_exists_in_pasta_sandbox() {
+        if !sandbox_available() {
+            eprintln!("SKIP dev_null_exists_in_pasta_sandbox: newuidmap not found");
+            return;
+        }
+        // Write to /dev/null via sh -c. If /dev is not mounted this errors with
+        // "No such file or directory".
+        let out = SandboxedCommand::new("/bin/sh")
+            .args(["-c", "echo ok > /dev/null && echo success"])
+            .network(NetworkMode::Pasta)
+            .timeout(10)
+            .execute()
+            .expect("pasta sandbox /dev/null write should not error");
+        assert!(
+            out.success,
+            "/dev/null write failed (exit {}): {}",
+            out.exit_code,
+            out.stderr
+        );
+        assert_eq!(out.stdout.trim(), "success");
     }
 
     #[test]

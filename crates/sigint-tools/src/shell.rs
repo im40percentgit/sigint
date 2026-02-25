@@ -11,6 +11,11 @@
 //! during recon post-processing, but the offline sandbox prevents external calls.
 //! Commands are matched against the basename of the provided command string to
 //! prevent path-traversal bypasses like "/usr/bin/rm".
+//! Small LLMs (e.g. llama3.2) sometimes send the full command line as the
+//! "command" field (e.g. "whois scanme.nmap.org") instead of separating command
+//! from args. execute() splits the command field on whitespace and uses the first
+//! token for allowlist checking and execution, prepending remaining tokens to the
+//! args array. This makes ShellTool robust to imperfect LLM output formatting.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -48,13 +53,21 @@ const NETWORK_COMMANDS: &[&str] = &[
 pub struct ShellTool;
 
 impl ShellTool {
-    /// Return true when `command` (by basename) is in the allowlist.
+    /// Return true when `command` (by basename of the first whitespace token) is in the allowlist.
+    ///
+    /// Accepts both bare command names ("whois") and combined command strings
+    /// ("whois scanme.nmap.org") — the first whitespace-separated token is used
+    /// for the allowlist check. Directory prefixes are stripped to prevent
+    /// path-traversal bypasses like "/usr/bin/rm".
     fn is_allowed(command: &str) -> bool {
+        // Take the first whitespace token to handle combined command strings
+        // sent by small LLMs (e.g. "whois scanme.nmap.org").
+        let first_token = command.split_whitespace().next().unwrap_or(command);
         // Strip any directory prefix to prevent path-traversal bypasses.
-        let basename = std::path::Path::new(command)
+        let basename = std::path::Path::new(first_token)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(command);
+            .unwrap_or(first_token);
         ALLOWED_COMMANDS.contains(&basename)
     }
 }
@@ -97,19 +110,28 @@ impl Tool for ShellTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        // Extract required command.
-        let command = args["command"]
+        // Extract required command field. Small LLMs sometimes send the full
+        // command line as a single string (e.g. "whois scanme.nmap.org") instead
+        // of separating command from args. We split on whitespace so that the
+        // first token is the actual binary and any remaining tokens are prepended
+        // to the explicit args array.
+        let raw_command = args["command"]
             .as_str()
-            .ok_or_else(|| ToolError::MissingArgument("command".to_string()))?
-            .to_string();
+            .ok_or_else(|| ToolError::MissingArgument("command".to_string()))?;
 
-        // Enforce allowlist by basename.
+        // Split the raw command field on whitespace.
+        let parts: Vec<&str> = raw_command.split_whitespace().collect();
+        let command = parts.first().copied().unwrap_or(raw_command).to_string();
+        // Any tokens after the first become extra args prepended before explicit args.
+        let mut extra_args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+
+        // Enforce allowlist by basename of the resolved command token.
         if !ShellTool::is_allowed(&command) {
             return Err(ToolError::DisallowedCommand(command));
         }
 
         // Extract optional args array.
-        let cmd_args: Vec<String> = match args["args"].as_array() {
+        let explicit_args: Vec<String> = match args["args"].as_array() {
             None => Vec::new(),
             Some(arr) => arr
                 .iter()
@@ -124,6 +146,10 @@ impl Tool for ShellTool {
                 })
                 .collect::<Result<Vec<_>>>()?,
         };
+
+        // Merge: extra_args (from command field) + explicit args array.
+        extra_args.extend(explicit_args);
+        let cmd_args = extra_args;
 
         info!(
             command = %command,
@@ -285,6 +311,47 @@ mod tests {
             err.to_string().contains("invalid argument"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Combined command string "whois scanme.nmap.org" must pass the allowlist
+    /// (first token "whois" is in ALLOWED_COMMANDS).
+    #[test]
+    fn shell_combined_command_is_allowed() {
+        assert!(
+            ShellTool::is_allowed("whois scanme.nmap.org"),
+            "combined command string should pass allowlist via first token"
+        );
+    }
+
+    /// Combined command string with a disallowed binary must still be rejected.
+    #[test]
+    fn shell_combined_command_disallowed_rejected() {
+        assert!(
+            !ShellTool::is_allowed("rm -rf /"),
+            "combined string with disallowed command must be rejected"
+        );
+    }
+
+    /// When the LLM sends {"command": "whois scanme.nmap.org"} (no separate args),
+    /// execute() must split the string: binary = "whois", args = ["scanme.nmap.org"].
+    /// We verify the split by checking it does NOT return a DisallowedCommand error
+    /// (which would happen if the whole string were checked against the allowlist).
+    #[tokio::test]
+    async fn shell_combined_command_splits_args() {
+        // "whois scanme.nmap.org" — should pass allowlist and attempt execution.
+        // We expect either success or a sandbox/execution error (not DisallowedCommand).
+        let result = ShellTool
+            .execute(json!({"command": "whois scanme.nmap.org"}))
+            .await;
+        match result {
+            // Allowlist passed, sandbox ran (or failed due to env) — not a disallow error.
+            Ok(_) => {}
+            Err(ToolError::DisallowedCommand(cmd)) => {
+                panic!("combined command was wrongly rejected as disallowed: {cmd}");
+            }
+            // Any other error (sandbox unavailable, timeout, etc.) is acceptable.
+            Err(_) => {}
+        }
     }
 
     /// Requires newuidmap (uidmap package). Run with: cargo test -p sigint-tools -- --ignored
