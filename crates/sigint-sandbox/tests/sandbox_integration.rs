@@ -107,6 +107,65 @@ fn timeout_kills_sleep() {
     }
 }
 
+/// Bare command name (no path) resolves and executes correctly.
+#[test]
+fn bare_command_name_resolves() {
+    if !sandbox_available() {
+        eprintln!("SKIP: newuidmap not found — install uidmap package");
+        return;
+    }
+    // "echo" (bare name) should resolve to /bin/echo or /usr/bin/echo.
+    let out = SandboxedCommand::new("echo")
+        .arg("resolved")
+        .timeout(10)
+        .execute()
+        .expect("bare 'echo' should resolve and execute");
+
+    assert!(out.success, "exit_code={}", out.exit_code);
+    assert_eq!(out.stdout.trim(), "resolved");
+}
+
+/// Basic Pasta networking: echo still works with network namespace.
+#[test]
+#[ignore]
+fn echo_with_pasta_works() {
+    let out = SandboxedCommand::new("echo")
+        .arg("pasta-ok")
+        .network(NetworkMode::Pasta)
+        .timeout(10)
+        .execute()
+        .expect("echo with Pasta should not error");
+
+    assert!(out.success, "exit_code={}, stderr={}", out.exit_code, out.stderr);
+    assert_eq!(out.stdout.trim(), "pasta-ok");
+}
+
+/// DNS lookup via dig inside a Pasta-networked sandbox.
+///
+/// Requires: dig (dnsutils), passt (pasta binary), network access.
+/// Run with: cargo test -p sigint-sandbox -- --ignored
+#[test]
+#[ignore]
+fn dig_dns_lookup_via_pasta() {
+    let out = SandboxedCommand::new("dig")
+        .args(["+short", "scanme.nmap.org"])
+        .network(NetworkMode::Pasta)
+        .timeout(30)
+        .execute()
+        .expect("dig sandbox execution should not error");
+
+    assert!(
+        out.success,
+        "dig exited with code {}. stderr: {}",
+        out.exit_code,
+        out.stderr
+    );
+    assert!(
+        !out.stdout.trim().is_empty(),
+        "expected DNS response, got empty stdout"
+    );
+}
+
 /// Full nmap scan via pasta networking.
 ///
 /// Requires: nmap, passt (pasta binary), network access.

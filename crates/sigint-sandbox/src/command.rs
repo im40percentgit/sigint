@@ -12,12 +12,40 @@
 //! /lib64 /lib32 /sbin /usr read-only, giving tools access to system binaries.
 //! Timeout is set on the Command (not Container) via wait_timeout().
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use hakoniwa::{Container, Namespace, Pasta};
 use tracing::{debug, info};
 
 use crate::error::{Result, SandboxError};
+
+/// Standard PATH used inside the sandbox and for resolving bare command names.
+///
+/// @decision DEC-SAND-006
+/// @title Resolve bare commands to absolute paths before execve
+/// @status accepted
+/// @rationale hakoniwa uses raw execve() (not execvp()), so bare command names
+/// like "grep" fail with ENOENT. We resolve them to full paths at build time
+/// and inject PATH into the sandbox environment so child processes (e.g. shell
+/// pipelines spawned by tools) can also find binaries.
+const SANDBOX_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/// Resolve a bare command name to its full path by searching SANDBOX_PATH.
+/// Returns the original string unchanged if it already contains a '/'.
+fn resolve_program(program: &str) -> String {
+    if program.contains('/') {
+        return program.to_string();
+    }
+    for dir in SANDBOX_PATH.split(':') {
+        let candidate = PathBuf::from(dir).join(program);
+        if candidate.is_file() {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+    // Fall through — let hakoniwa's execve produce the ENOENT error.
+    program.to_string()
+}
 
 /// Network isolation mode for a sandboxed command.
 #[derive(Debug, Clone, PartialEq)]
@@ -123,24 +151,68 @@ impl SandboxedCommand {
         // mounts a fresh procfs at /proc.
         let mut container = Container::new();
 
-        // Mount the host's system directories read-only so tools like nmap can
-        // find their libraries and data files.
-        container
-            .rootfs("/")
-            .map_err(|e| SandboxError::Creation(e.to_string()))?;
+        // Mount the host's system directories read-only so tools can find
+        // their libraries and data files. For Pasta networking we need special
+        // handling of /etc to fix DNS resolution (see below).
+        if self.network == NetworkMode::Pasta {
+            // On systemd systems, /etc/resolv.conf symlinks to
+            // /run/systemd/resolve/stub-resolv.conf (nameserver 127.0.0.53).
+            // Inside the container's network namespace, 127.0.0.53 doesn't exist.
+            // We can't use rootfs("/") because it bind-mounts /etc read-only,
+            // making it impossible to override resolv.conf afterward.
+            // Instead, copy /etc to a temp dir with the real resolv.conf and
+            // mount individual directories manually.
+            let etc_tmp = std::env::temp_dir().join("sigint-etc");
+            let _ = std::fs::remove_dir_all(&etc_tmp);
+            // Copy /etc via cp -a to preserve structure (suppress permission
+            // denied warnings for shadow/sudoers — they aren't needed).
+            let cp_status = std::process::Command::new("/bin/cp")
+                .args(["-a", "/etc", &etc_tmp.to_string_lossy()])
+                .stderr(std::process::Stdio::null())
+                .status();
+            if cp_status.is_ok() {
+                // Overwrite resolv.conf with real upstream nameservers.
+                // Remove the symlink first (cp -a preserves symlinks).
+                let resolv_dst = etc_tmp.join("resolv.conf");
+                let _ = std::fs::remove_file(&resolv_dst);
+                let resolv_path = "/run/systemd/resolve/resolv.conf";
+                if let Ok(contents) = std::fs::read_to_string(resolv_path) {
+                    let _ = std::fs::write(&resolv_dst, contents);
+                }
+                // Mount our modified /etc instead of the host's
+                container.bindmount_ro(&etc_tmp.to_string_lossy(), "/etc");
+            } else {
+                // Fallback: use rootfs which won't have DNS
+                container
+                    .rootfs("/")
+                    .map_err(|e| SandboxError::Creation(e.to_string()))?;
+            }
+            // Mount remaining system dirs
+            for dir in ["/bin", "/lib", "/lib64", "/lib32", "/sbin", "/usr"] {
+                if std::path::Path::new(dir).is_dir() {
+                    container.bindmount_ro(dir, dir);
+                }
+            }
+            container.unshare(Namespace::Network);
+            container.network(Pasta::default());
+        } else {
+            container
+                .rootfs("/")
+                .map_err(|e| SandboxError::Creation(e.to_string()))?;
+        }
 
         // A writable /tmp inside the sandbox.
         container.tmpfsmount("/tmp");
 
-        // Network namespace + pasta only when requested.
-        if self.network == NetworkMode::Pasta {
-            container.unshare(Namespace::Network);
-            container.network(Pasta::default());
-        }
+        // Resolve bare command names to absolute paths (hakoniwa uses execve,
+        // not execvp, so bare names like "grep" fail with ENOENT).
+        let resolved = resolve_program(&self.program);
+        debug!(original = %self.program, resolved = %resolved, "resolved program path");
 
-        // Build the Command, set timeout, collect output.
+        // Build the Command, set timeout, inject PATH, collect output.
         let output = container
-            .command(&self.program)
+            .command(&resolved)
+            .env("PATH", SANDBOX_PATH)
             .args(self.args.iter().map(|s| s.as_str()))
             .wait_timeout(self.timeout_secs)
             .output()
