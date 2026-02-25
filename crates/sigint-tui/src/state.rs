@@ -85,6 +85,8 @@ pub struct AppState {
     pub mode: Mode,
     /// Set to true when the TUI should exit.
     pub should_quit: bool,
+    /// Whether the `?` help overlay is visible.
+    pub show_help: bool,
 }
 
 impl AppState {
@@ -110,6 +112,7 @@ impl AppState {
             input: String::new(),
             mode: Mode::Normal,
             should_quit: false,
+            show_help: false,
         }
     }
 

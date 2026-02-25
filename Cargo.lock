@@ -2933,6 +2933,7 @@ dependencies = [
  "sigint-agents",
  "sigint-core",
  "sigint-llm",
+ "sigint-memory",
  "sigint-store",
  "sigint-tools",
  "sigint-tui",

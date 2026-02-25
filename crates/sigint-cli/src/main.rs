@@ -13,6 +13,7 @@
 mod chat;
 mod doctor;
 mod scan;
+mod sessions;
 
 use clap::{Parser, Subcommand};
 use sigint_core::AppCore;
@@ -43,6 +44,8 @@ enum Commands {
     Chat(chat::ChatArgs),
     /// Check SIGINT's environment and dependencies.
     Doctor,
+    /// Manage stored scan sessions (list, export, delete).
+    Sessions(sessions::SessionsArgs),
     /// Run a multi-agent penetration scan against a target.
     Scan {
         /// Target hostname, IP address, or CIDR range (e.g. "scanme.nmap.org", "10.0.0.1/24").
@@ -96,6 +99,7 @@ async fn main() {
     let result = match cli.command {
         Commands::Chat(args) => chat::run(core, args).await,
         Commands::Doctor => doctor::run(core).await,
+        Commands::Sessions(args) => sessions::run(core, args).await,
         Commands::Scan { target, model, max_iterations, tui, no_tui, .. } => {
             scan::run(core, target, model, max_iterations, tui, no_tui).await
         }

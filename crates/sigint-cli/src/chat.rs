@@ -88,7 +88,7 @@ pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
     loop {
         // Prompt
         print!("\nyou> ");
-        stdout.flush().map_err(|e| Error::Io(e))?;
+        stdout.flush().map_err(Error::Io)?;
 
         // Read one line of user input
         let mut input = String::new();
@@ -122,7 +122,7 @@ pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
             .with_temperature(core.config.llm.temperature);
 
         print!("\nsigint> ");
-        stdout.flush().map_err(|e| Error::Io(e))?;
+        stdout.flush().map_err(Error::Io)?;
 
         let mut full_response = String::new();
         let mut total_tokens: Option<u32> = None;
@@ -134,7 +134,7 @@ pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
                         Ok(chunk) => {
                             if !chunk.delta.is_empty() {
                                 print!("{}", chunk.delta);
-                                stdout.flush().map_err(|e| Error::Io(e))?;
+                                stdout.flush().map_err(Error::Io)?;
                                 full_response.push_str(&chunk.delta);
                             }
                             if let Some(usage) = chunk.usage {

@@ -33,7 +33,8 @@ use std::sync::Arc;
 use sigint_agents::{Orchestrator, ToolRegistry};
 use sigint_core::{event::Event, AppCore, Error};
 use sigint_llm::OllamaProvider;
-use sigint_store::{Database, ScanRecord};
+use sigint_memory::MemoryService;
+use sigint_store::{Database, EmbeddingService, ScanRecord, embedding_worker};
 use sigint_tools::{nmap::NmapTool, shell::ShellTool};
 use tracing::warn;
 
@@ -106,6 +107,34 @@ pub async fn run(
         spawn_stdout_printer(core.events.subscribe());
     }
 
+    // ── Database + Memory + Embedding worker ──────────────────────────────────
+    let db_path = core.config.resolved_db_path();
+
+    let context_window = if core.config.llm.context_window > 0 {
+        core.config.llm.context_window
+    } else {
+        DEFAULT_CONTEXT_WINDOW
+    };
+
+    // Spawn background embedding worker (best-effort — skip if DB or model unavailable).
+    if let Ok(worker_db) = Database::open(&db_path) {
+        match EmbeddingService::new() {
+            Ok(emb) => {
+                tokio::spawn(embedding_worker(Arc::new(worker_db), Arc::new(emb)));
+            }
+            Err(e) => {
+                warn!("Embedding worker not started (model unavailable): {e}");
+            }
+        }
+    }
+
+    // Build MemoryService for episodic recall (without embeddings — the worker
+    // handles embedding in the background; recall_semantic requires a loaded model
+    // which is expensive to hold in the scan path).
+    let memory_service = Database::open(&db_path)
+        .ok()
+        .map(|db| MemoryService::new_without_embeddings(db, context_window / 5));
+
     // ── Tool registry ─────────────────────────────────────────────────────────
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(NmapTool));
@@ -115,13 +144,7 @@ pub async fn run(
     let provider = Arc::new(OllamaProvider::from_config(&core.config.llm));
 
     // ── Orchestrator ──────────────────────────────────────────────────────────
-    let context_window = if core.config.llm.context_window > 0 {
-        core.config.llm.context_window
-    } else {
-        DEFAULT_CONTEXT_WINDOW
-    };
-
-    let orchestrator = Orchestrator::new(
+    let mut orchestrator = Orchestrator::new(
         provider,
         registry,
         core.events.clone(),
@@ -129,6 +152,10 @@ pub async fn run(
         model,
     )
     .with_max_iterations(max_iterations);
+
+    if let Some(memory) = memory_service {
+        orchestrator = orchestrator.with_memory(memory);
+    }
 
     // ── Run the pipeline ──────────────────────────────────────────────────────
     let report = orchestrator.run_scan(&target).await.map_err(|e| {
@@ -147,8 +174,18 @@ pub async fn run(
     println!();
     println!("{}", report);
 
-    // ── Persist to database (best-effort) ────────────────────────────────────
-    persist_scan(&core, &target, &report).await;
+    // ── Persist to database + episodic memory (best-effort) ──────────────────
+    let session_id = persist_scan(&core, &target, &report).await;
+
+    // Store episode summary so future scans of the same target recall this session.
+    if let Some(session_id) = session_id {
+        if let Ok(mem_db) = Database::open(&db_path) {
+            let svc = MemoryService::new_without_embeddings(mem_db, context_window / 5);
+            if let Err(e) = svc.store_episode(session_id, &report.summary) {
+                warn!("Failed to store episode summary: {e}");
+            }
+        }
+    }
 
     Ok(())
 }
@@ -203,31 +240,33 @@ fn spawn_stdout_printer(mut event_rx: tokio::sync::broadcast::Receiver<Event>) {
 ///
 /// All errors are logged as warnings; the scan result is never discarded
 /// because persistence fails.
+///
+/// Returns the session UUID on success so callers can store episodic memory.
 async fn persist_scan(
     core: &AppCore,
     target: &str,
     report: &sigint_agents::ScanReport,
-) {
+) -> Option<uuid::Uuid> {
     let db_path = core.config.resolved_db_path();
     let db = match Database::open(&db_path) {
         Ok(db) => db,
         Err(e) => {
             warn!("scan: cannot open database for persistence: {}", e);
-            return;
+            return None;
         }
     };
 
     // Create a session record scoped to this scan.
     let session_name = format!(
         "scan-{}-{}",
-        target.replace('.', "-").replace('/', "-"),
+        target.replace(['.', '/'], "-"),
         chrono::Utc::now().format("%Y%m%d-%H%M%S"),
     );
     let session = sigint_core::types::Session::new(&session_name).with_target(target);
 
     if let Err(e) = db.create_session(&session) {
         warn!("scan: cannot persist session: {}", e);
-        return;
+        return None;
     }
 
     // Persist one aggregate scan_history row with the pipeline summary.
@@ -243,6 +282,8 @@ async fn persist_scan(
     if let Err(e) = db.create_scan_record(&record) {
         warn!("scan: cannot persist scan history record: {}", e);
     }
+
+    Some(session.id)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

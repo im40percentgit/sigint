@@ -55,6 +55,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     render_main_panels(frame, state, main_layout[1]);
     render_findings(frame, state, main_layout[2]);
     render_input(frame, state, main_layout[3]);
+
+    // Help overlay renders on top of everything when active.
+    if state.show_help {
+        render_help_overlay(frame, area);
+    }
 }
 
 fn render_status_bar(frame: &mut Frame, state: &AppState, area: Rect) {
@@ -250,6 +255,52 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect) {
     frame.render_widget(input, area);
 }
 
+fn render_help_overlay(frame: &mut Frame, area: Rect) {
+    use ratatui::widgets::Clear;
+
+    // Center a 50×16 popup in the terminal area.
+    let popup_width = 50u16.min(area.width.saturating_sub(4));
+    let popup_height = 16u16.min(area.height.saturating_sub(4));
+    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    // Clear the background behind the popup.
+    frame.render_widget(Clear, popup_area);
+
+    let help_text = vec![
+        Line::from(Span::styled(
+            " Keybindings ",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+        Line::from("  ?          Toggle this help"),
+        Line::from("  q          Quit"),
+        Line::from("  Ctrl-C     Force quit"),
+        Line::from("  Tab        Cycle panel focus"),
+        Line::from("  j / ↓      Scroll down"),
+        Line::from("  k / ↑      Scroll up"),
+        Line::from("  G          Jump to bottom"),
+        Line::from("  /          Search mode"),
+        Line::from("  :          Command mode"),
+        Line::from("  Esc        Close overlay / exit mode"),
+        Line::default(),
+        Line::from(Span::styled(
+            "  Press ? or Esc to close",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let help = Paragraph::new(help_text).block(
+        Block::default()
+            .title(" Help ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+
+    frame.render_widget(help, popup_area);
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -299,6 +350,15 @@ mod tests {
             content: "Running nmap...".into(),
         });
         state.streaming_buffer = "Analyzing results".into();
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+    }
+
+    #[test]
+    fn render_help_overlay_does_not_panic() {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.show_help = true;
         terminal.draw(|frame| render(frame, &state)).unwrap();
     }
 

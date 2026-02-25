@@ -127,6 +127,16 @@ impl TuiApp {
                 return true;
             }
 
+            // Help overlay toggle.
+            (_, KeyCode::Char('?')) if !matches!(self.state.mode, Mode::Search(_) | Mode::Command(_)) => {
+                self.state.show_help = !self.state.show_help;
+            }
+
+            // Dismiss help overlay with Esc.
+            (Mode::Normal, KeyCode::Esc) if self.state.show_help => {
+                self.state.show_help = false;
+            }
+
             // Normal mode bindings.
             (Mode::Normal, KeyCode::Char('q')) => return true,
             (Mode::Normal, KeyCode::Tab) => self.state.next_panel(),
