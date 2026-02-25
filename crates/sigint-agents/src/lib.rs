@@ -10,7 +10,7 @@
 //! - [`state`] — `ConversationState` (sliding-window message history)
 //! - [`context`] — `TaskContext` (shared engagement state across agents)
 //! - [`agents`] — Concrete implementations: Researcher, Strategist, Executor,
-//!                Analyst, Reporter
+//!   Analyst, Reporter
 //! - [`loop_engine`] — `run_tool_loop` (LLM ↔ tool execution cycle)
 //! - [`registry`] — `ToolRegistry` (tool storage with role-based ACL filtering)
 //! - [`orchestrator`] — `Orchestrator` (five-role pipeline coordinator)

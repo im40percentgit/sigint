@@ -10,6 +10,7 @@ members = [
     "crates/sigint-tui",
     "crates/sigint-web",
     "crates/sigint-cli",
+    "crates/sigint-memory",
 ]
 resolver = "2"
 
@@ -71,6 +72,7 @@ sigint-tools = { path = "crates/sigint-tools" }
 sigint-recon = { path = "crates/sigint-recon" }
 sigint-tui = { path = "crates/sigint-tui" }
 sigint-web = { path = "crates/sigint-web" }
+sigint-memory = { path = "crates/sigint-memory" }
 
 # TUI
 ratatui = "0.29"

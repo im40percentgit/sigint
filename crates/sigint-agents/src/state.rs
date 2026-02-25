@@ -97,7 +97,7 @@ impl ConversationState {
     ///
     /// See `@decision DEC-AGENT-005` above for rationale.
     pub fn estimate_tokens(text: &str) -> usize {
-        (text.len() + 3) / 4 // ceiling division — slightly conservative
+        text.len().div_ceil(4)
     }
 
     /// Current estimated token usage across all messages.

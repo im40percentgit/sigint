@@ -55,7 +55,7 @@ use sigint_tools::tool::Tool;
 /// # Arguments
 /// * `provider`       — LLM backend (Ollama, mock, etc.)
 /// * `state`          — Mutable conversation history; updated in-place with
-///                      assistant and tool-result messages.
+///   assistant and tool-result messages.
 /// * `tools`          — Available tool implementations; matched by name.
 /// * `tool_defs`      — Tool schemas passed to the LLM in each request.
 /// * `max_iterations` — Hard cap on tool-call rounds before giving up.

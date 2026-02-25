@@ -45,9 +45,9 @@ impl fmt::Display for ToolResult {
     ///   <stdout (truncated to 4 KB if longer)>
     ///   [stderr: <first line of stderr, if non-empty>]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
+        writeln!(
             f,
-            "[exit: {} | duration: {}ms]\n",
+            "[exit: {} | duration: {}ms]",
             self.exit_code,
             self.duration.as_millis()
         )?;

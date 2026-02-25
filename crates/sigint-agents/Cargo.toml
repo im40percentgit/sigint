@@ -7,6 +7,7 @@ edition.workspace = true
 sigint-core = { workspace = true }
 sigint-llm = { workspace = true }
 sigint-tools = { workspace = true }
+sigint-memory = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }

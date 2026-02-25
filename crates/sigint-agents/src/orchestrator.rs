@@ -28,6 +28,15 @@
 //! (Arc makes fan-out trivial). The alternative (`&dyn LlmProvider` stored as a
 //! raw reference) would require lifetime parameters on the Orchestrator struct,
 //! polluting every call site that constructs one.
+//!
+//! @decision DEC-P3-001
+//! @title MemoryService is an optional field on Orchestrator
+//! @status accepted
+//! @rationale Memory is a Phase 3C addition; all existing tests construct
+//! Orchestrator without memory via `Orchestrator::new`. Making the field
+//! `Option<MemoryService>` keeps the constructor signature stable and lets
+//! callers opt in via `with_memory(svc)`. Context injection in `run_agent`
+//! is a no-op when `memory` is `None`, so no existing test breaks.
 
 use std::sync::Arc;
 
@@ -35,6 +44,7 @@ use tracing::info;
 
 use sigint_core::{Error, event::EventBus};
 use sigint_llm::provider::LlmProvider;
+use sigint_memory::MemoryService;
 
 use crate::{
     agent::Agent,
@@ -68,6 +78,12 @@ pub struct Orchestrator {
     model: String,
     /// Hard cap on tool-call rounds per agent turn.
     max_iterations: usize,
+    /// Optional memory service for episodic + semantic context injection.
+    ///
+    /// When `Some`, `run_agent` retrieves historical context and prepends it
+    /// as a system message before the agent's own system prompt.
+    /// When `None` (the default), no memory context is injected.
+    memory: Option<MemoryService>,
 }
 
 impl Orchestrator {
@@ -93,6 +109,7 @@ impl Orchestrator {
             context_window,
             model,
             max_iterations: DEFAULT_MAX_ITERATIONS,
+            memory: None,
         }
     }
 
@@ -102,6 +119,16 @@ impl Orchestrator {
     /// iteration budget from the CLI `--max-iterations` flag.
     pub fn with_max_iterations(mut self, n: usize) -> Self {
         self.max_iterations = n;
+        self
+    }
+
+    /// Attach a `MemoryService` for historical context injection.
+    ///
+    /// When set, each `run_agent` call retrieves episodic and semantic context
+    /// for the current target and prepends it as a system message so every
+    /// agent starts with relevant historical intelligence.
+    pub fn with_memory(mut self, memory: MemoryService) -> Self {
+        self.memory = Some(memory);
         self
     }
 
@@ -174,6 +201,17 @@ impl Orchestrator {
 
         // System prompt defines the agent's identity and behavioral constraints.
         state.add_message(sigint_llm::types::ChatMessage::system(agent.system_prompt()));
+
+        // Inject memory context as a second system message, immediately after
+        // the agent's own system prompt and before the user prompt. This gives
+        // the agent historical intelligence without polluting the user turn.
+        if let Some(ref memory) = self.memory {
+            let fragments = memory.recall(&ctx.target, &ctx.target)?;
+            if !fragments.is_empty() {
+                let context = MemoryService::format_context(&fragments);
+                state.add_message(sigint_llm::types::ChatMessage::system(&context));
+            }
+        }
 
         // User prompt carries the accumulated context relevant to this role.
         let user_prompt = ctx.to_agent_prompt(agent);
