@@ -10,8 +10,9 @@
 //! to each receive a copy of every event without any subscriber blocking
 //! another. This decouples the UI layer from the core completely.
 
-use crate::types::{Finding, Message, Session, Task};
+use crate::types::{Asset, Finding, Message, Session, Task};
 use tokio::sync::broadcast;
+use uuid::Uuid;
 
 /// Capacity of the broadcast channel (number of buffered events).
 const BUS_CAPACITY: usize = 256;
@@ -41,6 +42,15 @@ pub enum Event {
     Status(String),
     /// Shutdown signal.
     Shutdown,
+    // ── Attack Surface Mapping events ─────────────────────────────────────────
+    /// A new asset was discovered during reconnaissance.
+    AssetDiscovered(Asset),
+    /// A field on an existing asset changed (e.g., metadata updated, status changed).
+    AssetChanged { asset_id: Uuid, field: String, old: String, new: String },
+    /// Reconnaissance started against a target.
+    ReconStarted { session_id: Uuid, target: String },
+    /// Reconnaissance completed; reports how many assets were found.
+    ReconCompleted { session_id: Uuid, assets_found: usize },
 }
 
 /// Handle to the broadcast event bus.

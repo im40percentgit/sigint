@@ -13,6 +13,7 @@ pub mod sessions;
 pub mod messages;
 pub mod scans;
 pub mod findings;
+pub mod assets;
 pub mod query;
 pub mod search;
 pub mod embeddings;

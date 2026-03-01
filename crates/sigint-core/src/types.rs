@@ -219,6 +219,35 @@ pub enum AssetKind {
     Other,
 }
 
+impl std::fmt::Display for AssetKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssetKind::Host => write!(f, "host"),
+            AssetKind::Domain => write!(f, "domain"),
+            AssetKind::Url => write!(f, "url"),
+            AssetKind::Service => write!(f, "service"),
+            AssetKind::Certificate => write!(f, "certificate"),
+            AssetKind::Email => write!(f, "email"),
+            AssetKind::Other => write!(f, "other"),
+        }
+    }
+}
+
+impl std::str::FromStr for AssetKind {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "host" => Ok(AssetKind::Host),
+            "domain" => Ok(AssetKind::Domain),
+            "url" => Ok(AssetKind::Url),
+            "service" => Ok(AssetKind::Service),
+            "certificate" => Ok(AssetKind::Certificate),
+            "email" => Ok(AssetKind::Email),
+            _ => Ok(AssetKind::Other),
+        }
+    }
+}
+
 /// A discovered asset in the attack surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Asset {
@@ -239,6 +268,81 @@ impl Asset {
             value: value.into(),
             metadata: serde_json::Value::Null,
             discovered_at: Utc::now(),
+        }
+    }
+}
+
+// ── AssetService ──────────────────────────────────────────────────────────────
+
+/// A network service discovered on an asset port.
+///
+/// Represents a row in the `asset_services` table — one entry per
+/// (asset, port, protocol) combination discovered during reconnaissance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetService {
+    pub id: Uuid,
+    pub asset_id: Uuid,
+    pub port: i32,
+    pub protocol: String,
+    pub service: String,
+    pub version: Option<String>,
+    pub banner: Option<String>,
+    pub discovered_at: DateTime<Utc>,
+}
+
+impl AssetService {
+    /// Construct a new service with required fields; optional fields default to `None`.
+    pub fn new(
+        asset_id: Uuid,
+        port: i32,
+        protocol: impl Into<String>,
+        service: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            asset_id,
+            port,
+            protocol: protocol.into(),
+            service: service.into(),
+            version: None,
+            banner: None,
+            discovered_at: Utc::now(),
+        }
+    }
+}
+
+// ── AssetChange ───────────────────────────────────────────────────────────────
+
+/// An audited field-level change to an asset.
+///
+/// Stored in `asset_changes` to provide a full history of how an asset's
+/// properties evolved over the course of a session. Both old and new values
+/// are stored as strings for schema simplicity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetChange {
+    pub id: Uuid,
+    pub asset_id: Uuid,
+    pub field: String,
+    pub old_value: String,
+    pub new_value: String,
+    pub changed_at: DateTime<Utc>,
+}
+
+impl AssetChange {
+    /// Record a change to a single field on an asset.
+    pub fn new(
+        asset_id: Uuid,
+        field: impl Into<String>,
+        old_value: impl Into<String>,
+        new_value: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            asset_id,
+            field: field.into(),
+            old_value: old_value.into(),
+            new_value: new_value.into(),
+            changed_at: Utc::now(),
         }
     }
 }
