@@ -4,12 +4,14 @@
 //! class of tools, so callers do not have to repeat the same builder incantations.
 //!
 //! @decision DEC-SAND-004
-//! @title Named profiles encode tool-class defaults (nmap, offline)
+//! @title Named profiles encode tool-class defaults (nmap, offline, web scanner, bruteforce)
 //! @status accepted
 //! @rationale Callers (sigint-recon etc.) should not need to know that nmap
 //! requires pasta networking and a 5-minute timeout — that knowledge lives here.
 //! Adding a new tool class means adding an enum variant and a match arm, not
 //! scattering builder calls across the codebase.
+//! WebScanner (600s) covers nikto/nuclei which are slow template-based scanners.
+//! Bruteforce (300s) covers gobuster/feroxbuster which are fast wordlist tools.
 
 use crate::command::{NetworkMode, SandboxedCommand};
 
@@ -22,6 +24,12 @@ pub enum SandboxProfile {
     /// Recon profile: pasta networking, 1-minute timeout.
     /// For passive recon commands (whois, dig, host, curl) that need DNS/network.
     Recon,
+    /// Web scanner profile: pasta networking, 10-minute timeout.
+    /// For slow template-based scanners (nikto, nuclei) that need extended time.
+    WebScanner,
+    /// Bruteforce profile: pasta networking, 5-minute timeout.
+    /// For fast wordlist-based discovery tools (gobuster, feroxbuster).
+    Bruteforce,
 }
 
 impl SandboxProfile {
@@ -40,6 +48,16 @@ impl SandboxProfile {
         SandboxProfile::Recon
     }
 
+    /// Convenience constructor for the web scanner profile (nikto, nuclei).
+    pub fn web_scanner() -> Self {
+        SandboxProfile::WebScanner
+    }
+
+    /// Convenience constructor for the bruteforce profile (gobuster, feroxbuster).
+    pub fn bruteforce() -> Self {
+        SandboxProfile::Bruteforce
+    }
+
     /// Apply this profile's settings to `program`, returning a configured
     /// `SandboxedCommand` ready for further `.arg()` calls or `.execute()`.
     pub fn apply(&self, program: &str) -> SandboxedCommand {
@@ -53,6 +71,12 @@ impl SandboxProfile {
             SandboxProfile::Recon => SandboxedCommand::new(program)
                 .network(NetworkMode::Pasta)
                 .timeout(60),
+            SandboxProfile::WebScanner => SandboxedCommand::new(program)
+                .network(NetworkMode::Pasta)
+                .timeout(600),
+            SandboxProfile::Bruteforce => SandboxedCommand::new(program)
+                .network(NetworkMode::Pasta)
+                .timeout(300),
         }
     }
 }
@@ -83,5 +107,21 @@ mod tests {
         assert_eq!(cmd.network, NetworkMode::Pasta);
         assert_eq!(cmd.timeout_secs, 60);
         assert_eq!(cmd.program, "/usr/bin/whois");
+    }
+
+    #[test]
+    fn web_scanner_profile_settings() {
+        let cmd = SandboxProfile::web_scanner().apply("/usr/bin/nikto");
+        assert_eq!(cmd.network, NetworkMode::Pasta);
+        assert_eq!(cmd.timeout_secs, 600);
+        assert_eq!(cmd.program, "/usr/bin/nikto");
+    }
+
+    #[test]
+    fn bruteforce_profile_settings() {
+        let cmd = SandboxProfile::bruteforce().apply("/usr/bin/gobuster");
+        assert_eq!(cmd.network, NetworkMode::Pasta);
+        assert_eq!(cmd.timeout_secs, 300);
+        assert_eq!(cmd.program, "/usr/bin/gobuster");
     }
 }

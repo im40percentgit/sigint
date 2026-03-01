@@ -1,13 +1,15 @@
 //! ResearcherAgent — OSINT and initial reconnaissance specialist.
 //!
 //! @decision DEC-AGENT-007
-//! @title Researcher allowed tools: nmap + shell only
+//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei
 //! @status accepted
 //! @rationale The Researcher phase focuses on information gathering, not
 //! exploitation. nmap covers port/service enumeration; shell covers DNS, WHOIS,
-//! certificate transparency, and other passive recon. Restricting to these two
-//! tools prevents the Researcher from accidentally triggering exploit code
-//! during the recon phase and keeps its context window focused on discovery.
+//! and certificate transparency. Sub-Phase 4C adds gobuster (subdomain/directory
+//! discovery) and nuclei (passive template matching) so the Researcher can
+//! enumerate web surfaces without stepping into active exploitation territory.
+//! nikto and feroxbuster are reserved for the Executor — they are more aggressive
+//! and belong in the structured attack phase, not initial reconnaissance.
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -23,7 +25,12 @@ pub struct ResearcherAgent {
 impl ResearcherAgent {
     pub fn new() -> Self {
         Self {
-            allowed_tools: vec!["nmap_scan".to_string(), "shell".to_string()],
+            allowed_tools: vec![
+                "nmap_scan".to_string(),
+                "shell".to_string(),
+                "gobuster_scan".to_string(),
+                "nuclei_scan".to_string(),
+            ],
         }
     }
 }
@@ -52,17 +59,23 @@ impl Agent for ResearcherAgent {
          - **nmap** (ALWAYS use this tool for port scanning and service detection — never run nmap via shell)\n\
          - **shell** (for DNS lookups with dig/host/nslookup, WHOIS queries, certificate inspection with openssl, \
            and text processing with grep/awk/jq/sed)\n\
+         - **gobuster** (directory, vhost, and DNS subdomain discovery)\n\
+         - **nuclei** (passive template matching for known vulnerabilities and misconfigurations)\n\
          \n\n\
          CRITICAL RULES:\n\
          - For ANY port scanning or service detection, use the nmap tool directly. NEVER run nmap through shell.\n\
          - For DNS/WHOIS/certificate queries, use shell with: whois, dig, host, nslookup, openssl, curl.\n\
          - For processing output, use shell with: grep, awk, sed, jq, sort, uniq.\n\
+         - For web directory/subdomain discovery, use gobuster.\n\
+         - For template-based vulnerability fingerprinting, use nuclei with info or low severity.\n\
          \n\n\
          Approach:\n\
          1. Start with passive techniques: use shell for WHOIS, DNS enumeration, certificate transparency logs.\n\
          2. Progress to active scanning: use the nmap tool for SYN scan of common ports, then service version detection.\n\
-         3. Note every open port, service banner, and technology indicator.\n\
-         4. Summarise your findings clearly so the Strategist can plan the next phase.\n\
+         3. If web services are found, use gobuster for directory/vhost enumeration.\n\
+         4. Run nuclei with low-severity templates to fingerprint technology and spot obvious misconfigurations.\n\
+         5. Note every open port, service banner, and technology indicator.\n\
+         6. Summarise your findings clearly so the Strategist can plan the next phase.\n\
          \n\
          Be methodical. Document every discovery with the exact command used and its raw output."
     }
@@ -104,7 +117,9 @@ mod tests {
         let tools = agent.allowed_tools();
         assert!(tools.contains(&"nmap_scan".to_string()), "researcher must have nmap_scan");
         assert!(tools.contains(&"shell".to_string()), "researcher must have shell");
-        assert_eq!(tools.len(), 2, "researcher should have exactly 2 tools");
+        assert!(tools.contains(&"gobuster_scan".to_string()), "researcher must have gobuster_scan");
+        assert!(tools.contains(&"nuclei_scan".to_string()), "researcher must have nuclei_scan");
+        assert_eq!(tools.len(), 4, "researcher should have exactly 4 tools");
     }
 
     #[test]

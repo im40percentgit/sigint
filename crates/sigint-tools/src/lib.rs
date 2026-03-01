@@ -1,7 +1,8 @@
 //! sigint-tools — Sandboxed pentest tool wrappers for the SIGINT agent layer.
 //!
-//! Provides the `Tool` trait and concrete implementations (NmapTool, ShellTool)
-//! that the agent layer uses to give LLMs controlled access to external tools.
+//! Provides the `Tool` trait and concrete implementations for nmap, shell,
+//! gobuster, nikto, nuclei, and feroxbuster that the agent layer uses to give
+//! LLMs controlled access to external tools.
 //!
 //! # Architecture
 //!
@@ -18,13 +19,21 @@
 //! downstream crates only need `use sigint_tools::Tool` — no sub-module imports.
 
 pub mod error;
+pub mod feroxbuster;
+pub mod gobuster;
+pub mod nikto;
 pub mod nmap;
+pub mod nuclei;
 pub mod result;
 pub mod shell;
 pub mod tool;
 
-pub use error::{ToolError, Result};
+pub use error::{Result, ToolError};
+pub use feroxbuster::FeroxbusterTool;
+pub use gobuster::GobusterTool;
+pub use nikto::NiktoTool;
 pub use nmap::NmapTool;
+pub use nuclei::NucleiTool;
 pub use result::ToolResult;
 pub use shell::ShellTool;
 pub use tool::Tool;

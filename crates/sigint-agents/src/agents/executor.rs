@@ -1,14 +1,14 @@
 //! ExecutorAgent — sandboxed tool execution specialist.
 //!
 //! @decision DEC-AGENT-009
-//! @title Executor has full tool access: nmap + shell
+//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster
 //! @status accepted
 //! @rationale The Executor is the only agent that runs tools against the target.
 //! It receives a concrete plan from the Strategist and is trusted to execute it
-//! faithfully. All tool calls go through the sandbox (P2-4 hakoniwa integration),
+//! faithfully. All tool calls go through the sandbox (hakoniwa integration),
 //! so broad tool access here is safe — the sandbox enforces the security boundary,
-//! not the ACL. If additional tools are added in Phase 4 (nikto, sqlmap, etc.),
-//! the Executor's allowed_tools list will expand to include them.
+//! not the ACL. Sub-Phase 4C adds gobuster, nikto, nuclei, and feroxbuster so
+//! the Executor can perform web enumeration and vulnerability scanning as directed.
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -24,7 +24,14 @@ pub struct ExecutorAgent {
 impl ExecutorAgent {
     pub fn new() -> Self {
         Self {
-            allowed_tools: vec!["nmap_scan".to_string(), "shell".to_string()],
+            allowed_tools: vec![
+                "nmap_scan".to_string(),
+                "shell".to_string(),
+                "gobuster_scan".to_string(),
+                "nikto_scan".to_string(),
+                "nuclei_scan".to_string(),
+                "feroxbuster_scan".to_string(),
+            ],
         }
     }
 }
@@ -52,11 +59,17 @@ impl Agent for ExecutorAgent {
          You have access to:\n\
          - **nmap** (ALWAYS use this for port scanning, service detection, script scanning — never run nmap via shell)\n\
          - **shell** (for DNS/WHOIS/certificate queries and text processing — NOT for nmap)\n\
+         - **gobuster** (directory, vhost, and DNS subdomain bruteforce)\n\
+         - **nikto** (web vulnerability and misconfiguration scanning)\n\
+         - **nuclei** (template-based CVE and vulnerability scanning)\n\
+         - **feroxbuster** (fast recursive content discovery)\n\
          \n\n\
          CRITICAL RULES:\n\
          - For ANY port scanning or service detection, use the nmap tool directly. NEVER run nmap through shell.\n\
          - For DNS/WHOIS/certificate queries, use shell with: whois, dig, host, nslookup, openssl, curl.\n\
          - For processing output, use shell with: grep, awk, sed, jq, sort, uniq.\n\
+         - For web directory/vhost enumeration, prefer gobuster or feroxbuster over shell.\n\
+         - For web vulnerability scanning, use nikto or nuclei directly.\n\
          \n\n\
          Execution discipline:\n\
          1. Execute each planned step in order. Do not skip steps.\n\
@@ -109,7 +122,11 @@ mod tests {
         let tools = agent.allowed_tools();
         assert!(tools.contains(&"nmap_scan".to_string()), "executor must have nmap_scan");
         assert!(tools.contains(&"shell".to_string()), "executor must have shell");
-        assert_eq!(tools.len(), 2, "executor should have exactly 2 tools");
+        assert!(tools.contains(&"gobuster_scan".to_string()), "executor must have gobuster_scan");
+        assert!(tools.contains(&"nikto_scan".to_string()), "executor must have nikto_scan");
+        assert!(tools.contains(&"nuclei_scan".to_string()), "executor must have nuclei_scan");
+        assert!(tools.contains(&"feroxbuster_scan".to_string()), "executor must have feroxbuster_scan");
+        assert_eq!(tools.len(), 6, "executor should have exactly 6 tools");
     }
 
     #[test]
