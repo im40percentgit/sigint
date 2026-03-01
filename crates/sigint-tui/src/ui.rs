@@ -5,10 +5,10 @@
 //! `ratatui::backend::TestBackend` without a real terminal.
 //!
 //! Layout (top-to-bottom):
-//!   1. Agent status bar  (1 row)
-//!   2. Chat | Tool output  (fills available height)
-//!   3. Findings table    (5 rows)
-//!   4. Input bar         (3 rows)
+//!   1. Agent status bar           (1 row)
+//!   2. Chat | Tool output         (fills available height)
+//!   3. Findings | Assets          (8 rows, split 50/50 horizontally)
+//!   4. Input bar                  (3 rows)
 //!
 //! @decision DEC-P3-TUI-002
 //! @title render() is a pure function of AppState with no side effects
@@ -16,8 +16,16 @@
 //! @rationale A pure render function (AppState -> Frame writes) enables
 //! full layout testing via ratatui TestBackend without a real terminal or
 //! process state. No mutable global state, no I/O in this module.
-//! The 5-panel layout uses ratatui Constraint::Percentage + Constraint::Length
+//! The layout uses ratatui Constraint::Percentage + Constraint::Length
 //! so panels fill available space deterministically at any terminal size.
+//!
+//! @decision DEC-4D-UI-001
+//! @title Findings and Assets share the bottom row as a 50/50 horizontal split
+//! @status accepted
+//! @rationale Both panels have comparable data density at MVP scale. A 50/50
+//! split avoids privileging one over the other and can be made adjustable later.
+//! The combined bottom row grows from 5 to 8 rows to give both panels enough
+//! height for headers plus several data rows at common terminal sizes (80x24+).
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -46,14 +54,14 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         .constraints([
             Constraint::Length(1),  // Agent status bar
             Constraint::Min(10),    // Chat + Tool panels
-            Constraint::Length(5),  // Findings table
+            Constraint::Length(8),  // Findings | Assets (split horizontally)
             Constraint::Length(3),  // Input bar
         ])
         .split(area);
 
     render_status_bar(frame, state, main_layout[0]);
     render_main_panels(frame, state, main_layout[1]);
-    render_findings(frame, state, main_layout[2]);
+    render_bottom_panels(frame, state, main_layout[2]);
     render_input(frame, state, main_layout[3]);
 
     // Help overlay renders on top of everything when active.
@@ -180,6 +188,17 @@ fn render_tool_output(frame: &mut Frame, state: &AppState, area: Rect) {
     frame.render_widget(panel, area);
 }
 
+/// Split the bottom row 50/50 and render Findings on the left, Assets on the right.
+fn render_bottom_panels(frame: &mut Frame, state: &AppState, area: Rect) {
+    let panels = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    render_findings(frame, state, panels[0]);
+    render_assets_panel(frame, state, panels[1]);
+}
+
 fn render_findings(frame: &mut Frame, state: &AppState, area: Rect) {
     let focused = state.focused_panel == Panel::Findings;
     let border_style = if focused {
@@ -223,6 +242,50 @@ fn render_findings(frame: &mut Frame, state: &AppState, area: Rect) {
     .block(
         Block::default()
             .title(" Findings ")
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
+
+    frame.render_widget(table, area);
+}
+
+fn render_assets_panel(frame: &mut Frame, state: &AppState, area: Rect) {
+    use sigint_core::types::AssetKind;
+
+    let focused = state.focused_panel == Panel::Assets;
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let rows: Vec<Row> = state.assets.iter().map(|asset| {
+        let kind_color = match asset.kind {
+            AssetKind::Host        => Color::Green,
+            AssetKind::Domain      => Color::Blue,
+            AssetKind::Url         => Color::Yellow,
+            AssetKind::Service     => Color::Magenta,
+            AssetKind::Certificate => Color::Cyan,
+            AssetKind::Email       => Color::LightBlue,
+            AssetKind::Other       => Color::White,
+        };
+        Row::new(vec![
+            Cell::from(asset.kind.to_string()).style(Style::default().fg(kind_color)),
+            Cell::from(asset.value.clone()),
+        ])
+    }).collect();
+
+    let table = Table::new(
+        rows,
+        [Constraint::Length(12), Constraint::Min(20)],
+    )
+    .header(
+        Row::new(["KIND", "VALUE"])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+    )
+    .block(
+        Block::default()
+            .title(format!(" Assets ({}) ", state.assets.len()))
             .borders(Borders::ALL)
             .border_style(border_style),
     );
@@ -371,6 +434,37 @@ mod tests {
         let sid = uuid::Uuid::new_v4();
         state.findings.push(Finding::new(sid, "Open port 22", "SSH exposed", Severity::Medium));
         state.findings.push(Finding::new(sid, "XSS", "reflected", Severity::High));
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+    }
+
+    #[test]
+    fn render_with_assets_does_not_panic() {
+        use sigint_core::types::{Asset, AssetKind};
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        let sid = uuid::Uuid::new_v4();
+        // Add one asset of each kind to exercise all color branches.
+        for (kind, value) in [
+            (AssetKind::Host, "10.0.0.1"),
+            (AssetKind::Domain, "example.com"),
+            (AssetKind::Url, "https://example.com/login"),
+            (AssetKind::Service, "ssh:22"),
+            (AssetKind::Certificate, "*.example.com"),
+            (AssetKind::Email, "admin@example.com"),
+            (AssetKind::Other, "unknown-resource"),
+        ] {
+            state.assets.push(Asset::new(sid, kind, value));
+        }
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+    }
+
+    #[test]
+    fn render_assets_panel_focused_does_not_panic() {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.focused_panel = crate::state::Panel::Assets;
         terminal.draw(|frame| render(frame, &state)).unwrap();
     }
 }

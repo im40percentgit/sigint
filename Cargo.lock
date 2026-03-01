@@ -2934,6 +2934,7 @@ dependencies = [
  "sigint-core",
  "sigint-llm",
  "sigint-memory",
+ "sigint-recon",
  "sigint-store",
  "sigint-tools",
  "sigint-tui",

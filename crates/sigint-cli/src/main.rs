@@ -12,6 +12,7 @@
 
 mod chat;
 mod doctor;
+mod recon;
 mod scan;
 mod sessions;
 
@@ -66,6 +67,18 @@ enum Commands {
         #[arg(long)]
         no_tui: bool,
     },
+    /// Run attack surface reconnaissance against a target (Phase 4 ASM).
+    Recon {
+        /// Target domain, hostname, or IP address.
+        target: String,
+        /// Comma-separated list of modules to run (default: all).
+        /// Available: dns, port, web, cert, osint
+        #[arg(short, long)]
+        modules: Option<String>,
+        /// Continuous mode — re-scan every 5 minutes and show changes.
+        #[arg(long)]
+        watch: bool,
+    },
 }
 
 #[tokio::main]
@@ -102,6 +115,9 @@ async fn main() {
         Commands::Sessions(args) => sessions::run(core, args).await,
         Commands::Scan { target, model, max_iterations, tui, no_tui, .. } => {
             scan::run(core, target, model, max_iterations, tui, no_tui).await
+        }
+        Commands::Recon { target, modules, watch } => {
+            recon::run(core, recon::ReconArgs { target, modules, watch }).await
         }
     };
 

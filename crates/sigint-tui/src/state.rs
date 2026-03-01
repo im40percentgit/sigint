@@ -12,12 +12,22 @@
 //! function is a pure function of AppState, tested with ratatui TestBackend.
 //! This mirrors the Elm architecture and eliminates the need for mocking
 //! terminal I/O in tests.
+//!
+//! @decision DEC-4D-STATE-001
+//! @title Assets panel added as fifth panel in the Tab cycle
+//! @status accepted
+//! @rationale Sub-Phase 4D introduces attack-surface-mapped assets discovered
+//! by sigint-recon. A dedicated panel (between Findings and Input in the Tab
+//! cycle) keeps asset data visually separate from security findings. Assets
+//! accumulate via AssetDiscovered events; AssetChanged and ReconStarted/
+//! ReconCompleted are acknowledged but produce no immediate state mutation
+//! because the asset list is the canonical source of truth rendered by ui.rs.
 
 use std::collections::HashMap;
 use std::time::Instant;
 
 use sigint_core::event::Event;
-use sigint_core::types::Finding;
+use sigint_core::types::{Asset, Finding};
 
 /// Which panel currently has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,6 +35,7 @@ pub enum Panel {
     Chat,
     ToolOutput,
     Findings,
+    Assets,
     Input,
 }
 
@@ -73,6 +84,8 @@ pub struct AppState {
     pub tool_log: Vec<ToolEntry>,
     /// Security findings discovered during the scan.
     pub findings: Vec<Finding>,
+    /// Discovered attack-surface assets from sigint-recon.
+    pub assets: Vec<Asset>,
     /// Panel that currently receives keyboard events.
     pub focused_panel: Panel,
     /// Per-panel scroll offset (lines scrolled up from bottom).
@@ -94,7 +107,7 @@ impl AppState {
     pub fn new() -> Self {
         let mut scroll_offsets = HashMap::new();
         let mut auto_scroll = HashMap::new();
-        for panel in [Panel::Chat, Panel::ToolOutput, Panel::Findings, Panel::Input] {
+        for panel in [Panel::Chat, Panel::ToolOutput, Panel::Findings, Panel::Assets, Panel::Input] {
             scroll_offsets.insert(panel, 0);
             auto_scroll.insert(panel, true);
         }
@@ -106,6 +119,7 @@ impl AppState {
             streaming_buffer: String::new(),
             tool_log: Vec::new(),
             findings: Vec::new(),
+            assets: Vec::new(),
             focused_panel: Panel::Input,
             scroll_offsets,
             auto_scroll,
@@ -176,6 +190,17 @@ impl AppState {
             Event::FindingCreated(finding) => {
                 self.findings.push(finding);
             }
+            Event::AssetDiscovered(asset) => {
+                self.assets.push(asset);
+            }
+            Event::AssetChanged { .. } => {
+                // Asset changes are persisted to the store; the TUI shows the
+                // cumulative discovered-asset list and does not patch entries in-place.
+            }
+            Event::ReconStarted { .. } | Event::ReconCompleted { .. } => {
+                // Informational events — could update a status bar indicator in
+                // a future iteration. No AppState mutation required for MVP.
+            }
             Event::Shutdown => {
                 self.should_quit = true;
             }
@@ -208,7 +233,8 @@ impl AppState {
         self.focused_panel = match self.focused_panel {
             Panel::Chat => Panel::ToolOutput,
             Panel::ToolOutput => Panel::Findings,
-            Panel::Findings => Panel::Input,
+            Panel::Findings => Panel::Assets,
+            Panel::Assets => Panel::Input,
             Panel::Input => Panel::Chat,
         };
     }
@@ -226,7 +252,7 @@ impl Default for AppState {
 mod tests {
     use super::*;
     use sigint_core::event::Event;
-    use sigint_core::types::{Finding, Severity};
+    use sigint_core::types::{Asset, AssetKind, Finding, Severity};
     use uuid::Uuid;
 
     #[test]
@@ -348,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn next_panel_cycles_all_four() {
+    fn next_panel_cycles_all_five() {
         let mut state = AppState::new();
         assert_eq!(state.focused_panel, Panel::Input);
         state.next_panel();
@@ -358,7 +384,64 @@ mod tests {
         state.next_panel();
         assert_eq!(state.focused_panel, Panel::Findings);
         state.next_panel();
+        assert_eq!(state.focused_panel, Panel::Assets);
+        state.next_panel();
         assert_eq!(state.focused_panel, Panel::Input);
+    }
+
+    #[test]
+    fn asset_discovered_pushes_to_assets() {
+        let mut state = AppState::new();
+        assert_eq!(state.assets.len(), 0);
+        let sid = Uuid::new_v4();
+        let asset = Asset::new(sid, AssetKind::Host, "10.0.0.1");
+        state.apply(Event::AssetDiscovered(asset));
+        assert_eq!(state.assets.len(), 1);
+        assert_eq!(state.assets[0].value, "10.0.0.1");
+        assert_eq!(state.assets[0].kind, AssetKind::Host);
+    }
+
+    #[test]
+    fn asset_discovered_multiple_accumulates() {
+        let mut state = AppState::new();
+        let sid = Uuid::new_v4();
+        for value in ["10.0.0.1", "example.com", "https://example.com/login"] {
+            let asset = Asset::new(sid, AssetKind::Host, value);
+            state.apply(Event::AssetDiscovered(asset));
+        }
+        assert_eq!(state.assets.len(), 3);
+    }
+
+    #[test]
+    fn assets_panel_in_scroll_maps() {
+        // Assets panel must be present in the scroll_offsets and auto_scroll maps
+        // so scroll_up/down operations on it don't panic.
+        let state = AppState::new();
+        assert!(state.scroll_offsets.contains_key(&Panel::Assets));
+        assert!(state.auto_scroll.contains_key(&Panel::Assets));
+    }
+
+    #[test]
+    fn recon_events_do_not_panic() {
+        let mut state = AppState::new();
+        let sid = Uuid::new_v4();
+        // These should all pass through the wildcard arm without panicking.
+        state.apply(Event::ReconStarted {
+            session_id: sid,
+            target: "example.com".to_string(),
+        });
+        state.apply(Event::AssetChanged {
+            asset_id: Uuid::new_v4(),
+            field: "value".to_string(),
+            old: "old.example.com".to_string(),
+            new: "new.example.com".to_string(),
+        });
+        state.apply(Event::ReconCompleted {
+            session_id: sid,
+            assets_found: 5,
+        });
+        // State is unaffected (assets unchanged).
+        assert_eq!(state.assets.len(), 0);
     }
 
     #[test]
