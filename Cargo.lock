@@ -2995,12 +2995,19 @@ dependencies = [
 name = "sigint-recon"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "chrono",
+ "regex",
+ "reqwest",
  "serde",
+ "serde_json",
  "sigint-core",
+ "sigint-sandbox",
  "sigint-store",
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
