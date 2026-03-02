@@ -12,6 +12,7 @@ members = [
     "crates/sigint-cli",
     "crates/sigint-memory",
     "crates/sigint-report",
+    "tests/e2e",
 ]
 resolver = "2"
 

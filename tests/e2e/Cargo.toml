@@ -1,0 +1,17 @@
+[package]
+name = "sigint-e2e"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+sigint-web = { workspace = true }
+sigint-agents = { workspace = true }
+sigint-core = { workspace = true }
+sigint-store = { workspace = true }
+
+axum = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
