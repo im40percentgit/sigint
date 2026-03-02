@@ -26,6 +26,7 @@ use tracing::info;
 use crate::error::{Result, ToolError};
 use crate::result::ToolResult;
 use crate::tool::Tool;
+use sigint_core::types::ToolRisk;
 
 /// Commands the LLM agent is permitted to run via ShellTool.
 ///
@@ -85,6 +86,10 @@ impl Tool for ShellTool {
          Recon commands (whois, dig, host, nslookup, curl, openssl) have network access \
          for DNS/WHOIS lookups. Other commands run in an offline sandbox. \
          IMPORTANT: Do NOT use shell to run nmap — use the dedicated nmap tool instead."
+    }
+
+    fn risk_level(&self) -> ToolRisk {
+        ToolRisk::High
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -199,6 +204,11 @@ impl Tool for ShellTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_risk_level_is_high() {
+        assert_eq!(ShellTool.risk_level(), sigint_core::types::ToolRisk::High);
+    }
 
     #[test]
     fn shell_tool_name_nonempty() {

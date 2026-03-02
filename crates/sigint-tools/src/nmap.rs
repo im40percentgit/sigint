@@ -367,6 +367,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nmap_risk_level_is_low() {
+        assert_eq!(NmapTool.risk_level(), sigint_core::types::ToolRisk::Low);
+    }
+
+    #[test]
     fn nmap_tool_name_nonempty() {
         assert!(!NmapTool.name().is_empty());
         assert_eq!(NmapTool.name(), "nmap_scan");

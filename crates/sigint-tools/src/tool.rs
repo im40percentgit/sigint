@@ -13,6 +13,7 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
+use sigint_core::types::ToolRisk;
 use sigint_llm::ToolDefinition;
 
 use crate::error::Result;
@@ -44,6 +45,14 @@ pub trait Tool: Send + Sync {
     /// `args` is the parsed `arguments` object from the LLM's `FunctionCall`.
     /// Returns a `ToolResult` on success or a `ToolError` on failure.
     async fn execute(&self, args: Value) -> Result<ToolResult>;
+
+    /// Risk level of this tool (used by the approval gate).
+    ///
+    /// Defaults to `ToolRisk::Low`. Override in high-impact tools (nikto, shell)
+    /// to require user approval before execution.
+    fn risk_level(&self) -> ToolRisk {
+        ToolRisk::Low
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +142,12 @@ mod tests {
         // Compiling this function proves dyn Tool works (object safety check).
         fn _takes_dyn(_tool: &dyn Tool) {}
         let _ = _takes_dyn; // suppress unused warning
+    }
+
+    /// EchoTool has no risk_level() override, so it must return the default Low.
+    #[test]
+    fn echo_tool_default_risk_is_low() {
+        let t = EchoTool;
+        assert_eq!(t.risk_level(), ToolRisk::Low);
     }
 }

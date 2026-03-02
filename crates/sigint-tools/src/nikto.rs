@@ -19,6 +19,7 @@ use tracing::info;
 use crate::error::{Result, ToolError};
 use crate::result::ToolResult;
 use crate::tool::Tool;
+use sigint_core::types::ToolRisk;
 
 /// Sandboxed nikto tool wrapper.
 ///
@@ -38,6 +39,10 @@ impl Tool for NiktoTool {
          Returns findings including outdated software, misconfigurations, and \
          potential vulnerabilities. Requires network access — runs inside a \
          sandboxed environment with pasta user-mode networking."
+    }
+
+    fn risk_level(&self) -> ToolRisk {
+        ToolRisk::High
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -117,6 +122,11 @@ impl Tool for NiktoTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nikto_risk_level_is_high() {
+        assert_eq!(NiktoTool.risk_level(), sigint_core::types::ToolRisk::High);
+    }
 
     #[test]
     fn nikto_tool_name_nonempty() {

@@ -26,6 +26,7 @@ use tracing::info;
 use crate::error::{Result, ToolError};
 use crate::result::ToolResult;
 use crate::tool::Tool;
+use sigint_core::types::ToolRisk;
 
 /// Severity levels accepted by nuclei's `-severity` flag.
 const VALID_SEVERITIES: &[&str] = &["info", "low", "medium", "high", "critical"];
@@ -48,6 +49,10 @@ impl Tool for NucleiTool {
          Returns matched findings from community templates covering CVEs, \
          misconfigurations, and exposed panels. Requires network access — runs \
          inside a sandboxed environment with pasta user-mode networking."
+    }
+
+    fn risk_level(&self) -> ToolRisk {
+        ToolRisk::Medium
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -239,6 +244,11 @@ fn parse_nuclei_jsonl(output: &str) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nuclei_risk_level_is_medium() {
+        assert_eq!(NucleiTool.risk_level(), sigint_core::types::ToolRisk::Medium);
+    }
 
     #[test]
     fn nuclei_tool_name_nonempty() {

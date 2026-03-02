@@ -20,6 +20,7 @@ use tracing::info;
 use crate::error::{Result, ToolError};
 use crate::result::ToolResult;
 use crate::tool::Tool;
+use sigint_core::types::ToolRisk;
 
 const DEFAULT_THREADS: u64 = 50;
 const DEFAULT_WORDLIST: &str = "/usr/share/wordlists/dirb/common.txt";
@@ -42,6 +43,10 @@ impl Tool for FeroxbusterTool {
          wordlist-based bruteforce. Returns discovered URLs with HTTP status codes. \
          Requires network access — runs inside a sandboxed environment with \
          pasta user-mode networking."
+    }
+
+    fn risk_level(&self) -> ToolRisk {
+        ToolRisk::Medium
     }
 
     fn definition(&self) -> ToolDefinition {
