@@ -165,6 +165,10 @@ pub struct OpenAiProvider {
     /// Base URL without trailing slash (e.g. "https://api.openai.com").
     base_url: String,
     api_key: String,
+    /// Provider-level default temperature, retained for introspection and future
+    /// use. Per-request temperature (`ChatRequest::temperature`) takes precedence
+    /// in all actual API calls.
+    #[allow(dead_code)]
     temperature: f32,
     client: reqwest::Client,
 }
@@ -240,7 +244,7 @@ impl LlmProvider for OpenAiProvider {
             model: &request.model,
             messages: &wire_msgs,
             stream: false,
-            temperature: self.temperature,
+            temperature: request.temperature,
             max_tokens,
             tools: request.tools.clone(),
         };
@@ -309,7 +313,7 @@ impl LlmProvider for OpenAiProvider {
             model: &request.model,
             messages: &wire_msgs,
             stream: true,
-            temperature: self.temperature,
+            temperature: request.temperature,
             max_tokens,
             tools: request.tools.clone(),
         };
@@ -433,6 +437,37 @@ fn sse_chunk_stream(
                 }
             }
         }
+        // Connection dropped without a [DONE] marker — yield a synthetic terminal
+        // chunk so callers always receive a termination signal.
+        yield Ok(StreamChunk {
+            delta: String::new(),
+            done: true,
+            usage: None,
+            tool_calls: vec![],
+        });
+    }
+}
+
+// ── Build helper (used in tests) ─────────────────────────────────────────────
+
+/// Build an `OpenAiWireRequest` from a `ChatRequest` and a pre-built wire
+/// message slice.
+///
+/// Extracted as a free function so unit tests can inspect wire fields
+/// (e.g. `temperature`) without going through an HTTP client.
+#[cfg(test)]
+fn build_openai_request<'a>(
+    request: &'a ChatRequest,
+    wire_msgs: &'a [OpenAiWireMessage],
+    stream: bool,
+) -> OpenAiWireRequest<'a> {
+    OpenAiWireRequest {
+        model: &request.model,
+        messages: wire_msgs,
+        stream,
+        temperature: request.temperature,
+        max_tokens: if request.max_tokens > 0 { Some(request.max_tokens as u64) } else { None },
+        tools: request.tools.clone(),
     }
 }
 
@@ -626,6 +661,17 @@ mod tests {
         assert_eq!(provider.api_key, "sk-from-env");
         // Clean up
         std::env::remove_var("SIGINT_API_KEY");
+    }
+
+    // ── Per-request temperature tests ────────────────────────────────────────
+
+    #[test]
+    fn request_uses_per_request_temperature() {
+        let req = ChatRequest::new("gpt-4o", vec![ChatMessage::user("hello")])
+            .with_temperature(0.0);
+        let wire_msgs = build_wire_messages(&req.messages);
+        let wire = build_openai_request(&req, &wire_msgs, false);
+        assert!((wire.temperature - 0.0).abs() < f32::EPSILON);
     }
 
     // ── Network tests ─────────────────────────────────────────────────────────
