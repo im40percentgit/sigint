@@ -55,7 +55,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run clippy
-        run: cargo clippy --workspace
+        run: cargo clippy --workspace -- -D warnings
 
   fmt:
     name: Format
