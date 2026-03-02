@@ -81,6 +81,7 @@ sigint-web = { path = "crates/sigint-web" }
 sigint-memory = { path = "crates/sigint-memory" }
 sigint-report = { path = "crates/sigint-report" }
 pulldown-cmark = "0.12"
+quick-xml = "0.37"
 rust-embed = "8"
 mime_guess = "2"
 
