@@ -7,6 +7,7 @@ edition.workspace = true
 sigint-core = { workspace = true }
 sigint-store = { workspace = true }
 sigint-report = { workspace = true }
+sigint-agents = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }

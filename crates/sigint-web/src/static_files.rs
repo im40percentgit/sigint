@@ -91,6 +91,7 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
+    use sigint_agents::ScanService;
     use sigint_core::{ApprovalRegistry, Config, event::EventBus};
     use sigint_store::Database;
     use std::time::Duration;
@@ -102,7 +103,12 @@ mod tests {
         let event_bus = EventBus::new();
         let config = Arc::new(Config::default());
         let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(300)));
-        AppState { db: Arc::new(db), event_bus, config, approval_registry }
+        let scan_service = Arc::new(ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        AppState { db: Arc::new(db), event_bus, config, approval_registry, scan_service }
     }
 
     async fn body_bytes(body: Body) -> Vec<u8> {

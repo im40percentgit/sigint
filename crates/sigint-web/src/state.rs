@@ -2,17 +2,20 @@
 //!
 //! `AppState` is cheap to clone — the `Database` is behind an `Arc`,
 //! `EventBus` is a thin wrapper around a `broadcast::Sender` (also cheap
-//! to clone), and `Config` / `ApprovalRegistry` are behind `Arc` so the
-//! underlying data is shared rather than copied.
+//! to clone), and `Config` / `ApprovalRegistry` / `ScanService` are behind
+//! `Arc` so the underlying data is shared rather than copied.
 //!
 //! @decision DEC-WEB-003
-//! @title AppState carries config and approval_registry for web-initiated scans
+//! @title AppState carries config, approval_registry, and scan_service for web-initiated scans
 //! @status accepted
 //! @rationale The web layer needs to read config (e.g. default model, timeouts)
 //! when constructing scan sessions, and must be able to route approve/deny
-//! WebSocket messages to the agent loop via ApprovalRegistry. Carrying both
-//! in AppState keeps the dependency injection explicit and avoids global state.
+//! WebSocket messages to the agent loop via ApprovalRegistry. ScanService is
+//! the single point of truth for scan lifecycle — all handlers delegate to it
+//! rather than spawning tasks directly. Carrying all three in AppState keeps
+//! the dependency injection explicit and avoids global state.
 
+use sigint_agents::ScanService;
 use sigint_core::{ApprovalRegistry, Config, event::EventBus};
 use sigint_store::Database;
 use std::sync::Arc;
@@ -31,4 +34,6 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// Registry of pending tool-approval requests from the agent loop.
     pub approval_registry: Arc<ApprovalRegistry>,
+    /// Manages concurrent scan pipelines (start, status, cancel, list).
+    pub scan_service: Arc<ScanService>,
 }

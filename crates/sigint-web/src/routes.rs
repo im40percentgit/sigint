@@ -2,7 +2,7 @@
 //!
 //! All handlers follow the same pattern:
 //!  1. Extract `State<AppState>` and path/query params.
-//!  2. Call the appropriate `Database` method.
+//!  2. Call the appropriate `Database` or `ScanService` method.
 //!  3. Return `axum::Json` on success or a `(StatusCode, String)` error.
 //!
 //! @decision DEC-WEB-001
@@ -13,6 +13,17 @@
 //! handlers thin makes them easy to test with `tower::ServiceExt::oneshot` and
 //! ensures the store remains the single source of truth regardless of whether
 //! the CLI or web UI is the caller.
+//!
+//! @decision DEC-WEB-005
+//! @title start_scan delegates fully to ScanService::start()
+//! @status accepted
+//! @rationale Previously start_scan created its own session and emitted a
+//! status event directly. Now it delegates to ScanService which owns the full
+//! lifecycle: session creation, Orchestrator spawn, event emission, and status
+//! tracking. The handler becomes a thin HTTP adapter — validates input, calls
+//! the service, returns 201 with session_id. This is consistent with the
+//! scan_status/cancel_scan/list_scans handlers which also go through
+//! ScanService.
 
 use axum::{
     Json,
@@ -38,21 +49,10 @@ pub struct ScanRequest {
 
 /// `POST /api/scan` — start a new penetration scan.
 ///
-/// Validates the target, creates a session record, emits a `Status` event so
-/// WebSocket clients see the scan start immediately, and returns `201 Created`
-/// with `{"session_id": "<uuid>"}`.
-///
-/// The actual orchestrator spawn is intentionally deferred: wiring in
-/// sigint-agents / sigint-llm would add significant dependency weight and
-/// is handled in a later phase. The endpoint contract (201 + session_id) is
-/// stable regardless.
-///
-/// @decision DEC-WEB-004
-/// @title POST /api/scan creates a session but does not spawn the orchestrator yet
-/// @status accepted
-/// @rationale Decouples the web contract from the agent wiring. The session
-/// record exists immediately so the frontend can poll or subscribe via WS,
-/// and the orchestrator spawn can be added later without changing the API.
+/// Validates the target, delegates to `ScanService::start()` which creates a
+/// DB session, builds the Orchestrator, and spawns the scan as a background
+/// task. Returns `201 Created` with `{"session_id": "<uuid>"}` immediately —
+/// the scan runs asynchronously and progress arrives via WebSocket.
 pub async fn start_scan(
     State(state): State<AppState>,
     Json(body): Json<ScanRequest>,
@@ -61,24 +61,62 @@ pub async fn start_scan(
         return Err((StatusCode::BAD_REQUEST, "target is required".into()));
     }
 
-    let session = sigint_core::types::Session::new(
-        &format!("web-scan-{}", body.target.replace(['.', '/'], "-"))
-    ).with_target(&body.target);
-
-    state.db.create_session(&session).map_err(internal)?;
-
-    let session_id = session.id;
-    let target = body.target.clone();
-
-    // Notify WebSocket subscribers that the scan has started.
-    state.event_bus.emit(sigint_core::event::Event::Status(
-        format!("Scan started for target: {}", target)
-    ));
+    let session_id = state
+        .scan_service
+        .start(&state.db, &body.target, body.model.clone())
+        .await
+        .map_err(internal)?;
 
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "session_id": session_id })),
     ))
+}
+
+/// `GET /api/scan/{id}/status` — query scan status.
+///
+/// Returns `{"session_id": "<uuid>", "status": "<status>"}` for known scans,
+/// or `404` if no scan with that ID is tracked.
+pub async fn scan_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let uuid = parse_uuid(&id)?;
+    match state.scan_service.status(uuid).await {
+        Some(status) => Ok(Json(
+            serde_json::json!({ "session_id": uuid, "status": status }),
+        )),
+        None => Err(not_found(format!("scan '{}' not found", id))),
+    }
+}
+
+/// `DELETE /api/scan/{id}` — cancel a running scan.
+///
+/// Aborts the background tokio task and marks the scan `Cancelled`.
+/// Returns `{"cancelled": true}` on success, or `404` if the scan is not
+/// found or not in `Running` state.
+pub async fn cancel_scan(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let uuid = parse_uuid(&id)?;
+    if state.scan_service.cancel(uuid).await {
+        Ok(Json(serde_json::json!({ "cancelled": true })))
+    } else {
+        Err(not_found(format!(
+            "scan '{}' not found or not running",
+            id
+        )))
+    }
+}
+
+/// `GET /api/scans` — list all tracked scans (active and completed).
+///
+/// Returns a JSON array of `ScanInfo` objects. Empty array when no scans have
+/// been started since this server process started.
+pub async fn list_scans(State(state): State<AppState>) -> impl IntoResponse {
+    let scans = state.scan_service.list().await;
+    Json(scans)
 }
 
 // ── Error helper ─────────────────────────────────────────────────────────────
@@ -269,6 +307,7 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
+    use sigint_agents::ScanService;
     use sigint_core::{ApprovalRegistry, Config, event::EventBus};
     use sigint_store::Database;
     use std::time::Duration;
@@ -280,7 +319,18 @@ mod tests {
         let event_bus = EventBus::new();
         let config = Arc::new(Config::default());
         let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(300)));
-        AppState { db: Arc::new(db), event_bus, config, approval_registry }
+        let scan_service = Arc::new(ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+        }
     }
 
     async fn body_string(body: Body) -> String {
@@ -465,5 +515,44 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── Scan lifecycle endpoints ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn scan_status_unknown_returns_404() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/scan/00000000-0000-0000-0000-000000000000/status")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn cancel_unknown_scan_returns_404() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("DELETE")
+            .uri("/api/scan/00000000-0000-0000-0000-000000000000")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_scans_returns_array() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/scans")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v.is_array());
     }
 }

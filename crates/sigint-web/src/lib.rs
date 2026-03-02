@@ -18,6 +18,9 @@
 //! | GET | `/api/sessions/{id}/findings` | [`routes::session_findings`] |
 //! | GET | `/api/report/{id}` | [`routes::get_report`] |
 //! | POST | `/api/scan` | [`routes::start_scan`] |
+//! | GET | `/api/scan/{id}/status` | [`routes::scan_status`] |
+//! | DELETE | `/api/scan/{id}` | [`routes::cancel_scan`] |
+//! | GET | `/api/scans` | [`routes::list_scans`] |
 //! | GET | `/ws/events` | [`ws::ws_events`] |
 //!
 //! @decision DEC-WEB-001
@@ -37,10 +40,11 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use tower_http::cors::CorsLayer;
 
+use sigint_agents::ScanService;
 use sigint_core::{ApprovalRegistry, Config, event::EventBus};
 use sigint_store::Database;
 
@@ -65,8 +69,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sessions/{id}/findings", get(routes::session_findings))
         // Report generation
         .route("/api/report/{id}", get(routes::get_report))
-        // Scan initiation
+        // Scan lifecycle
         .route("/api/scan", post(routes::start_scan))
+        .route("/api/scan/{id}/status", get(routes::scan_status))
+        .route("/api/scan/{id}", delete(routes::cancel_scan))
+        .route("/api/scans", get(routes::list_scans))
         // WebSocket event bridge
         .route("/ws/events", get(ws::ws_events))
         // Permissive CORS for local development
@@ -87,11 +94,17 @@ pub async fn serve(
     approval_registry: Arc<ApprovalRegistry>,
     addr: std::net::SocketAddr,
 ) -> Result<(), sigint_core::Error> {
+    let scan_service = Arc::new(ScanService::new(
+        config.clone(),
+        event_bus.clone(),
+        approval_registry.clone(),
+    ));
     let state = AppState {
         db: Arc::new(db),
         event_bus,
         config,
         approval_registry,
+        scan_service,
     };
     let app = create_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
