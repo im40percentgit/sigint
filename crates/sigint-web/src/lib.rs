@@ -29,6 +29,7 @@
 
 pub mod routes;
 pub mod state;
+pub mod static_files;
 pub mod ws;
 
 use std::sync::Arc;
@@ -68,6 +69,8 @@ pub fn create_router(state: AppState) -> Router {
         // Permissive CORS for local development
         .layer(CorsLayer::permissive())
         .with_state(state)
+        // SPA fallback: all unmatched paths serve the embedded frontend
+        .fallback(static_files::serve_static)
 }
 
 /// Bind a TCP listener and run the SIGINT web server.
