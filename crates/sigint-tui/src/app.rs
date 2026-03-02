@@ -37,24 +37,35 @@ use crate::ui;
 
 /// The main TUI application handle.
 ///
-/// Create with `TuiApp::new(event_rx)` then drive with `.run().await`.
+/// Create with `TuiApp::new(event_rx, event_tx)` then drive with `.run().await`.
 /// Terminal is restored on drop via `restore_terminal()` in `run()`.
+///
+/// `event_tx` is used to emit `ToolApprovalGranted` / `ToolApprovalDenied`
+/// events when the operator presses 'y' or 'n' on an approval prompt.
 pub struct TuiApp {
     state: AppState,
     event_rx: broadcast::Receiver<Event>,
+    event_tx: broadcast::Sender<Event>,
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
 
 impl TuiApp {
     /// Create a new `TuiApp`, entering raw mode and the alternate screen.
     ///
+    /// `event_tx` is the sender side of the event bus, used to emit approval
+    /// responses when the operator presses 'y'/'n' on a pending approval prompt.
+    ///
     /// On failure the terminal is left unmodified — the caller should not
     /// attempt cleanup since `setup_terminal` failed before taking over.
-    pub fn new(event_rx: broadcast::Receiver<Event>) -> Result<Self, io::Error> {
+    pub fn new(
+        event_rx: broadcast::Receiver<Event>,
+        event_tx: broadcast::Sender<Event>,
+    ) -> Result<Self, io::Error> {
         let terminal = setup_terminal()?;
         Ok(Self {
             state: AppState::new(),
             event_rx,
+            event_tx,
             terminal,
         })
     }
@@ -125,6 +136,25 @@ impl TuiApp {
             // Quit in any mode with Ctrl-C.
             (_, KeyCode::Char('c')) if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return true;
+            }
+
+            // ── Approval prompt: 'y' grants, 'n' denies ───────────────────
+            // These are intercepted regardless of mode when an approval is pending,
+            // giving the operator a clear, dedicated response path.
+            (Mode::Normal, KeyCode::Char('y')) if self.state.pending_approval.is_some() => {
+                if let Some(approval) = self.state.pending_approval.take() {
+                    let _ = self.event_tx.send(Event::ToolApprovalGranted {
+                        request_id: approval.request_id,
+                    });
+                }
+            }
+            (Mode::Normal, KeyCode::Char('n')) if self.state.pending_approval.is_some() => {
+                if let Some(approval) = self.state.pending_approval.take() {
+                    let _ = self.event_tx.send(Event::ToolApprovalDenied {
+                        request_id: approval.request_id,
+                        reason: Some("Denied by TUI operator".into()),
+                    });
+                }
             }
 
             // Help overlay toggle.

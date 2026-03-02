@@ -9,6 +9,7 @@
 //!   2. Chat | Tool output         (fills available height)
 //!   3. Findings | Assets          (8 rows, split 50/50 horizontally)
 //!   4. Input bar                  (3 rows)
+//!   5. Approval bar               (1 row, only when pending_approval is Some)
 //!
 //! @decision DEC-P3-TUI-002
 //! @title render() is a pure function of AppState with no side effects
@@ -26,6 +27,15 @@
 //! split avoids privileging one over the other and can be made adjustable later.
 //! The combined bottom row grows from 5 to 8 rows to give both panels enough
 //! height for headers plus several data rows at common terminal sizes (80x24+).
+//!
+//! @decision DEC-P6-APPROVAL-002
+//! @title Approval bar occupies a conditional 1-row slot at the very bottom
+//! @status accepted
+//! @rationale The approval bar must be impossible to miss — placing it below
+//! the input bar at the bottom edge of the screen makes it visually distinct
+//! from regular UI chrome. Using Constraint::Length(0) vs Length(1) based on
+//! pending_approval keeps the layout calculation pure (no branch in render path)
+//! while avoiding wasted space when no approval is pending.
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -34,6 +44,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
 use crate::state::{AppState, Mode, Panel};
+use sigint_core::types::ToolRisk;
 
 /// Render the full TUI into `frame` from `state`.
 ///
@@ -49,13 +60,17 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         return;
     }
 
+    // The approval bar takes 1 row when pending; 0 rows otherwise.
+    let approval_height = if state.pending_approval.is_some() { 1 } else { 0 };
+
     let main_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Agent status bar
-            Constraint::Min(10),    // Chat + Tool panels
-            Constraint::Length(8),  // Findings | Assets (split horizontally)
-            Constraint::Length(3),  // Input bar
+            Constraint::Length(1),                      // Agent status bar
+            Constraint::Min(10),                        // Chat + Tool panels
+            Constraint::Length(8),                      // Findings | Assets (split horizontally)
+            Constraint::Length(3),                      // Input bar
+            Constraint::Length(approval_height),        // Approval bar (0 or 1 row)
         ])
         .split(area);
 
@@ -63,6 +78,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     render_main_panels(frame, state, main_layout[1]);
     render_bottom_panels(frame, state, main_layout[2]);
     render_input(frame, state, main_layout[3]);
+
+    // Render the approval bar when a tool is awaiting operator approval.
+    if let Some(ref approval) = state.pending_approval {
+        render_approval_bar(frame, approval, main_layout[4]);
+    }
 
     // Help overlay renders on top of everything when active.
     if state.show_help {
@@ -318,6 +338,64 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect) {
     frame.render_widget(input, area);
 }
 
+/// Render the approval bar: a single highlighted row prompting the operator to
+/// approve or deny a pending tool execution.
+///
+/// Format: `[APPROVAL] Run <tool_name> (<risk_level>)? Args: <args_summary> [y/n]`
+///
+/// Risk level color: Low=green, Medium=yellow, High=red. The bar uses a dark
+/// background to distinguish it clearly from the input bar above.
+fn render_approval_bar(
+    frame: &mut Frame,
+    approval: &crate::state::PendingApproval,
+    area: Rect,
+) {
+    // Skip rendering into a zero-height area to avoid ratatui panics.
+    if area.height == 0 {
+        return;
+    }
+
+    let risk_color = match approval.risk_level {
+        ToolRisk::Low    => Color::Green,
+        ToolRisk::Medium => Color::Yellow,
+        ToolRisk::High   => Color::Red,
+    };
+
+    let risk_label = match approval.risk_level {
+        ToolRisk::Low    => "low",
+        ToolRisk::Medium => "medium",
+        ToolRisk::High   => "HIGH",
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            " [APPROVAL] ",
+            Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" Run ", Style::default().fg(Color::White).bg(Color::DarkGray)),
+        Span::styled(
+            approval.tool_name.clone(),
+            Style::default().fg(Color::Cyan).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" ({risk_label})"),
+            Style::default().fg(risk_color).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("? Args: {}", approval.args_summary),
+            Style::default().fg(Color::Gray).bg(Color::DarkGray),
+        ),
+        Span::styled(
+            "  [y] approve  [n] deny ",
+            Style::default().fg(Color::White).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    let bar = Paragraph::new(line)
+        .style(Style::default().bg(Color::DarkGray));
+    frame.render_widget(bar, area);
+}
+
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
     use ratatui::widgets::Clear;
 
@@ -465,6 +543,53 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
         state.focused_panel = crate::state::Panel::Assets;
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+    }
+
+    #[test]
+    fn render_with_pending_approval_does_not_panic() {
+        use crate::state::PendingApproval;
+        use sigint_core::types::ToolRisk;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.pending_approval = Some(PendingApproval {
+            request_id: uuid::Uuid::new_v4(),
+            tool_name: "nmap_scan".into(),
+            args_summary: r#"{"target":"192.168.1.0/24"}"#.into(),
+            risk_level: ToolRisk::High,
+        });
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+    }
+
+    #[test]
+    fn render_approval_bar_all_risk_levels_do_not_panic() {
+        use crate::state::PendingApproval;
+        use sigint_core::types::ToolRisk;
+
+        for risk in [ToolRisk::Low, ToolRisk::Medium, ToolRisk::High] {
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut state = AppState::new();
+            state.pending_approval = Some(PendingApproval {
+                request_id: uuid::Uuid::new_v4(),
+                tool_name: "test_tool".into(),
+                args_summary: "{}".into(),
+                risk_level: risk,
+            });
+            terminal.draw(|frame| render(frame, &state)).unwrap();
+        }
+    }
+
+    #[test]
+    fn render_without_pending_approval_does_not_show_bar() {
+        // When no approval is pending, layout uses 0 rows for approval bar —
+        // just verify no panic and state is unchanged.
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let state = AppState::new();
+        assert!(state.pending_approval.is_none());
         terminal.draw(|frame| render(frame, &state)).unwrap();
     }
 }

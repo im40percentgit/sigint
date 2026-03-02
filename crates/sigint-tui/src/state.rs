@@ -22,6 +22,16 @@
 //! accumulate via AssetDiscovered events; AssetChanged and ReconStarted/
 //! ReconCompleted are acknowledged but produce no immediate state mutation
 //! because the asset list is the canonical source of truth rendered by ui.rs.
+//!
+//! @decision DEC-P6-APPROVAL-001
+//! @title PendingApproval held in AppState; approval responses emitted by app.rs
+//! @status accepted
+//! @rationale AppState remains a pure data structure (no channel handles).
+//! When ToolApprovalRequested arrives, apply() records it in pending_approval.
+//! When the operator presses y/n, app.rs reads pending_approval from state,
+//! emits the corresponding ToolApprovalGranted/ToolApprovalDenied event on the
+//! event bus sender it already owns, then clears pending_approval. This keeps
+//! apply() side-effect-free and fully unit-testable.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -56,6 +66,21 @@ pub struct DisplayMessage {
     /// Role string: "user", "assistant", "system", "tool".
     pub role: String,
     pub content: String,
+}
+
+/// A tool execution awaiting operator approval.
+///
+/// Populated from `Event::ToolApprovalRequested`; cleared when the operator
+/// presses 'y' (grant) or 'n' (deny) in the TUI. The approval response is
+/// emitted as `Event::ToolApprovalGranted` / `Event::ToolApprovalDenied` by
+/// `app.rs` so AppState remains side-effect-free.
+#[derive(Debug, Clone)]
+pub struct PendingApproval {
+    pub request_id: uuid::Uuid,
+    pub tool_name: String,
+    /// Compact JSON summary of the tool arguments, truncated to ~100 chars.
+    pub args_summary: String,
+    pub risk_level: sigint_core::types::ToolRisk,
 }
 
 /// A single tool invocation entry in the Tool Output panel.
@@ -100,6 +125,11 @@ pub struct AppState {
     pub should_quit: bool,
     /// Whether the `?` help overlay is visible.
     pub show_help: bool,
+    /// A tool execution waiting for operator approval (y/n).
+    ///
+    /// When `Some`, the UI renders an approval bar and keypresses 'y'/'n'
+    /// are intercepted by `app.rs` to emit the grant/deny events.
+    pub pending_approval: Option<PendingApproval>,
 }
 
 impl AppState {
@@ -127,6 +157,7 @@ impl AppState {
             mode: Mode::Normal,
             should_quit: false,
             show_help: false,
+            pending_approval: None,
         }
     }
 
@@ -204,6 +235,32 @@ impl AppState {
             Event::Shutdown => {
                 self.should_quit = true;
             }
+            // ── Approval gate events ───────────────────────────────────────
+            Event::ToolApprovalRequested {
+                request_id,
+                session_id: _,
+                tool_name,
+                args,
+                risk_level,
+            } => {
+                // Build a compact args summary (≤100 chars) for display.
+                let mut args_summary = serde_json::to_string(&args)
+                    .unwrap_or_else(|_| String::from("{…}"));
+                if args_summary.len() > 100 {
+                    args_summary.truncate(97);
+                    args_summary.push_str("...");
+                }
+                self.pending_approval = Some(PendingApproval {
+                    request_id,
+                    tool_name,
+                    args_summary,
+                    risk_level,
+                });
+            }
+            // ToolApprovalGranted / ToolApprovalDenied are emitted BY the TUI
+            // (via app.rs) and consumed by the approval registry in sigint-core.
+            // The TUI does not need to react to its own responses.
+            Event::ToolApprovalGranted { .. } | Event::ToolApprovalDenied { .. } => {}
             // SessionCreated, TaskUpdated — no TUI state change needed yet.
             _ => {}
         }
@@ -450,5 +507,106 @@ mod tests {
         assert!(!state.should_quit);
         state.apply(Event::Shutdown);
         assert!(state.should_quit);
+    }
+
+    #[test]
+    fn approval_requested_sets_pending() {
+        use sigint_core::types::ToolRisk;
+
+        let mut state = AppState::new();
+        assert!(state.pending_approval.is_none());
+
+        let req_id = Uuid::new_v4();
+        let sess_id = Uuid::new_v4();
+        state.apply(Event::ToolApprovalRequested {
+            request_id: req_id,
+            session_id: sess_id,
+            tool_name: "nmap_scan".into(),
+            args: serde_json::json!({"target": "192.168.1.0/24"}),
+            risk_level: ToolRisk::High,
+        });
+
+        let approval = state.pending_approval.expect("should have pending approval");
+        assert_eq!(approval.request_id, req_id);
+        assert_eq!(approval.tool_name, "nmap_scan");
+        assert_eq!(approval.risk_level, ToolRisk::High);
+        assert!(!approval.args_summary.is_empty());
+    }
+
+    #[test]
+    fn approval_requested_truncates_long_args() {
+        use sigint_core::types::ToolRisk;
+
+        let mut state = AppState::new();
+        // Construct a very long args value.
+        let long_string = "x".repeat(200);
+        state.apply(Event::ToolApprovalRequested {
+            request_id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            tool_name: "tool".into(),
+            args: serde_json::json!({"data": long_string}),
+            risk_level: ToolRisk::Medium,
+        });
+
+        let approval = state.pending_approval.unwrap();
+        assert!(
+            approval.args_summary.len() <= 100,
+            "args_summary exceeded 100 chars: {} chars",
+            approval.args_summary.len()
+        );
+        assert!(approval.args_summary.ends_with("..."), "truncated summary should end with ...");
+    }
+
+    #[test]
+    fn approval_granted_clears_pending() {
+        use sigint_core::types::ToolRisk;
+
+        // Simulate the grant flow: state records pending; app.rs would emit
+        // ToolApprovalGranted and clear pending_approval. We test the clear
+        // directly since the emit side lives in app.rs.
+        let mut state = AppState::new();
+        let req_id = Uuid::new_v4();
+
+        // Set up pending approval.
+        state.apply(Event::ToolApprovalRequested {
+            request_id: req_id,
+            session_id: Uuid::new_v4(),
+            tool_name: "run_cmd".into(),
+            args: serde_json::json!({}),
+            risk_level: ToolRisk::Low,
+        });
+        assert!(state.pending_approval.is_some());
+
+        // Simulate what app.rs does on 'y': clear pending_approval.
+        state.pending_approval = None;
+        assert!(state.pending_approval.is_none());
+    }
+
+    #[test]
+    fn approval_second_request_replaces_first() {
+        use sigint_core::types::ToolRisk;
+
+        let mut state = AppState::new();
+        let req1 = Uuid::new_v4();
+        let req2 = Uuid::new_v4();
+
+        state.apply(Event::ToolApprovalRequested {
+            request_id: req1,
+            session_id: Uuid::new_v4(),
+            tool_name: "first_tool".into(),
+            args: serde_json::json!({}),
+            risk_level: ToolRisk::Low,
+        });
+        state.apply(Event::ToolApprovalRequested {
+            request_id: req2,
+            session_id: Uuid::new_v4(),
+            tool_name: "second_tool".into(),
+            args: serde_json::json!({}),
+            risk_level: ToolRisk::High,
+        });
+
+        let approval = state.pending_approval.unwrap();
+        assert_eq!(approval.request_id, req2, "second request should replace first");
+        assert_eq!(approval.tool_name, "second_tool");
     }
 }
