@@ -383,6 +383,7 @@ mod tests {
                 base_url: base_url.into(),
                 temperature: 0.7,
                 context_window: 0,
+                api_key: None,
             },
             store: StoreConfig {
                 db_path: "~/.local/share/sigint/sigint.db".into(),

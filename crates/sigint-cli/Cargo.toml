@@ -16,6 +16,7 @@ sigint-tools = { workspace = true }
 sigint-tui = { workspace = true }
 sigint-memory = { workspace = true }
 sigint-recon = { workspace = true }
+sigint-report = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 uuid = { workspace = true }

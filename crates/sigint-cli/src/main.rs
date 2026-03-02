@@ -13,6 +13,7 @@
 mod chat;
 mod doctor;
 mod recon;
+mod report;
 mod scan;
 mod sessions;
 
@@ -67,6 +68,8 @@ enum Commands {
         #[arg(long)]
         no_tui: bool,
     },
+    /// Generate a report for a scan session.
+    Report(report::ReportArgs),
     /// Run attack surface reconnaissance against a target (Phase 4 ASM).
     Recon {
         /// Target domain, hostname, or IP address.
@@ -116,6 +119,7 @@ async fn main() {
         Commands::Scan { target, model, max_iterations, tui, no_tui, .. } => {
             scan::run(core, target, model, max_iterations, tui, no_tui).await
         }
+        Commands::Report(args) => report::run(core, args).await,
         Commands::Recon { target, modules, watch } => {
             recon::run(core, recon::ReconArgs { target, modules, watch }).await
         }
