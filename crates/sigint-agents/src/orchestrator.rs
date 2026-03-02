@@ -228,6 +228,8 @@ impl Orchestrator {
             self.max_iterations,
             &self.model,
             &self.event_bus,
+            None,
+            "all",
         )
         .await
     }

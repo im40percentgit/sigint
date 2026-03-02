@@ -33,17 +33,49 @@
 //! gracefully — it can acknowledge the error and either try a different tool
 //! or respond with text. This matches OpenAI's recommended error-handling
 //! pattern for function calling.
+//!
+//! @decision DEC-AGENT-010
+//! @title Approval gate checks tool risk before execution; blocks on oneshot channel
+//! @status accepted
+//! @rationale Medium/High risk tools require human approval. The gate uses
+//! `ApprovalRegistry::request()` to obtain a oneshot receiver, emits
+//! `ToolApprovalRequested`, then races against a timeout. On deny/timeout the
+//! gate feeds an error message back to the LLM (same recovery path as unknown
+//! tool) rather than propagating an error. On approve it emits
+//! `ToolApprovalGranted` and proceeds to execution. When `approval_registry`
+//! is `None` the gate is completely bypassed — no performance overhead for
+//! callers that don't need it. `auto_approve` controls which risk levels skip
+//! the gate: "all"/"medium"/"low"/"none".
 
 use std::time::Instant;
 
 use tracing::{debug, warn};
+use uuid::Uuid;
 
-use sigint_core::{Error, event::{Event, EventBus}};
+use sigint_core::{Error, ApprovalRegistry, event::{Event, EventBus}};
+use sigint_core::types::ToolRisk;
 use sigint_llm::{
     provider::LlmProvider,
     types::{ChatMessage, ChatRequest, ToolDefinition},
 };
 use sigint_tools::tool::Tool;
+
+/// Returns `true` if `risk` is within the auto-approval threshold.
+///
+/// - `"all"`    — every tool runs without approval
+/// - `"medium"` — Low and Medium auto-approve; High requires approval
+/// - `"low"`    — only Low tools auto-approve
+/// - `"none"`   — every tool requires approval
+/// - any other value is treated as `"low"` (safe default)
+fn is_auto_approved(risk: ToolRisk, threshold: &str) -> bool {
+    match threshold {
+        "all" => true,
+        "none" => false,
+        "medium" => risk <= ToolRisk::Medium,
+        "low" => risk <= ToolRisk::Low,
+        _ => risk <= ToolRisk::Low,
+    }
+}
 
 /// Run the tool-call loop for an agent.
 ///
@@ -53,14 +85,18 @@ use sigint_tools::tool::Tool;
 /// returns plain text or `max_iterations` is exhausted.
 ///
 /// # Arguments
-/// * `provider`       — LLM backend (Ollama, mock, etc.)
-/// * `state`          — Mutable conversation history; updated in-place with
-///   assistant and tool-result messages.
-/// * `tools`          — Available tool implementations; matched by name.
-/// * `tool_defs`      — Tool schemas passed to the LLM in each request.
-/// * `max_iterations` — Hard cap on tool-call rounds before giving up.
-/// * `model`          — Model identifier string (e.g. `"llama3.2"`).
-/// * `event_bus`      — Best-effort event emission for observability.
+/// * `provider`           — LLM backend (Ollama, mock, etc.)
+/// * `state`              — Mutable conversation history; updated in-place.
+/// * `tools`              — Available tool implementations; matched by name.
+/// * `tool_defs`          — Tool schemas passed to the LLM in each request.
+/// * `max_iterations`     — Hard cap on tool-call rounds before giving up.
+/// * `model`              — Model identifier string (e.g. `"llama3.2"`).
+/// * `event_bus`          — Best-effort event emission for observability.
+/// * `approval_registry`  — Optional approval gate. When `Some`, tools whose
+///   risk level exceeds `auto_approve` will block for human approval. When
+///   `None`, all tools run immediately regardless of risk.
+/// * `auto_approve`       — Auto-approval threshold: `"all"`, `"medium"`,
+///   `"low"`, or `"none"`. See [`is_auto_approved`] for semantics.
 ///
 /// # Returns
 /// The model's final text response, or the last partial response with a
@@ -77,6 +113,8 @@ pub async fn run_tool_loop(
     max_iterations: usize,
     model: &str,
     event_bus: &EventBus,
+    approval_registry: Option<&ApprovalRegistry>,
+    auto_approve: &str,
 ) -> Result<String, Error> {
     let mut last_text = String::new();
 
@@ -133,6 +171,60 @@ pub async fn run_tool_loop(
                     state.add_message(ChatMessage::tool(error_msg));
                 }
                 Some(tool) => {
+                    // ── Approval gate ─────────────────────────────────────────
+                    // Check risk level against the auto_approve threshold. If
+                    // approval is needed and a registry is configured, emit
+                    // ToolApprovalRequested and block until approved, denied,
+                    // or timed out. A missing registry skips the gate entirely.
+                    let risk = tool.risk_level();
+                    if !is_auto_approved(risk, auto_approve) {
+                        if let Some(registry) = approval_registry {
+                            let request_id = Uuid::new_v4();
+                            let rx = registry.request(request_id);
+                            event_bus.emit(Event::ToolApprovalRequested {
+                                request_id,
+                                session_id: Uuid::nil(),
+                                tool_name: name.clone(),
+                                args: args.clone(),
+                                risk_level: risk,
+                            });
+                            let timeout_dur = registry.timeout();
+                            match tokio::time::timeout(timeout_dur, rx).await {
+                                Ok(Ok(true)) => {
+                                    event_bus.emit(Event::ToolApprovalGranted { request_id });
+                                }
+                                Ok(Ok(false)) => {
+                                    event_bus.emit(Event::ToolApprovalDenied {
+                                        request_id,
+                                        reason: None,
+                                    });
+                                    state.add_message(ChatMessage::tool(
+                                        format!("Tool '{}' execution denied by operator.", name),
+                                    ));
+                                    continue;
+                                }
+                                Ok(Err(_)) => {
+                                    // Sender dropped — approval channel cancelled.
+                                    state.add_message(ChatMessage::tool(
+                                        format!("Tool '{}' approval cancelled.", name),
+                                    ));
+                                    continue;
+                                }
+                                Err(_) => {
+                                    // tokio::time::timeout elapsed.
+                                    state.add_message(ChatMessage::tool(
+                                        format!(
+                                            "Tool '{}' approval timed out after {}s.",
+                                            name,
+                                            timeout_dur.as_secs()
+                                        ),
+                                    ));
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
                     // Emit ToolStarted before execution.
                     event_bus.emit(Event::ToolStarted {
                         name: name.clone(),
@@ -206,7 +298,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use sigint_core::{Error, event::EventBus};
+    use sigint_core::{Error, ApprovalRegistry, event::EventBus};
     use sigint_llm::{
         provider::{ChunkStream, LlmProvider},
         types::{ChatResponse, FunctionCall, StreamChunk, ToolCall},
@@ -358,7 +450,7 @@ mod tests {
         let bus = EventBus::new();
         let tools: Vec<&dyn Tool> = vec![];
 
-        let result = run_tool_loop(&provider, &mut state, &tools, &no_tools(), 5, "mock", &bus)
+        let result = run_tool_loop(&provider, &mut state, &tools, &no_tools(), 5, "mock", &bus, None, "all")
             .await
             .unwrap();
 
@@ -391,6 +483,8 @@ mod tests {
             5,
             "mock",
             &bus,
+            None,
+            "all",
         )
         .await
         .unwrap();
@@ -425,6 +519,8 @@ mod tests {
             5,
             "mock",
             &bus,
+            None,
+            "all",
         )
         .await
         .unwrap();
@@ -461,6 +557,8 @@ mod tests {
             3, // low limit
             "mock",
             &bus,
+            None,
+            "all",
         )
         .await
         .unwrap();
@@ -483,7 +581,7 @@ mod tests {
         let bus = EventBus::new();
         let tools: Vec<&dyn Tool> = vec![];
 
-        let result = run_tool_loop(&provider, &mut state, &tools, &no_tools(), 5, "mock", &bus)
+        let result = run_tool_loop(&provider, &mut state, &tools, &no_tools(), 5, "mock", &bus, None, "all")
             .await
             .unwrap();
 
@@ -520,6 +618,8 @@ mod tests {
             5,
             "mock",
             &bus,
+            None,
+            "all",
         )
         .await
         .unwrap();
@@ -557,6 +657,8 @@ mod tests {
             5,
             "mock",
             &bus,
+            None,
+            "all",
         )
         .await
         .unwrap();
@@ -597,10 +699,211 @@ mod tests {
         let bus = EventBus::new();
         let tools: Vec<&dyn Tool> = vec![];
 
-        let err = run_tool_loop(&FailingProvider, &mut state, &tools, &no_tools(), 3, "mock", &bus)
+        let err = run_tool_loop(&FailingProvider, &mut state, &tools, &no_tools(), 3, "mock", &bus, None, "all")
             .await
             .unwrap_err();
 
         assert!(err.to_string().contains("connection refused"));
+    }
+
+    // ── Approval gate tests ───────────────────────────────────────────────────
+
+    /// A High-risk mock tool that always succeeds.
+    struct HighRiskTool;
+
+    #[async_trait]
+    impl Tool for HighRiskTool {
+        fn name(&self) -> &str { "dangerous_tool" }
+        fn description(&self) -> &str { "a risky tool" }
+        fn definition(&self) -> sigint_llm::ToolDefinition {
+            sigint_llm::ToolDefinition::function(
+                "dangerous_tool",
+                "a risky tool",
+                json!({ "type": "object", "properties": {} }),
+            )
+        }
+        fn risk_level(&self) -> ToolRisk { ToolRisk::High }
+        async fn execute(&self, _args: Value) -> sigint_tools::error::Result<ToolResult> {
+            Ok(ToolResult {
+                stdout: "executed".into(),
+                stderr: String::new(),
+                exit_code: 0,
+                duration: Duration::from_millis(10),
+                structured_data: None,
+            })
+        }
+    }
+
+    /// A Low-risk tool with auto_approve="low" should execute without any registry.
+    #[tokio::test]
+    async fn low_risk_auto_approved() {
+        let tool = MockTool::success("safe_tool", "output from safe tool");
+        let tool_def = tool.definition();
+        let tool_ref: &dyn Tool = &tool;
+
+        let provider = MockProvider::new(vec![
+            MockProvider::tool_response("safe_tool", json!({})),
+            MockProvider::text_response("Safe tool ran fine."),
+        ]);
+
+        let mut state = make_state();
+        let bus = EventBus::new();
+
+        // No registry: Low risk is within "low" threshold, gate is bypassed.
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &[tool_ref],
+            &[tool_def],
+            5,
+            "mock",
+            &bus,
+            None,
+            "low",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, "Safe tool ran fine.");
+        let msgs = state.to_chat_messages();
+        let tool_msg = msgs.iter().find(|m| m.role == "tool").expect("tool result missing");
+        assert!(
+            tool_msg.content.contains("output from safe tool"),
+            "unexpected tool output: {}",
+            tool_msg.content
+        );
+    }
+
+    /// A High-risk tool with auto_approve="low" is approved via registry.
+    /// A concurrent task watches for ToolApprovalRequested and responds true.
+    #[tokio::test]
+    async fn high_risk_tool_approved_via_registry() {
+        use std::sync::Arc;
+
+        let tool = HighRiskTool;
+        let tool_def = tool.definition();
+        let tool_ref: &dyn Tool = &tool;
+
+        let provider = MockProvider::new(vec![
+            MockProvider::tool_response("dangerous_tool", json!({})),
+            MockProvider::text_response("Dangerous tool completed."),
+        ]);
+
+        let mut state = make_state();
+        let bus = EventBus::new();
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(5)));
+        let registry_for_responder = Arc::clone(&registry);
+
+        // Spawn a task that watches for ToolApprovalRequested and approves it.
+        let mut rx = bus.subscribe();
+        let responder = tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(Event::ToolApprovalRequested { request_id, .. }) => {
+                        registry_for_responder
+                            .respond(request_id, true)
+                            .expect("respond failed");
+                        return;
+                    }
+                    Ok(_) => continue,
+                    Err(e) => panic!("event channel error: {e}"),
+                }
+            }
+        });
+
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &[tool_ref],
+            &[tool_def],
+            5,
+            "mock",
+            &bus,
+            Some(registry.as_ref()),
+            "low",
+        )
+        .await
+        .unwrap();
+
+        responder.await.expect("responder task panicked");
+
+        assert_eq!(result, "Dangerous tool completed.");
+        let msgs = state.to_chat_messages();
+        let tool_msg = msgs.iter().find(|m| m.role == "tool").expect("tool result missing");
+        assert!(
+            tool_msg.content.contains("executed"),
+            "unexpected tool output: {}",
+            tool_msg.content
+        );
+    }
+
+    /// A High-risk tool denied by the registry causes a "denied" message to be
+    /// fed back to the LLM; the tool itself does NOT execute.
+    #[tokio::test]
+    async fn high_risk_tool_denied_returns_error_to_llm() {
+        use std::sync::Arc;
+
+        let tool = HighRiskTool;
+        let tool_def = tool.definition();
+        let tool_ref: &dyn Tool = &tool;
+
+        let provider = MockProvider::new(vec![
+            MockProvider::tool_response("dangerous_tool", json!({})),
+            // After the denial message is fed back the LLM responds with text.
+            MockProvider::text_response("Understood, I will not execute that tool."),
+        ]);
+
+        let mut state = make_state();
+        let bus = EventBus::new();
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(5)));
+        let registry_for_responder = Arc::clone(&registry);
+
+        let mut rx = bus.subscribe();
+        let responder = tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(Event::ToolApprovalRequested { request_id, .. }) => {
+                        registry_for_responder
+                            .respond(request_id, false) // DENY
+                            .expect("respond failed");
+                        return;
+                    }
+                    Ok(_) => continue,
+                    Err(e) => panic!("event channel error: {e}"),
+                }
+            }
+        });
+
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &[tool_ref],
+            &[tool_def],
+            5,
+            "mock",
+            &bus,
+            Some(registry.as_ref()),
+            "low",
+        )
+        .await
+        .unwrap();
+
+        responder.await.expect("responder task panicked");
+
+        assert_eq!(result, "Understood, I will not execute that tool.");
+
+        // The tool message should say "denied", not contain tool execution output.
+        let msgs = state.to_chat_messages();
+        let tool_msg = msgs.iter().find(|m| m.role == "tool").expect("tool result missing");
+        assert!(
+            tool_msg.content.contains("denied"),
+            "expected 'denied' in tool message: {}",
+            tool_msg.content
+        );
+        assert!(
+            !tool_msg.content.contains("executed"),
+            "tool should not have executed: {}",
+            tool_msg.content
+        );
     }
 }
