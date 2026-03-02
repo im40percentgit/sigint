@@ -347,6 +347,31 @@ impl AssetChange {
     }
 }
 
+// ── ToolRisk ──────────────────────────────────────────────────────────────────
+
+/// Risk classification for a tool call, used by the approval gate to decide
+/// whether to auto-approve or prompt the user.
+///
+/// Variants are ordered from lowest to highest risk so comparison operators
+/// work as expected (Low < Medium < High).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolRisk {
+    Low,
+    Medium,
+    High,
+}
+
+impl std::fmt::Display for ToolRisk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolRisk::Low => write!(f, "low"),
+            ToolRisk::Medium => write!(f, "medium"),
+            ToolRisk::High => write!(f, "high"),
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -412,5 +437,36 @@ mod tests {
         let json = serde_json::to_string(&a).unwrap();
         assert!(json.contains("\"host\""));
         assert!(json.contains("192.168.1.1"));
+    }
+
+    #[test]
+    fn tool_risk_serializes() {
+        // Serialize High -> "high"
+        let high_json = serde_json::to_string(&ToolRisk::High).unwrap();
+        assert_eq!(high_json, "\"high\"");
+
+        // Deserialize "medium" -> Medium
+        let medium: ToolRisk = serde_json::from_str("\"medium\"").unwrap();
+        assert_eq!(medium, ToolRisk::Medium);
+
+        // Display trait
+        assert_eq!(ToolRisk::Low.to_string(), "low");
+        assert_eq!(ToolRisk::Medium.to_string(), "medium");
+        assert_eq!(ToolRisk::High.to_string(), "high");
+    }
+
+    #[test]
+    fn tool_risk_ordering() {
+        assert!(ToolRisk::Low < ToolRisk::Medium);
+        assert!(ToolRisk::Medium < ToolRisk::High);
+        assert!(ToolRisk::Low < ToolRisk::High);
+
+        // Ensure equality works
+        assert_eq!(ToolRisk::Medium, ToolRisk::Medium);
+
+        // Verify min/max via comparison
+        let risks = [ToolRisk::High, ToolRisk::Low, ToolRisk::Medium];
+        assert_eq!(risks.iter().min(), Some(&ToolRisk::Low));
+        assert_eq!(risks.iter().max(), Some(&ToolRisk::High));
     }
 }

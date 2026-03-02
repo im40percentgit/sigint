@@ -55,6 +55,19 @@ pub enum Event {
     ReconStarted { session_id: Uuid, target: String },
     /// Reconnaissance completed; reports how many assets were found.
     ReconCompleted { session_id: Uuid, assets_found: usize },
+    // ── Approval Gate events ─────────────────────────────────────────────────
+    /// A tool call is awaiting human approval before execution.
+    ToolApprovalRequested {
+        request_id: Uuid,
+        session_id: Uuid,
+        tool_name: String,
+        args: serde_json::Value,
+        risk_level: crate::types::ToolRisk,
+    },
+    /// A pending tool call was approved by the operator.
+    ToolApprovalGranted { request_id: Uuid },
+    /// A pending tool call was denied by the operator.
+    ToolApprovalDenied { request_id: Uuid, reason: Option<String> },
 }
 
 /// Handle to the broadcast event bus.
@@ -133,5 +146,41 @@ mod tests {
         let bus = EventBus::new();
         // No subscribers — emit should silently discard
         bus.emit(Event::Shutdown);
+    }
+
+    #[test]
+    fn approval_events_serialize() {
+        use crate::types::ToolRisk;
+
+        let req_id = Uuid::new_v4();
+        let sess_id = Uuid::new_v4();
+
+        // ToolApprovalRequested
+        let ev = Event::ToolApprovalRequested {
+            request_id: req_id,
+            session_id: sess_id,
+            tool_name: "nmap_scan".into(),
+            args: serde_json::json!({"target": "192.168.1.0/24"}),
+            risk_level: ToolRisk::High,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("ToolApprovalRequested"));
+        assert!(json.contains("nmap_scan"));
+        assert!(json.contains("high"));
+
+        // ToolApprovalGranted
+        let granted = Event::ToolApprovalGranted { request_id: req_id };
+        let json = serde_json::to_string(&granted).unwrap();
+        assert!(json.contains("ToolApprovalGranted"));
+        assert!(json.contains(&req_id.to_string()));
+
+        // ToolApprovalDenied
+        let denied = Event::ToolApprovalDenied {
+            request_id: req_id,
+            reason: Some("too risky".into()),
+        };
+        let json = serde_json::to_string(&denied).unwrap();
+        assert!(json.contains("ToolApprovalDenied"));
+        assert!(json.contains("too risky"));
     }
 }

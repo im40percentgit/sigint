@@ -23,6 +23,10 @@ pub struct Config {
     /// Logging settings.
     #[serde(default)]
     pub log: LogConfig,
+
+    /// Agent behavior settings (approval gate, auto-approve thresholds).
+    #[serde(default)]
+    pub agent: AgentConfig,
 }
 
 /// LLM provider configuration.
@@ -71,6 +75,26 @@ pub struct LogConfig {
     pub level: String,
 }
 
+/// Agent behavior configuration — controls the approval gate.
+///
+/// `auto_approve` determines which risk levels are executed without prompting:
+/// - `"none"` — every tool call requires explicit approval
+/// - `"low"` — low-risk calls are auto-approved (default)
+/// - `"medium"` — low and medium risk calls are auto-approved
+/// - `"all"` — all tool calls execute without approval (use with caution)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// Maximum risk level that is auto-approved without operator interaction.
+    /// Accepted values: "none", "low", "medium", "all".
+    #[serde(default = "default_auto_approve")]
+    pub auto_approve: String,
+
+    /// Seconds to wait for an operator response before the approval request
+    /// is considered timed out (and the tool call is denied).
+    #[serde(default = "default_approval_timeout")]
+    pub approval_timeout: u64,
+}
+
 // ── Default implementations ──────────────────────────────────────────────────
 
 impl Default for LlmConfig {
@@ -102,12 +126,23 @@ impl Default for LogConfig {
     }
 }
 
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            auto_approve: default_auto_approve(),
+            approval_timeout: default_approval_timeout(),
+        }
+    }
+}
+
 fn default_provider() -> String { "ollama".into() }
 fn default_model() -> String { "llama3.2".into() }
 fn default_base_url() -> String { "http://localhost:11434".into() }
 fn default_temperature() -> f32 { 0.7 }
 fn default_db_path() -> String { "~/.local/share/sigint/sigint.db".into() }
 fn default_log_level() -> String { "sigint=info,warn".into() }
+fn default_auto_approve() -> String { "low".into() }
+fn default_approval_timeout() -> u64 { 300 }
 
 // ── Loading ──────────────────────────────────────────────────────────────────
 
@@ -257,5 +292,24 @@ model = "gpt-4o"
         let path = cfg.resolved_db_path();
         // Should not contain literal ~
         assert!(!path.to_string_lossy().contains('~'));
+    }
+
+    #[test]
+    fn agent_config_defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.agent.auto_approve, "low");
+        assert_eq!(cfg.agent.approval_timeout, 300);
+    }
+
+    #[test]
+    fn agent_config_from_toml() {
+        let toml_str = r#"
+[agent]
+auto_approve = "medium"
+approval_timeout = 60
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.agent.auto_approve, "medium");
+        assert_eq!(cfg.agent.approval_timeout, 60);
     }
 }
