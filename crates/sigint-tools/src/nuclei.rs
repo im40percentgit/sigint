@@ -7,9 +7,15 @@
 //! covering CVEs, misconfigurations, exposed panels, and more. Scans can be
 //! broad (all templates) or targeted (specific template path or severity filter).
 //! SandboxProfile::WebScanner provides a 600s timeout for broad template runs.
-//! The `-silent -nc` flags suppress banners and ANSI colour codes, keeping
-//! stdout clean for LLM consumption. Severity filtering lets the agent focus
-//! on actionable findings and avoid low-noise informational output.
+//! The `-silent -nc -jsonl` flags suppress banners and ANSI colour codes and
+//! emit one JSON object per finding line, keeping stdout machine-readable for
+//! LLM consumption. `parse_nuclei_jsonl()` parses each JSONL line into a
+//! structured summary (findings list, total count, by_severity counts) which
+//! is stored in `structured_data`. Raw JSONL is preserved in `stdout` for
+//! direct LLM reading. Severity filtering lets the agent focus on actionable
+//! findings and avoid low-noise informational output.
+
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -106,9 +112,10 @@ impl Tool for NucleiTool {
         let mut cmd = SandboxProfile::web_scanner().apply("nuclei");
         cmd = cmd.arg("-u").arg(&target);
 
-        // Suppress banner and ANSI colour codes for clean LLM output.
+        // Suppress banner and ANSI colour codes; emit one JSON object per finding.
         cmd = cmd.arg("-silent");
         cmd = cmd.arg("-nc");
+        cmd = cmd.arg("-jsonl");
 
         // Apply optional template filter.
         if let Some(ref t) = templates {
@@ -133,14 +140,100 @@ impl Tool for NucleiTool {
                 }
             })?;
 
+        let structured_data = parse_nuclei_jsonl(&output.stdout);
+
         Ok(ToolResult {
             stdout: output.stdout,
             stderr: output.stderr,
             exit_code: output.exit_code,
             duration: output.duration,
-            structured_data: None,
+            structured_data,
         })
     }
+}
+
+/// Parse nuclei JSONL output into a structured summary.
+///
+/// Each line of nuclei `-jsonl` output is a self-contained JSON object. This
+/// function collects valid lines into a findings list and builds summary
+/// aggregations (total count, per-severity counts). Malformed lines are
+/// silently skipped. Returns `None` if there are no valid findings at all.
+///
+/// Output shape:
+/// ```json
+/// {
+///   "findings": [
+///     {"template_id": "...", "name": "...", "severity": "...", "matched_at": "...", "type": "..."}
+///   ],
+///   "total": 1,
+///   "by_severity": {"critical": 1}
+/// }
+/// ```
+fn parse_nuclei_jsonl(output: &str) -> Option<Value> {
+    let mut findings: Vec<Value> = Vec::new();
+    let mut by_severity: HashMap<String, u64> = HashMap::new();
+
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Parse the line as JSON; skip on any error.
+        let obj: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Extract required fields; skip the line if any are missing.
+        let template_id = match obj["template-id"].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let name = match obj["info"]["name"].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let severity = match obj["info"]["severity"].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let matched_at = match obj["matched-at"].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let finding_type = match obj["type"].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        // Accumulate severity counts.
+        *by_severity.entry(severity.clone()).or_insert(0) += 1;
+
+        findings.push(json!({
+            "template_id": template_id,
+            "name": name,
+            "severity": severity,
+            "matched_at": matched_at,
+            "type": finding_type,
+        }));
+    }
+
+    if findings.is_empty() {
+        return None;
+    }
+
+    let total = findings.len() as u64;
+    let by_severity_json: Value = by_severity
+        .into_iter()
+        .map(|(k, v)| (k, json!(v)))
+        .collect();
+
+    Some(json!({
+        "findings": findings,
+        "total": total,
+        "by_severity": by_severity_json,
+    }))
 }
 
 #[cfg(test)]
@@ -211,6 +304,50 @@ mod tests {
             // Just verify the constant matches the schema — execution tests are #[ignore]
             assert!(VALID_SEVERITIES.contains(sev), "severity '{}' should be valid", sev);
         }
+    }
+
+    #[test]
+    fn parse_nuclei_jsonl_multiple_findings() {
+        let input = r#"{"template-id":"cve-2021-44228","info":{"name":"Log4Shell","severity":"critical"},"matched-at":"http://example.com/api","type":"http"}
+{"template-id":"cve-2022-1234","info":{"name":"SomeHigh","severity":"high"},"matched-at":"http://example.com/login","type":"http"}
+{"template-id":"cve-2023-9999","info":{"name":"SomeMedium","severity":"medium"},"matched-at":"http://example.com/config","type":"http"}"#;
+
+        let result = parse_nuclei_jsonl(input).expect("should parse findings");
+
+        let findings = result["findings"].as_array().expect("findings should be array");
+        assert_eq!(findings.len(), 3, "should have 3 findings");
+        assert_eq!(result["total"], 3, "total should be 3");
+
+        // Check severity counts
+        assert_eq!(result["by_severity"]["critical"], 1);
+        assert_eq!(result["by_severity"]["high"], 1);
+        assert_eq!(result["by_severity"]["medium"], 1);
+
+        // Check first finding field values
+        let first = &findings[0];
+        assert_eq!(first["template_id"], "cve-2021-44228");
+        assert_eq!(first["name"], "Log4Shell");
+        assert_eq!(first["severity"], "critical");
+        assert_eq!(first["matched_at"], "http://example.com/api");
+        assert_eq!(first["type"], "http");
+    }
+
+    #[test]
+    fn parse_nuclei_jsonl_empty_output() {
+        assert!(parse_nuclei_jsonl("").is_none(), "empty string should return None");
+    }
+
+    #[test]
+    fn parse_nuclei_jsonl_malformed_lines_skipped() {
+        let input = r#"{"template-id":"cve-2021-44228","info":{"name":"Log4Shell","severity":"critical"},"matched-at":"http://example.com/api","type":"http"}
+this is not json at all
+{"broken": true
+{"template-id":"cve-2022-5678","info":{"name":"Another","severity":"high"},"matched-at":"http://example.com/other","type":"dns"}"#;
+
+        let result = parse_nuclei_jsonl(input).expect("should parse valid findings, skip invalid");
+        let findings = result["findings"].as_array().expect("findings should be array");
+        assert_eq!(findings.len(), 2, "should have 2 valid findings, skipping malformed lines");
+        assert_eq!(result["total"], 2);
     }
 
     /// Requires nuclei + passt + newuidmap. Run with: cargo test -p sigint-tools -- --ignored
