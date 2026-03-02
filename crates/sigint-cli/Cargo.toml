@@ -25,3 +25,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 futures-util = { workspace = true }
 chrono = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
