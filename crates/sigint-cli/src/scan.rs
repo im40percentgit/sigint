@@ -35,7 +35,7 @@ use sigint_core::{event::Event, AppCore, Error};
 use sigint_llm::OllamaProvider;
 use sigint_memory::MemoryService;
 use sigint_store::{Database, EmbeddingService, ScanRecord, embedding_worker};
-use sigint_tools::{nmap::NmapTool, shell::ShellTool};
+use sigint_tools;
 use tracing::warn;
 
 /// Default model context window in tokens.
@@ -90,7 +90,7 @@ pub async fn run(
     };
 
     if use_tui {
-        match sigint_tui::TuiApp::new(core.events.subscribe()) {
+        match sigint_tui::TuiApp::new(core.events.subscribe(), core.events.sender()) {
             Ok(tui) => {
                 tokio::spawn(async move {
                     if let Err(e) = tui.run().await {
@@ -137,8 +137,9 @@ pub async fn run(
 
     // ── Tool registry ─────────────────────────────────────────────────────────
     let mut registry = ToolRegistry::new();
-    registry.register(Box::new(NmapTool));
-    registry.register(Box::new(ShellTool));
+    for tool in sigint_tools::all_executor_tools() {
+        registry.register(tool);
+    }
 
     // ── LLM provider ──────────────────────────────────────────────────────────
     let provider = Arc::new(OllamaProvider::from_config(&core.config.llm));

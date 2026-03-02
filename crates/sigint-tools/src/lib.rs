@@ -37,3 +37,44 @@ pub use nuclei::NucleiTool;
 pub use result::ToolResult;
 pub use shell::ShellTool;
 pub use tool::Tool;
+
+/// Return all executor tools for registration with ToolRegistry.
+///
+/// This is the single source of truth for the tool catalog — both CLI and
+/// web scan handlers use this to populate their registries.
+///
+/// @decision DEC-TOOL-004
+/// @title all_executor_tools() is the canonical tool catalog
+/// @status accepted
+/// @rationale Previously, each call site (CLI, web) registered tools individually,
+/// risking drift (CLI gets a new tool, web doesn't). Centralising registration here
+/// ensures both consumers always have the same tool set without any sigint-tools →
+/// sigint-agents circular dependency.
+pub fn all_executor_tools() -> Vec<Box<dyn Tool>> {
+    vec![
+        Box::new(NmapTool),
+        Box::new(ShellTool),
+        Box::new(GobusterTool),
+        Box::new(NiktoTool),
+        Box::new(NucleiTool),
+        Box::new(FeroxbusterTool),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_executor_tools_returns_six_tools() {
+        let tools = all_executor_tools();
+        assert_eq!(tools.len(), 6);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"nmap_scan"));
+        assert!(names.contains(&"shell"));
+        assert!(names.contains(&"gobuster_scan"));
+        assert!(names.contains(&"nikto_scan"));
+        assert!(names.contains(&"nuclei_scan"));
+        assert!(names.contains(&"feroxbuster_scan"));
+    }
+}

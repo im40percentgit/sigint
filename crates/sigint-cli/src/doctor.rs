@@ -389,6 +389,7 @@ mod tests {
                 db_path: "~/.local/share/sigint/sigint.db".into(),
             },
             log: sigint_core::config::LogConfig::default(),
+            agent: sigint_core::config::AgentConfig::default(),
         }
     }
 
