@@ -65,6 +65,17 @@ export function apiGetFindings(sessionId) {
   return request('GET', `/api/sessions/${sessionId}/findings`);
 }
 
+// ── Scans ─────────────────────────────────────────────────
+
+/**
+ * Start a new scan session against the given target.
+ * Returns { session_id: string }.
+ * @param {string} target  Hostname or IP to scan
+ */
+export function apiStartScan(target) {
+  return request('POST', '/api/scan', { target });
+}
+
 // ── Reports ───────────────────────────────────────────────
 
 /**

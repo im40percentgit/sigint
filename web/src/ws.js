@@ -78,11 +78,17 @@ export function createWsConnection() {
 
   function status() { return currentStatus; }
 
+  function send(data) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(data));
+    }
+  }
+
   function close() {
     closed = true;
     if (ws) ws.close();
   }
 
   connect();
-  return { subscribe, status, close };
+  return { subscribe, status, send, close };
 }

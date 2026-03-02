@@ -8,6 +8,15 @@
 // matching the current session id. This avoids per-session WebSocket connections
 // and keeps reconnect logic centralised in ws.js. The event log is capped at 200
 // entries to prevent unbounded memory growth during long scans.
+//
+// @decision DEC-WEB-011
+// @title Approval modal uses externally-tagged Rust enum key detection
+// @status accepted
+// @rationale Rust serde's default enum serialization is externally tagged:
+// {"ToolApprovalRequested": {...}}. Checking for the presence of this key is
+// idiomatic and avoids introducing a serde attribute change on the backend.
+// The modal blocks until the operator responds; ws.send() delivers the decision
+// back over the bidirectional WebSocket added in DEC-WEB-012.
 
 import { h } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
@@ -24,6 +33,7 @@ export function ScanView({ sessionId, ws }) {
   const [findings, setFindings] = useState([]);
   const [events, setEvents] = useState([]);
   const [error, setError] = useState(null);
+  const [pendingApproval, setPendingApproval] = useState(null);
   const logRef = useRef(null);
 
   // Load session metadata and initial data
@@ -44,6 +54,27 @@ export function ScanView({ sessionId, ws }) {
     const unsub = ws.subscribe(msg => {
       if (msg.type !== 'event') return;
       const ev = msg.data;
+
+      // Handle approval gate events (externally-tagged Rust enum variants)
+      if (ev.ToolApprovalRequested) {
+        const req = ev.ToolApprovalRequested;
+        // Only show approvals for this session
+        if (req.session_id === sessionId) {
+          setPendingApproval({
+            request_id: req.request_id,
+            tool_name: req.tool_name,
+            args: req.args,
+            risk_level: req.risk_level,
+          });
+        }
+        return;
+      }
+      if (ev.ToolApprovalGranted || ev.ToolApprovalDenied) {
+        // Clear the modal when backend confirms the decision
+        setPendingApproval(null);
+        return;
+      }
+
       // Accept events for this session or broadcast events (no session_id)
       if (ev.session_id && ev.session_id !== sessionId) return;
       setEvents(prev => {
@@ -67,6 +98,18 @@ export function ScanView({ sessionId, ws }) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
   }, [events]);
+
+  function handleApprove() {
+    if (!pendingApproval || !ws) return;
+    ws.send({ type: 'approve', request_id: pendingApproval.request_id });
+    setPendingApproval(null);
+  }
+
+  function handleDeny() {
+    if (!pendingApproval || !ws) return;
+    ws.send({ type: 'deny', request_id: pendingApproval.request_id, reason: 'Denied by web operator' });
+    setPendingApproval(null);
+  }
 
   if (error) return html`<div class="error-banner">${error}</div>`;
   if (!session) return html`<div class="loading">Loading session…</div>`;
@@ -163,6 +206,31 @@ export function ScanView({ sessionId, ws }) {
             </table>
           `}
       </div>
+
+      <!-- Approval modal overlay -->
+      ${pendingApproval && html`
+        <div class="approval-modal-overlay">
+          <div class="approval-modal">
+            <h3>Tool Approval Required</h3>
+            <div style="margin-bottom:0.75rem;">
+              <span class="text-dim">Tool: </span>
+              <strong>${pendingApproval.tool_name}</strong>
+            </div>
+            <div style="margin-bottom:0.75rem;">
+              <span class="text-dim">Risk: </span>
+              <${RiskBadge} risk=${pendingApproval.risk_level} />
+            </div>
+            <div style="margin-bottom:0.75rem;">
+              <span class="text-dim">Args:</span>
+              <pre class="approval-args">${JSON.stringify(pendingApproval.args, null, 2)}</pre>
+            </div>
+            <div class="approval-actions">
+              <button class="btn btn-approve" onClick=${handleApprove}>Approve</button>
+              <button class="btn btn-deny" onClick=${handleDeny}>Deny</button>
+            </div>
+          </div>
+        </div>
+      `}
     </div>
   `;
 }
@@ -175,6 +243,14 @@ function SeverityBadge({ sev }) {
     : s === 'low' ? 'badge-low'
     : 'badge-info';
   return html`<span class=${'badge ' + cls}>${sev || 'info'}</span>`;
+}
+
+function RiskBadge({ risk }) {
+  const r = (risk || '').toLowerCase();
+  const color = r === 'high' ? '#ef4444'
+    : r === 'medium' ? '#eab308'
+    : '#22c55e';
+  return html`<span class="badge" style=${'background:' + color + '22;color:' + color + ';border:1px solid ' + color + '55;'}>${risk || 'unknown'}</span>`;
 }
 
 function shortTime(iso) {

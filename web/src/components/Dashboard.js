@@ -7,23 +7,48 @@
 // would be O(n) API calls. The dashboard shows aggregate counts from the session
 // list alone. Drill-down data is fetched in ScanView when the user navigates to
 // a specific session. This keeps the dashboard fast regardless of session count.
+//
+// @decision DEC-WEB-010
+// @title Dashboard "Start Scan" form navigates to ScanView on success
+// @status accepted
+// @rationale POST /api/scan returns {session_id}. Immediately navigating to
+// #/sessions/{session_id} gives the operator a live event stream for the new
+// scan with zero extra clicks. Errors are surfaced inline below the form.
 
 import { h } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import htm from 'htm';
-import { apiListSessions } from '../api.js';
+import { apiListSessions, apiStartScan } from '../api.js';
 
 const html = htm.bind(h);
 
 export function Dashboard() {
   const [sessions, setSessions] = useState(null);
   const [error, setError] = useState(null);
+  const [scanTarget, setScanTarget] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState(null);
 
   useEffect(() => {
     apiListSessions()
       .then(setSessions)
       .catch(e => setError(e.message));
   }, []);
+
+  function handleStartScan(e) {
+    e.preventDefault();
+    if (!scanTarget.trim() || scanning) return;
+    setScanning(true);
+    setScanError(null);
+    apiStartScan(scanTarget.trim())
+      .then(result => {
+        window.location.hash = '#/sessions/' + result.session_id;
+      })
+      .catch(err => {
+        setScanError(err.message);
+        setScanning(false);
+      });
+  }
 
   if (error) return html`<div class="error-banner">${error}</div>`;
   if (!sessions) return html`<div class="loading">Loading...</div>`;
@@ -41,7 +66,25 @@ export function Dashboard() {
           <div class="page-title">Dashboard</div>
           <div class="page-subtitle">SIGINT pentest intelligence platform</div>
         </div>
+        <form onSubmit=${handleStartScan} style="display:flex;gap:0.5rem;align-items:center;">
+          <input
+            class="input"
+            type="text"
+            placeholder="example.com"
+            value=${scanTarget}
+            onInput=${e => setScanTarget(e.target.value)}
+            style="width:220px;"
+          />
+          <button
+            class="btn btn-primary"
+            type="submit"
+            disabled=${scanning || !scanTarget.trim()}
+          >
+            ${scanning ? 'Starting…' : 'Start Scan'}
+          </button>
+        </form>
       </div>
+      ${scanError && html`<div class="error-banner" style="margin-bottom:1rem;">${scanError}</div>`}
 
       <div class="grid-4" style="margin-bottom: 1.5rem;">
         <div class="card">
