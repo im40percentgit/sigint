@@ -35,6 +35,7 @@ pub mod orchestrator;
 pub mod registry;
 pub mod report;
 pub mod role;
+pub mod scan_service;
 pub mod state;
 
 // Flat re-exports for ergonomic use by downstream crates.
@@ -46,4 +47,5 @@ pub use orchestrator::Orchestrator;
 pub use registry::ToolRegistry;
 pub use report::ScanReport;
 pub use role::AgentRole;
+pub use scan_service::ScanService;
 pub use state::ConversationState;

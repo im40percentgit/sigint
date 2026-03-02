@@ -8,7 +8,9 @@ sigint-core = { workspace = true }
 sigint-llm = { workspace = true }
 sigint-tools = { workspace = true }
 sigint-memory = { workspace = true }
+sigint-store = { workspace = true }
 tokio = { workspace = true }
+chrono = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
