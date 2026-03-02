@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 5-role agent system with Orchestrator dispatch.
 
-**Current Phase:** Phase 5 completed — all phases done
+**Current Phase:** Phase 6 completed — parsers, approval gates, web scan orchestrator
 
 ### Architecture
 
@@ -42,6 +42,7 @@ sigint/
 - Phase 3 completed (commits 8bcf354–0fee08c) — TUI, memory, embeddings, session CLI, integration wiring
 - Phase 4 completed (commits 65588ba–a1b59d2) — ASM store, discovery, tools, TUI+CLI
 - Phase 5 completed (commits 654eaa2–ec9ccf0) — Doctor, OpenAI provider, reports, REST API, SPA frontend
+- Phase 6 completed (commits b17839e–333a002) — nmap/nuclei parsers, approval gates, bidirectional WebSocket, web scan orchestrator with ScanService
 
 ---
 
@@ -547,6 +548,19 @@ Depends on: P2-5
 - [x] Sub-Phase 5C: Report generation (Markdown, HTML) with 3 templates + CLI command
 - [x] Sub-Phase 5D: Axum REST API (8 routes) + WebSocket event bridge + `sigint serve`
 - [x] Sub-Phase 5E: Embedded SPA frontend (Preact + HTM + rust-embed)
+
+### Phase 6: Parsers, Approval Gates, Web Scan
+**Status:** completed
+**Sub-phases:** 6A (Parsers) → 6B (Approval) → 6C (Web Layer) → 6D (TUI + Frontend) → Web Scan Orchestrator
+**Design:** `docs/plans/2026-03-01-phase6-hybrid-design.md`
+**Plan:** `docs/plans/2026-03-01-phase6-implementation.md`
+**Decisions:** DEC-TOOL-004, DEC-TOOL-007, DEC-AGENT-012, DEC-WEB-004
+
+- [x] Sub-Phase 6A: nmap XML parser (quick-xml), nuclei JSONL parser → structured_data
+- [x] Sub-Phase 6B: ToolRisk enum, ApprovalRegistry (oneshot channels), approval gate in loop engine
+- [x] Sub-Phase 6C: Expanded AppState, bidirectional WebSocket (select!), POST /api/scan
+- [x] Sub-Phase 6D: TUI approval prompt (y/n keys), Dashboard scan button, ScanView approval modal
+- [x] Web Scan Orchestrator: ScanService with start/status/cancel/list, wired into web endpoints
 
 ## Architectural Decisions
 
