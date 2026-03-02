@@ -17,6 +17,7 @@
 //! | GET | `/api/sessions/{id}/assets` | [`routes::session_assets`] |
 //! | GET | `/api/sessions/{id}/findings` | [`routes::session_findings`] |
 //! | GET | `/api/report/{id}` | [`routes::get_report`] |
+//! | POST | `/api/scan` | [`routes::start_scan`] |
 //! | GET | `/ws/events` | [`ws::ws_events`] |
 //!
 //! @decision DEC-WEB-001
@@ -36,11 +37,11 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    routing::get,
+    routing::{get, post},
 };
 use tower_http::cors::CorsLayer;
 
-use sigint_core::event::EventBus;
+use sigint_core::{ApprovalRegistry, Config, event::EventBus};
 use sigint_store::Database;
 
 pub use state::AppState;
@@ -64,6 +65,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sessions/{id}/findings", get(routes::session_findings))
         // Report generation
         .route("/api/report/{id}", get(routes::get_report))
+        // Scan initiation
+        .route("/api/scan", post(routes::start_scan))
         // WebSocket event bridge
         .route("/ws/events", get(ws::ws_events))
         // Permissive CORS for local development
@@ -80,11 +83,15 @@ pub fn create_router(state: AppState) -> Router {
 pub async fn serve(
     db: Database,
     event_bus: EventBus,
+    config: Arc<Config>,
+    approval_registry: Arc<ApprovalRegistry>,
     addr: std::net::SocketAddr,
 ) -> Result<(), sigint_core::Error> {
     let state = AppState {
         db: Arc::new(db),
         event_bus,
+        config,
+        approval_registry,
     };
     let app = create_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {

@@ -25,6 +25,62 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
+// ── Scan ──────────────────────────────────────────────────────────────────────
+
+/// Request body for `POST /api/scan`.
+#[derive(Deserialize)]
+pub struct ScanRequest {
+    /// Target to scan (hostname, IP, CIDR range, URL, etc.).
+    pub target: String,
+    /// Override the configured LLM model for this scan (optional).
+    pub model: Option<String>,
+}
+
+/// `POST /api/scan` — start a new penetration scan.
+///
+/// Validates the target, creates a session record, emits a `Status` event so
+/// WebSocket clients see the scan start immediately, and returns `201 Created`
+/// with `{"session_id": "<uuid>"}`.
+///
+/// The actual orchestrator spawn is intentionally deferred: wiring in
+/// sigint-agents / sigint-llm would add significant dependency weight and
+/// is handled in a later phase. The endpoint contract (201 + session_id) is
+/// stable regardless.
+///
+/// @decision DEC-WEB-004
+/// @title POST /api/scan creates a session but does not spawn the orchestrator yet
+/// @status accepted
+/// @rationale Decouples the web contract from the agent wiring. The session
+/// record exists immediately so the frontend can poll or subscribe via WS,
+/// and the orchestrator spawn can be added later without changing the API.
+pub async fn start_scan(
+    State(state): State<AppState>,
+    Json(body): Json<ScanRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if body.target.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "target is required".into()));
+    }
+
+    let session = sigint_core::types::Session::new(
+        &format!("web-scan-{}", body.target.replace(['.', '/'], "-"))
+    ).with_target(&body.target);
+
+    state.db.create_session(&session).map_err(internal)?;
+
+    let session_id = session.id;
+    let target = body.target.clone();
+
+    // Notify WebSocket subscribers that the scan has started.
+    state.event_bus.emit(sigint_core::event::Event::Status(
+        format!("Scan started for target: {}", target)
+    ));
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "session_id": session_id })),
+    ))
+}
+
 // ── Error helper ─────────────────────────────────────────────────────────────
 
 /// Convenience alias for handler return types.
@@ -213,15 +269,18 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use sigint_core::event::EventBus;
+    use sigint_core::{ApprovalRegistry, Config, event::EventBus};
     use sigint_store::Database;
+    use std::time::Duration;
 
     use crate::create_router;
 
     fn test_state() -> AppState {
         let db = Database::open_in_memory().expect("in-memory db");
         let event_bus = EventBus::new();
-        AppState { db: Arc::new(db), event_bus }
+        let config = Arc::new(Config::default());
+        let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(300)));
+        AppState { db: Arc::new(db), event_bus, config, approval_registry }
     }
 
     async fn body_string(body: Body) -> String {
@@ -373,5 +432,38 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── Scan ──────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn start_scan_returns_201_with_session_id() {
+        let state = test_state();
+        let app = create_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"target":"example.com"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["session_id"].is_string(), "expected session_id string, got: {}", body);
+    }
+
+    #[tokio::test]
+    async fn start_scan_missing_target_returns_400() {
+        let state = test_state();
+        let app = create_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"target":""}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

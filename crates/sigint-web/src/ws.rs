@@ -1,24 +1,28 @@
-//! WebSocket event bridge — streams domain events to browser clients.
+//! WebSocket event bridge — bidirectional channel between browser clients and
+//! the SIGINT agent loop.
 //!
 //! Clients connect to `GET /ws/events` and receive a continuous stream of
-//! JSON-serialized `sigint_core::event::Event` variants. The connection is
-//! maintained until either side closes it.
+//! JSON-serialized `sigint_core::event::Event` variants. Clients may also
+//! send `{"type":"approve","request_id":"<uuid>"}` or
+//! `{"type":"deny","request_id":"<uuid>"}` frames to respond to pending
+//! tool-approval requests in the agent loop.
 //!
 //! @decision DEC-WEB-002
-//! @title WebSocket bridge uses tokio::broadcast Receiver per connection
+//! @title Bidirectional WebSocket using tokio::select! over broadcast::Receiver and StreamExt
 //! @status accepted
-//! @rationale Each WebSocket client gets its own `broadcast::Receiver` via
-//! `EventBus::subscribe()`. This means events are delivered independently to
-//! every connected client without blocking each other. Lagged receivers (slow
-//! clients) receive a `RecvError::Lagged` which we treat as a non-fatal skip.
-//! The connection is dropped only on `RecvError::Closed` or a send error.
+//! @rationale The original send-only loop is replaced with a select! that
+//! simultaneously waits on the event bus (server→client) and the WebSocket
+//! receiver (client→server). This lets the browser both observe events and
+//! drive the approval gate without a separate HTTP endpoint. SinkExt/StreamExt
+//! from futures-util are used to split the WebSocket into independent halves so
+//! the select! arms can borrow them mutably without conflict.
 
 use axum::{
     extract::{State, WebSocketUpgrade},
     response::IntoResponse,
 };
 use axum::extract::ws::{Message, WebSocket};
-use tokio::sync::broadcast::error::RecvError;
+use futures_util::{SinkExt, StreamExt};
 
 use crate::state::AppState;
 
@@ -30,33 +34,84 @@ pub async fn ws_events(
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-/// Per-connection event loop: subscribes to the event bus and forwards events.
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
+/// Per-connection bidirectional event loop.
+///
+/// Simultaneously:
+/// - Forwards `EventBus` events to the client as JSON text frames.
+/// - Reads incoming frames from the client and dispatches approval/deny commands.
+async fn handle_socket(socket: WebSocket, state: AppState) {
+    let (mut sender, mut receiver) = socket.split();
     let mut rx = state.event_bus.subscribe();
 
     loop {
-        match rx.recv().await {
-            Ok(event) => {
-                let json = match serde_json::to_string(&event) {
-                    Ok(j) => j,
-                    Err(e) => {
-                        tracing::warn!("ws: failed to serialize event: {}", e);
-                        continue;
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        let json = match serde_json::to_string(&event) {
+                            Ok(j) => j,
+                            Err(e) => {
+                                tracing::warn!("ws: serialize error: {}", e);
+                                continue;
+                            }
+                        };
+                        if sender.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
                     }
-                };
-                if socket.send(Message::Text(json.into())).await.is_err() {
-                    // Client disconnected — exit cleanly.
-                    break;
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("ws: client lagged, skipped {} events", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            Err(RecvError::Lagged(n)) => {
-                // Slow client skipped messages — log and continue.
-                tracing::warn!("ws: client lagged, skipped {} events", n);
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        handle_client_message(&text, &state).await;
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {} // ignore binary, ping, pong
+                }
             }
-            Err(RecvError::Closed) => {
-                // Sender dropped (server shutting down) — close the socket.
-                break;
+        }
+    }
+}
+
+/// Dispatch an inbound WebSocket text frame.
+///
+/// Recognized commands:
+/// - `{"type":"approve","request_id":"<uuid>"}` — approve a pending tool call.
+/// - `{"type":"deny","request_id":"<uuid>"}` — deny a pending tool call.
+///
+/// Unknown command types are logged at DEBUG and silently ignored so future
+/// client versions can add commands without breaking old servers.
+async fn handle_client_message(text: &str, state: &AppState) {
+    let msg: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("ws: invalid JSON from client: {}", e);
+            return;
+        }
+    };
+
+    match msg.get("type").and_then(|t| t.as_str()) {
+        Some("approve") => {
+            if let Some(id) = msg.get("request_id").and_then(|v| v.as_str()) {
+                if let Ok(uuid) = uuid::Uuid::parse_str(id) {
+                    let _ = state.approval_registry.respond(uuid, true);
+                }
             }
+        }
+        Some("deny") => {
+            if let Some(id) = msg.get("request_id").and_then(|v| v.as_str()) {
+                if let Ok(uuid) = uuid::Uuid::parse_str(id) {
+                    let _ = state.approval_registry.respond(uuid, false);
+                }
+            }
+        }
+        other => {
+            tracing::debug!("ws: unknown command type: {:?}", other);
         }
     }
 }

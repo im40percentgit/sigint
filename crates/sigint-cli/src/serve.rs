@@ -3,7 +3,9 @@
 //! Opens the configured SQLite database and binds an HTTP listener on the
 //! specified address. The server runs until the process is interrupted.
 
-use sigint_core::AppCore;
+use sigint_core::{AppCore, ApprovalRegistry};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Run the web server using the AppCore's configured database path.
 pub async fn run(core: AppCore, bind: &str) -> Result<(), sigint_core::Error> {
@@ -25,5 +27,11 @@ pub async fn run(core: AppCore, bind: &str) -> Result<(), sigint_core::Error> {
 
     println!("SIGINT web UI at http://{}", addr);
 
-    sigint_web::serve(db, core.events.clone(), addr).await
+    let timeout_secs = core.config.agent.approval_timeout;
+    let config = core.config.clone(); // Already Arc<Config>
+    let approval_registry = Arc::new(ApprovalRegistry::new(
+        Duration::from_secs(timeout_secs),
+    ));
+
+    sigint_web::serve(db, core.events.clone(), config, approval_registry, addr).await
 }

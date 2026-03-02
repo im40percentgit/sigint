@@ -91,15 +91,18 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use sigint_core::event::EventBus;
+    use sigint_core::{ApprovalRegistry, Config, event::EventBus};
     use sigint_store::Database;
+    use std::time::Duration;
 
     use crate::{create_router, AppState};
 
     fn test_state() -> AppState {
         let db = Database::open_in_memory().expect("in-memory db");
         let event_bus = EventBus::new();
-        AppState { db: Arc::new(db), event_bus }
+        let config = Arc::new(Config::default());
+        let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(300)));
+        AppState { db: Arc::new(db), event_bus, config, approval_registry }
     }
 
     async fn body_bytes(body: Body) -> Vec<u8> {
