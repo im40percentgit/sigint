@@ -47,6 +47,11 @@ pub struct LlmConfig {
     /// Context window size in tokens (0 = provider default).
     #[serde(default)]
     pub context_window: usize,
+
+    /// API key for cloud providers (OpenAI, Anthropic, etc.).
+    /// Can also be supplied via the `SIGINT_API_KEY` environment variable.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 /// SQLite store configuration.
@@ -76,6 +81,7 @@ impl Default for LlmConfig {
             base_url: default_base_url(),
             temperature: default_temperature(),
             context_window: 0,
+            api_key: None,
         }
     }
 }
@@ -218,6 +224,31 @@ model = "mistral"
         writeln!(f, "[llm]\nmodel = \"phi3\"").unwrap();
         let cfg = Config::load_from(f.path()).expect("load_from failed");
         assert_eq!(cfg.llm.model, "phi3");
+    }
+
+    #[test]
+    fn config_with_api_key() {
+        let toml_str = r#"
+[llm]
+provider = "openai"
+api_key = "sk-test123"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.llm.api_key, Some("sk-test123".to_string()));
+    }
+
+    #[test]
+    fn config_without_api_key_defaults_to_none() {
+        let cfg = Config::default();
+        assert_eq!(cfg.llm.api_key, None);
+
+        // Also verify it's absent when not in TOML
+        let toml_str = r#"
+[llm]
+model = "gpt-4o"
+"#;
+        let cfg2: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg2.llm.api_key, None);
     }
 
     #[test]

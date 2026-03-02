@@ -352,6 +352,7 @@ mod tests {
             base_url: "http://localhost:11434".into(),
             temperature: 0.5,
             context_window: 0,
+            api_key: None,
         };
         let provider = OllamaProvider::from_config(&cfg);
         assert_eq!(provider.model, "llama3.2");
