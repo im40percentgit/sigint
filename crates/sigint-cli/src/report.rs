@@ -114,8 +114,8 @@ fn find_session_by_id_or_prefix(
 
 /// Run the `report` subcommand.
 pub async fn run(core: AppCore, args: ReportArgs) -> Result<(), Error> {
-    let fmt = parse_format(&args.format).map_err(|e| Error::Database(e))?;
-    let tmpl = parse_template(&args.template).map_err(|e| Error::Database(e))?;
+    let fmt = parse_format(&args.format).map_err(Error::Database)?;
+    let tmpl = parse_template(&args.template).map_err(Error::Database)?;
 
     let db_path = core.config.resolved_db_path();
     let db = Database::open(&db_path)

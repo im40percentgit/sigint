@@ -63,6 +63,24 @@ use sigint_llm::{
 };
 use sigint_tools::tool::Tool;
 
+/// Configuration options for [`run_tool_loop`].
+///
+/// Bundles the execution-policy parameters to keep the function signature
+/// within clippy's `too_many_arguments` limit (≤7).
+pub struct ToolLoopOptions<'a> {
+    /// Hard cap on tool-call rounds before the loop gives up.
+    pub max_iterations: usize,
+    /// Model identifier string passed to the provider (e.g. `"llama3.2"`).
+    pub model: &'a str,
+    /// Best-effort event bus for observability; errors are silently discarded.
+    pub event_bus: &'a EventBus,
+    /// Optional approval gate. When `Some`, tools whose risk exceeds
+    /// `auto_approve` will block for human approval.
+    pub approval_registry: Option<&'a ApprovalRegistry>,
+    /// Auto-approval threshold: `"all"`, `"medium"`, `"low"`, or `"none"`.
+    pub auto_approve: &'a str,
+}
+
 /// Returns `true` if `risk` is within the auto-approval threshold.
 ///
 /// - `"all"`    — every tool runs without approval
@@ -113,12 +131,16 @@ pub async fn run_tool_loop(
     state: &mut crate::state::ConversationState,
     tools: &[&dyn Tool],
     tool_defs: &[ToolDefinition],
-    max_iterations: usize,
-    model: &str,
-    event_bus: &EventBus,
-    approval_registry: Option<&ApprovalRegistry>,
-    auto_approve: &str,
+    opts: ToolLoopOptions<'_>,
 ) -> Result<String, Error> {
+    let ToolLoopOptions {
+        max_iterations,
+        model,
+        event_bus,
+        approval_registry,
+        auto_approve,
+    } = opts;
+
     let mut last_text = String::new();
 
     for iteration in 0..max_iterations {
@@ -444,6 +466,22 @@ mod tests {
         vec![]
     }
 
+    /// Build a [`ToolLoopOptions`] with common test defaults.
+    fn make_opts<'a>(
+        max_iterations: usize,
+        bus: &'a EventBus,
+        approval_registry: Option<&'a ApprovalRegistry>,
+        auto_approve: &'a str,
+    ) -> ToolLoopOptions<'a> {
+        ToolLoopOptions {
+            max_iterations,
+            model: "mock",
+            event_bus: bus,
+            approval_registry,
+            auto_approve,
+        }
+    }
+
     // ── Test cases ────────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -458,11 +496,7 @@ mod tests {
             &mut state,
             &tools,
             &no_tools(),
-            5,
-            "mock",
-            &bus,
-            None,
-            "all",
+            make_opts(5, &bus, None, "all"),
         )
         .await
         .unwrap();
@@ -493,11 +527,7 @@ mod tests {
             &mut state,
             &[tool_ref],
             &[tool_def],
-            5,
-            "mock",
-            &bus,
-            None,
-            "all",
+            make_opts(5, &bus, None, "all"),
         )
         .await
         .unwrap();
@@ -535,11 +565,7 @@ mod tests {
             &mut state,
             &[tool_ref],
             &[tool_def],
-            5,
-            "mock",
-            &bus,
-            None,
-            "all",
+            make_opts(5, &bus, None, "all"),
         )
         .await
         .unwrap();
@@ -573,11 +599,7 @@ mod tests {
             &mut state,
             &[tool_ref],
             &[tool_def],
-            3, // low limit
-            "mock",
-            &bus,
-            None,
-            "all",
+            make_opts(3, &bus, None, "all"), // low limit
         )
         .await
         .unwrap();
@@ -605,11 +627,7 @@ mod tests {
             &mut state,
             &tools,
             &no_tools(),
-            5,
-            "mock",
-            &bus,
-            None,
-            "all",
+            make_opts(5, &bus, None, "all"),
         )
         .await
         .unwrap();
@@ -647,11 +665,7 @@ mod tests {
             &mut state,
             &[tool_ref],
             &[tool_def],
-            5,
-            "mock",
-            &bus,
-            None,
-            "all",
+            make_opts(5, &bus, None, "all"),
         )
         .await
         .unwrap();
@@ -689,11 +703,7 @@ mod tests {
             &mut state,
             &[tool_ref],
             &[tool_def],
-            5,
-            "mock",
-            &bus,
-            None,
-            "all",
+            make_opts(5, &bus, None, "all"),
         )
         .await
         .unwrap();
@@ -747,11 +757,7 @@ mod tests {
             &mut state,
             &tools,
             &no_tools(),
-            3,
-            "mock",
-            &bus,
-            None,
-            "all",
+            make_opts(3, &bus, None, "all"),
         )
         .await
         .unwrap_err();
@@ -814,11 +820,7 @@ mod tests {
             &mut state,
             &[tool_ref],
             &[tool_def],
-            5,
-            "mock",
-            &bus,
-            None,
-            "low",
+            make_opts(5, &bus, None, "low"),
         )
         .await
         .unwrap();
@@ -878,11 +880,7 @@ mod tests {
             &mut state,
             &[tool_ref],
             &[tool_def],
-            5,
-            "mock",
-            &bus,
-            Some(registry.as_ref()),
-            "low",
+            make_opts(5, &bus, Some(registry.as_ref()), "low"),
         )
         .await
         .unwrap();
@@ -944,11 +942,7 @@ mod tests {
             &mut state,
             &[tool_ref],
             &[tool_def],
-            5,
-            "mock",
-            &bus,
-            Some(registry.as_ref()),
-            "low",
+            make_opts(5, &bus, Some(registry.as_ref()), "low"),
         )
         .await
         .unwrap();

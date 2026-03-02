@@ -121,7 +121,7 @@ struct OpenAiUsage {
 /// arguments field into a serde_json::Value.
 fn wire_tool_calls_to_domain(wire: Vec<OpenAiToolCall>) -> Vec<ToolCall> {
     wire.into_iter()
-        .filter_map(|tc| {
+        .map(|tc| {
             let arguments = match serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
             {
                 Ok(v) => v,
@@ -133,12 +133,12 @@ fn wire_tool_calls_to_domain(wire: Vec<OpenAiToolCall>) -> Vec<ToolCall> {
                     serde_json::Value::Object(Default::default())
                 }
             };
-            Some(ToolCall {
+            ToolCall {
                 function: FunctionCall {
                     name: tc.function.name,
                     arguments,
                 },
-            })
+            }
         })
         .collect()
 }

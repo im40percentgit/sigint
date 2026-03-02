@@ -35,7 +35,6 @@ use sigint_core::{event::Event, AppCore, Error};
 use sigint_llm::OllamaProvider;
 use sigint_memory::MemoryService;
 use sigint_store::{embedding_worker, Database, EmbeddingService, ScanRecord};
-use sigint_tools;
 use tracing::warn;
 
 /// Default model context window in tokens.

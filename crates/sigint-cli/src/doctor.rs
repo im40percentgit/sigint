@@ -178,7 +178,7 @@ pub async fn check_ollama(base_url: &str, model: &str) -> (CheckResult, CheckRes
     };
 
     let model_ok = if model_available(model, &models) {
-        CheckResult::pass(format!("Model available"), model.to_owned())
+        CheckResult::pass("Model available".to_string(), model.to_owned())
     } else {
         CheckResult::fail(
             format!("Model available ({})", model),

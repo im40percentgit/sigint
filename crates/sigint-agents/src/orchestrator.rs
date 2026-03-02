@@ -50,7 +50,7 @@ use crate::{
     agent::Agent,
     agents::{AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, StrategistAgent},
     context::TaskContext,
-    loop_engine::run_tool_loop,
+    loop_engine::{run_tool_loop, ToolLoopOptions},
     registry::ToolRegistry,
     report::ScanReport,
     role::AgentRole,
@@ -226,11 +226,13 @@ impl Orchestrator {
             &mut state,
             &tool_refs,
             &tool_defs,
-            self.max_iterations,
-            &self.model,
-            &self.event_bus,
-            None,
-            "all",
+            ToolLoopOptions {
+                max_iterations: self.max_iterations,
+                model: &self.model,
+                event_bus: &self.event_bus,
+                approval_registry: None,
+                auto_approve: "all",
+            },
         )
         .await
     }

@@ -104,11 +104,13 @@ fn parse_nmap_xml(xml: &str) -> Option<Value> {
                         }
                     }
                     "port" if current_host.is_some() => {
-                        let mut pb = PortBuilder::default();
-                        pb.protocol = attr_value(e, b"protocol").unwrap_or_default();
-                        if let Some(pid) = attr_value(e, b"portid") {
-                            pb.port = pid.parse::<u16>().unwrap_or(0);
-                        }
+                        let pb = PortBuilder {
+                            protocol: attr_value(e, b"protocol").unwrap_or_default(),
+                            port: attr_value(e, b"portid")
+                                .and_then(|pid| pid.parse::<u16>().ok())
+                                .unwrap_or(0),
+                            ..Default::default()
+                        };
                         current_port = Some(pb);
                     }
                     "state" if current_port.is_some() => {

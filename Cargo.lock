@@ -3153,6 +3153,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sigint-e2e"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde_json",
+ "sigint-agents",
+ "sigint-core",
+ "sigint-store",
+ "sigint-web",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "sigint-llm"
 version = "0.1.0"
 dependencies = [

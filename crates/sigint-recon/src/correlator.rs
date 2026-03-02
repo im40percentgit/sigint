@@ -76,7 +76,7 @@ impl Correlator {
     /// to Host assets and a `resolves_to` key on Domain assets.
     ///
     /// This is a best-effort pass — we don't re-run DNS queries here.
-    pub fn link_domains_to_hosts(assets: &mut Vec<Asset>, domain: &str) {
+    pub fn link_domains_to_hosts(assets: &mut [Asset], domain: &str) {
         let host_ips: Vec<String> = assets
             .iter()
             .filter(|a| a.kind == AssetKind::Host)
