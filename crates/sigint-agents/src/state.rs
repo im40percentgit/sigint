@@ -76,8 +76,8 @@ impl ConversationState {
             match pos {
                 Some(i) => {
                     let removed = self.messages.remove(i);
-                    let removed_tokens =
-                        Self::estimate_tokens(&removed.role) + Self::estimate_tokens(&removed.content);
+                    let removed_tokens = Self::estimate_tokens(&removed.role)
+                        + Self::estimate_tokens(&removed.content);
                     self.token_count = self.token_count.saturating_sub(removed_tokens);
                 }
                 None => {
@@ -159,7 +159,9 @@ mod tests {
         state.add_message(sys("You are a security researcher."));
         // Add enough user messages to exceed budget.
         for i in 0..10 {
-            state.add_message(usr(&format!("message number {i} with some padding text here")));
+            state.add_message(usr(&format!(
+                "message number {i} with some padding text here"
+            )));
         }
         // System message must survive.
         let messages = state.to_chat_messages();
@@ -195,7 +197,9 @@ mod tests {
     fn token_count_stays_under_budget_after_trim() {
         let mut state = ConversationState::new(100);
         for _ in 0..20 {
-            state.add_message(usr("padding text to fill up the context window quickly enough"));
+            state.add_message(usr(
+                "padding text to fill up the context window quickly enough",
+            ));
         }
         let budget = 100 * 4 / 5; // 80
         assert!(

@@ -36,7 +36,10 @@ pub struct ChatArgs {
     pub model: Option<String>,
 
     /// System prompt injected at the start of the conversation.
-    #[arg(long, default_value = "You are a helpful AI assistant specialising in penetration testing and cybersecurity. Be concise and precise.")]
+    #[arg(
+        long,
+        default_value = "You are a helpful AI assistant specialising in penetration testing and cybersecurity. Be concise and precise."
+    )]
     pub system_prompt: String,
 }
 
@@ -44,7 +47,11 @@ pub struct ChatArgs {
 pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
     // ── Setup ──────────────────────────────────────────────────────────────
 
-    let model = args.model.as_deref().unwrap_or(&core.config.llm.model).to_string();
+    let model = args
+        .model
+        .as_deref()
+        .unwrap_or(&core.config.llm.model)
+        .to_string();
     let session_name = args
         .session
         .clone()
@@ -56,9 +63,8 @@ pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
     // ── Database ───────────────────────────────────────────────────────────
 
     let db_path = core.config.resolved_db_path();
-    let db = Database::open(&db_path).map_err(|e| {
-        Error::Database(format!("Cannot open database at {:?}: {}", db_path, e))
-    })?;
+    let db = Database::open(&db_path)
+        .map_err(|e| Error::Database(format!("Cannot open database at {:?}: {}", db_path, e)))?;
     debug!("Database opened at {:?}", db_path);
 
     // Create session record
@@ -76,9 +82,7 @@ pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
     db.create_message(&system_msg)?;
 
     // LLM history starts with the system prompt
-    let mut history: Vec<ChatMessage> = vec![
-        ChatMessage::system(&args.system_prompt),
-    ];
+    let mut history: Vec<ChatMessage> = vec![ChatMessage::system(&args.system_prompt)];
 
     // ── REPL loop ──────────────────────────────────────────────────────────
 
@@ -118,8 +122,8 @@ pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
 
         // ── Stream the response ────────────────────────────────────────────
 
-        let request = ChatRequest::new(&model, history.clone())
-            .with_temperature(core.config.llm.temperature);
+        let request =
+            ChatRequest::new(&model, history.clone()).with_temperature(core.config.llm.temperature);
 
         print!("\nsigint> ");
         stdout.flush().map_err(Error::Io)?;
@@ -164,7 +168,7 @@ pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
                 // Don't exit — let the user try again or Ctrl+D
                 history.pop(); // remove the user message from history since we got no response
                 db.delete_session(session.id)?; // clean up partial session? No — keep it.
-                // Actually keep the session, just note the error
+                                                // Actually keep the session, just note the error
                 continue;
             }
         }

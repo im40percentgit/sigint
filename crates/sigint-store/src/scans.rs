@@ -44,11 +44,7 @@ pub struct ScanRecord {
 
 impl ScanRecord {
     /// Create a new `ScanRecord` with a fresh UUID and the current timestamp.
-    pub fn new(
-        session_id: Uuid,
-        tool: impl Into<String>,
-        args: impl Into<String>,
-    ) -> Self {
+    pub fn new(session_id: Uuid, tool: impl Into<String>, args: impl Into<String>) -> Self {
         let now = chrono::Utc::now().to_rfc3339();
         Self {
             id: Uuid::new_v4(),
@@ -124,8 +120,9 @@ pub(crate) fn row_to_scan_record(row: &rusqlite::Row<'_>) -> Result<ScanRecord, 
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid scan record UUID '{}': {}", id_str, e)))?;
-    let session_id = Uuid::parse_str(&session_id_str)
-        .map_err(|e| Error::Database(format!("Invalid session UUID '{}': {}", session_id_str, e)))?;
+    let session_id = Uuid::parse_str(&session_id_str).map_err(|e| {
+        Error::Database(format!("Invalid session UUID '{}': {}", session_id_str, e))
+    })?;
 
     Ok(ScanRecord {
         id,
@@ -175,7 +172,10 @@ mod tests {
         assert_eq!(fetched.session_id, session_id);
         assert_eq!(fetched.tool, "nmap_scan");
         assert_eq!(fetched.args, r#"{"target":"10.0.0.1"}"#);
-        assert_eq!(fetched.output.as_deref(), Some("Nmap scan report for 10.0.0.1"));
+        assert_eq!(
+            fetched.output.as_deref(),
+            Some("Nmap scan report for 10.0.0.1")
+        );
         assert_eq!(fetched.exit_code, Some(0));
     }
 
@@ -216,8 +216,10 @@ mod tests {
         db.create_session(&s2_session).unwrap();
         let s2 = s2_session.id;
 
-        db.create_scan_record(&ScanRecord::new(s1, "nmap_scan", "{}")).unwrap();
-        db.create_scan_record(&ScanRecord::new(s2, "shell", "{}")).unwrap();
+        db.create_scan_record(&ScanRecord::new(s1, "nmap_scan", "{}"))
+            .unwrap();
+        db.create_scan_record(&ScanRecord::new(s2, "shell", "{}"))
+            .unwrap();
 
         let s1_records = db.get_scan_records(s1).unwrap();
         let s2_records = db.get_scan_records(s2).unwrap();

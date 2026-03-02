@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
-use sigint_core::{ApprovalRegistry, Config, Error, event::EventBus};
+use sigint_core::{event::EventBus, ApprovalRegistry, Config, Error};
 use sigint_llm::factory::create_provider;
 use sigint_memory::MemoryService;
 use sigint_store::{Database, ScanRecord};
@@ -121,17 +121,14 @@ impl ScanService {
         };
 
         // Create a session record so the scan is visible in the DB immediately.
-        let session = sigint_core::types::Session::new(
-            format!(
-                "scan-{}-{}",
-                target.replace(['.', '/', ':'], "-"),
-                chrono::Utc::now().format("%Y%m%d-%H%M%S")
-            ),
-        )
+        let session = sigint_core::types::Session::new(format!(
+            "scan-{}-{}",
+            target.replace(['.', '/', ':'], "-"),
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+        ))
         .with_target(target);
-        db.create_session(&session).map_err(|e| {
-            Error::Other(format!("Failed to create session: {}", e))
-        })?;
+        db.create_session(&session)
+            .map_err(|e| Error::Other(format!("Failed to create session: {}", e)))?;
 
         let session_id = session.id;
 
@@ -167,9 +164,11 @@ impl ScanService {
         }
 
         // Emit a start event so WebSocket clients see activity immediately.
-        self.event_bus.emit(sigint_core::event::Event::Status(
-            format!("Scan started for target: {}", target),
-        ));
+        self.event_bus
+            .emit(sigint_core::event::Event::Status(format!(
+                "Scan started for target: {}",
+                target
+            )));
 
         // Clone everything the spawned task needs to own.
         let scans = self.scans.clone();
@@ -184,9 +183,10 @@ impl ScanService {
             match result {
                 Ok(report) => {
                     info!(session_id = %session_id, "scan completed successfully");
-                    event_bus.emit(sigint_core::event::Event::Status(
-                        format!("Scan completed for {}", target_owned),
-                    ));
+                    event_bus.emit(sigint_core::event::Event::Status(format!(
+                        "Scan completed for {}",
+                        target_owned
+                    )));
 
                     // Persist a summary record (best-effort).
                     let record = ScanRecord::new(
@@ -215,9 +215,10 @@ impl ScanService {
                 Err(e) => {
                     let msg = e.to_string();
                     warn!(session_id = %session_id, error = %msg, "scan failed");
-                    event_bus.emit(sigint_core::event::Event::Status(
-                        format!("Scan failed for {}: {}", target_owned, msg),
-                    ));
+                    event_bus.emit(sigint_core::event::Event::Status(format!(
+                        "Scan failed for {}: {}",
+                        target_owned, msg
+                    )));
                     let mut scans = scans.lock().await;
                     if let Some(handle) = scans.get_mut(&session_id) {
                         handle.status = ScanStatus::Failed(msg);

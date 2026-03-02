@@ -26,8 +26,8 @@ use tracing::{debug, warn};
 
 use crate::provider::{ChunkStream, LlmProvider};
 use crate::types::{
-    ChatMessage, ChatRequest, ChatResponse, FunctionCall, StreamChunk, ToolCall,
-    ToolDefinition, TokenUsage,
+    ChatMessage, ChatRequest, ChatResponse, FunctionCall, StreamChunk, TokenUsage, ToolCall,
+    ToolDefinition,
 };
 use sigint_core::Error;
 
@@ -122,7 +122,8 @@ struct OpenAiUsage {
 fn wire_tool_calls_to_domain(wire: Vec<OpenAiToolCall>) -> Vec<ToolCall> {
     wire.into_iter()
         .filter_map(|tc| {
-            let arguments = match serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
+            let arguments = match serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+            {
                 Ok(v) => v,
                 Err(e) => {
                     warn!(
@@ -175,11 +176,7 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     /// Create a new provider.
-    pub fn new(
-        base_url: impl Into<String>,
-        api_key: impl Into<String>,
-        temperature: f32,
-    ) -> Self {
+    pub fn new(base_url: impl Into<String>, api_key: impl Into<String>, temperature: f32) -> Self {
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
@@ -218,7 +215,10 @@ impl OpenAiProvider {
     /// Map HTTP status codes to friendly Error::Llm messages.
     fn http_error(status: reqwest::StatusCode, body: &str) -> Error {
         let msg = match status.as_u16() {
-            401 => format!("Authentication failed (HTTP 401). Check your API key. Body: {}", body),
+            401 => format!(
+                "Authentication failed (HTTP 401). Check your API key. Body: {}",
+                body
+            ),
             429 => format!("Rate limited (HTTP 429). Try again later. Body: {}", body),
             _ => format!("OpenAI API returned HTTP {}: {}", status, body),
         };
@@ -271,9 +271,10 @@ impl LlmProvider for OpenAiProvider {
             return Err(Self::http_error(status, &text));
         }
 
-        let parsed: OpenAiResponse = resp.json().await.map_err(|e| {
-            Error::Llm(format!("Failed to parse OpenAI response: {}", e))
-        })?;
+        let parsed: OpenAiResponse = resp
+            .json()
+            .await
+            .map_err(|e| Error::Llm(format!("Failed to parse OpenAI response: {}", e)))?;
 
         let choice = parsed
             .choices
@@ -466,7 +467,11 @@ fn build_openai_request<'a>(
         messages: wire_msgs,
         stream,
         temperature: request.temperature,
-        max_tokens: if request.max_tokens > 0 { Some(request.max_tokens as u64) } else { None },
+        max_tokens: if request.max_tokens > 0 {
+            Some(request.max_tokens as u64)
+        } else {
+            None
+        },
         tools: request.tools.clone(),
     }
 }
@@ -530,7 +535,10 @@ mod tests {
             tools: vec![],
         };
         let v = serde_json::to_value(&req).unwrap();
-        assert!(v.get("tools").is_none(), "tools key should be absent when empty");
+        assert!(
+            v.get("tools").is_none(),
+            "tools key should be absent when empty"
+        );
     }
 
     // ── Response parsing tests ────────────────────────────────────────────────
@@ -599,7 +607,10 @@ mod tests {
         assert_eq!(msg.tool_calls.len(), 1);
         assert_eq!(msg.tool_calls[0].function.name, "get_weather");
         // arguments is a JSON-encoded string on the wire
-        assert_eq!(msg.tool_calls[0].function.arguments, r#"{"location": "Paris"}"#);
+        assert_eq!(
+            msg.tool_calls[0].function.arguments,
+            r#"{"location": "Paris"}"#
+        );
         // After conversion, it should be parsed into a Value
         let domain_calls = wire_tool_calls_to_domain(msg.tool_calls.clone());
         assert_eq!(domain_calls[0].function.arguments["location"], "Paris");
@@ -621,10 +632,16 @@ mod tests {
     #[test]
     fn completions_url_format() {
         let p = OpenAiProvider::new("https://api.openai.com", "sk-test", 0.7);
-        assert_eq!(p.completions_url(), "https://api.openai.com/v1/chat/completions");
+        assert_eq!(
+            p.completions_url(),
+            "https://api.openai.com/v1/chat/completions"
+        );
 
         let p2 = OpenAiProvider::new("http://localhost:8080", "key", 0.5);
-        assert_eq!(p2.completions_url(), "http://localhost:8080/v1/chat/completions");
+        assert_eq!(
+            p2.completions_url(),
+            "http://localhost:8080/v1/chat/completions"
+        );
     }
 
     // ── from_config / API key resolution tests ────────────────────────────────
@@ -635,7 +652,10 @@ mod tests {
         std::env::remove_var("SIGINT_API_KEY");
         let cfg = test_config(None);
         let result = OpenAiProvider::from_config(&cfg);
-        assert!(result.is_err(), "Expected error when no api_key and no env var");
+        assert!(
+            result.is_err(),
+            "Expected error when no api_key and no env var"
+        );
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("API key") || msg.contains("api_key") || msg.contains("SIGINT_API_KEY"),
@@ -667,8 +687,8 @@ mod tests {
 
     #[test]
     fn request_uses_per_request_temperature() {
-        let req = ChatRequest::new("gpt-4o", vec![ChatMessage::user("hello")])
-            .with_temperature(0.0);
+        let req =
+            ChatRequest::new("gpt-4o", vec![ChatMessage::user("hello")]).with_temperature(0.0);
         let wire_msgs = build_wire_messages(&req.messages);
         let wire = build_openai_request(&req, &wire_msgs, false);
         assert!((wire.temperature - 0.0).abs() < f32::EPSILON);

@@ -27,7 +27,10 @@ pub enum Event {
     /// A new chat message was created.
     MessageCreated(Message),
     /// An LLM response token arrived (for streaming display).
-    TokenReceived { session_id: uuid::Uuid, token: String },
+    TokenReceived {
+        session_id: uuid::Uuid,
+        token: String,
+    },
     /// LLM streaming completed for a session.
     StreamCompleted { session_id: uuid::Uuid },
     /// A new session was created.
@@ -37,7 +40,10 @@ pub enum Event {
     /// A new finding was recorded.
     FindingCreated(Finding),
     /// A tool started executing.
-    ToolStarted { name: String, args: serde_json::Value },
+    ToolStarted {
+        name: String,
+        args: serde_json::Value,
+    },
     /// A tool produced output.
     ToolOutput { name: String, output: String },
     /// A tool finished.
@@ -50,11 +56,19 @@ pub enum Event {
     /// A new asset was discovered during reconnaissance.
     AssetDiscovered(Asset),
     /// A field on an existing asset changed (e.g., metadata updated, status changed).
-    AssetChanged { asset_id: Uuid, field: String, old: String, new: String },
+    AssetChanged {
+        asset_id: Uuid,
+        field: String,
+        old: String,
+        new: String,
+    },
     /// Reconnaissance started against a target.
     ReconStarted { session_id: Uuid, target: String },
     /// Reconnaissance completed; reports how many assets were found.
-    ReconCompleted { session_id: Uuid, assets_found: usize },
+    ReconCompleted {
+        session_id: Uuid,
+        assets_found: usize,
+    },
     // ── Approval Gate events ─────────────────────────────────────────────────
     /// A tool call is awaiting human approval before execution.
     ToolApprovalRequested {
@@ -67,7 +81,10 @@ pub enum Event {
     /// A pending tool call was approved by the operator.
     ToolApprovalGranted { request_id: Uuid },
     /// A pending tool call was denied by the operator.
-    ToolApprovalDenied { request_id: Uuid, reason: Option<String> },
+    ToolApprovalDenied {
+        request_id: Uuid,
+        reason: Option<String>,
+    },
 }
 
 /// Handle to the broadcast event bus.

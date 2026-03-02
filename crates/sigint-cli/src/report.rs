@@ -16,7 +16,7 @@ use std::io::Write as _;
 
 use sigint_core::{AppCore, Error};
 use sigint_report::{
-    AssetSummary, FindingSummary, ReportData, ReportFormat, ReportTemplate, build_report,
+    build_report, AssetSummary, FindingSummary, ReportData, ReportFormat, ReportTemplate,
 };
 use sigint_store::Database;
 use uuid::Uuid;
@@ -100,7 +100,9 @@ fn find_session_by_id_or_prefix(
         .collect();
 
     match matches.len() {
-        0 => Err(Error::Database(format!("No session found with prefix: '{id_str}'"))),
+        0 => Err(Error::Database(format!(
+            "No session found with prefix: '{id_str}'"
+        ))),
         1 => Ok(matches.into_iter().next().unwrap()),
         n => Err(Error::Database(format!(
             "Ambiguous session prefix '{id_str}' matches {n} sessions. Use a longer prefix."
@@ -112,10 +114,8 @@ fn find_session_by_id_or_prefix(
 
 /// Run the `report` subcommand.
 pub async fn run(core: AppCore, args: ReportArgs) -> Result<(), Error> {
-    let fmt = parse_format(&args.format)
-        .map_err(|e| Error::Database(e))?;
-    let tmpl = parse_template(&args.template)
-        .map_err(|e| Error::Database(e))?;
+    let fmt = parse_format(&args.format).map_err(|e| Error::Database(e))?;
+    let tmpl = parse_template(&args.template).map_err(|e| Error::Database(e))?;
 
     let db_path = core.config.resolved_db_path();
     let db = Database::open(&db_path)
@@ -190,8 +190,14 @@ mod tests {
 
     #[test]
     fn parse_format_valid_markdown() {
-        assert!(matches!(parse_format("markdown"), Ok(ReportFormat::Markdown)));
-        assert!(matches!(parse_format("Markdown"), Ok(ReportFormat::Markdown)));
+        assert!(matches!(
+            parse_format("markdown"),
+            Ok(ReportFormat::Markdown)
+        ));
+        assert!(matches!(
+            parse_format("Markdown"),
+            Ok(ReportFormat::Markdown)
+        ));
         assert!(matches!(parse_format("md"), Ok(ReportFormat::Markdown)));
     }
 
@@ -207,29 +213,56 @@ mod tests {
         let result = parse_format("pdf");
         assert!(result.is_err());
         let msg = result.unwrap_err();
-        assert!(msg.contains("pdf"), "error should mention the bad input: {msg}");
-        assert!(msg.contains("markdown"), "error should list valid values: {msg}");
+        assert!(
+            msg.contains("pdf"),
+            "error should mention the bad input: {msg}"
+        );
+        assert!(
+            msg.contains("markdown"),
+            "error should list valid values: {msg}"
+        );
     }
 
     // ── parse_template ────────────────────────────────────────────────────────
 
     #[test]
     fn parse_template_valid_executive() {
-        assert!(matches!(parse_template("executive"), Ok(ReportTemplate::Executive)));
-        assert!(matches!(parse_template("exec"), Ok(ReportTemplate::Executive)));
-        assert!(matches!(parse_template("EXECUTIVE"), Ok(ReportTemplate::Executive)));
+        assert!(matches!(
+            parse_template("executive"),
+            Ok(ReportTemplate::Executive)
+        ));
+        assert!(matches!(
+            parse_template("exec"),
+            Ok(ReportTemplate::Executive)
+        ));
+        assert!(matches!(
+            parse_template("EXECUTIVE"),
+            Ok(ReportTemplate::Executive)
+        ));
     }
 
     #[test]
     fn parse_template_valid_detailed() {
-        assert!(matches!(parse_template("detailed"), Ok(ReportTemplate::Detailed)));
-        assert!(matches!(parse_template("detail"), Ok(ReportTemplate::Detailed)));
+        assert!(matches!(
+            parse_template("detailed"),
+            Ok(ReportTemplate::Detailed)
+        ));
+        assert!(matches!(
+            parse_template("detail"),
+            Ok(ReportTemplate::Detailed)
+        ));
     }
 
     #[test]
     fn parse_template_valid_technical() {
-        assert!(matches!(parse_template("technical"), Ok(ReportTemplate::Technical)));
-        assert!(matches!(parse_template("tech"), Ok(ReportTemplate::Technical)));
+        assert!(matches!(
+            parse_template("technical"),
+            Ok(ReportTemplate::Technical)
+        ));
+        assert!(matches!(
+            parse_template("tech"),
+            Ok(ReportTemplate::Technical)
+        ));
     }
 
     #[test]
@@ -237,7 +270,13 @@ mod tests {
         let result = parse_template("summary");
         assert!(result.is_err());
         let msg = result.unwrap_err();
-        assert!(msg.contains("summary"), "error should mention the bad input: {msg}");
-        assert!(msg.contains("executive"), "error should list valid values: {msg}");
+        assert!(
+            msg.contains("summary"),
+            "error should mention the bad input: {msg}"
+        );
+        assert!(
+            msg.contains("executive"),
+            "error should list valid values: {msg}"
+        );
     }
 }

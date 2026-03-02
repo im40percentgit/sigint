@@ -102,11 +102,13 @@ mod tests {
         let prompt = agent.system_prompt();
         assert!(!prompt.is_empty());
         assert!(
-            prompt.to_lowercase().contains("reconnaissance") || prompt.to_lowercase().contains("recon"),
+            prompt.to_lowercase().contains("reconnaissance")
+                || prompt.to_lowercase().contains("recon"),
             "prompt should mention recon: {prompt}"
         );
         assert!(
-            prompt.to_lowercase().contains("osint") || prompt.to_lowercase().contains("open-source"),
+            prompt.to_lowercase().contains("osint")
+                || prompt.to_lowercase().contains("open-source"),
             "prompt should mention OSINT: {prompt}"
         );
     }
@@ -115,10 +117,22 @@ mod tests {
     fn researcher_allowed_tools() {
         let agent = ResearcherAgent::new();
         let tools = agent.allowed_tools();
-        assert!(tools.contains(&"nmap_scan".to_string()), "researcher must have nmap_scan");
-        assert!(tools.contains(&"shell".to_string()), "researcher must have shell");
-        assert!(tools.contains(&"gobuster_scan".to_string()), "researcher must have gobuster_scan");
-        assert!(tools.contains(&"nuclei_scan".to_string()), "researcher must have nuclei_scan");
+        assert!(
+            tools.contains(&"nmap_scan".to_string()),
+            "researcher must have nmap_scan"
+        );
+        assert!(
+            tools.contains(&"shell".to_string()),
+            "researcher must have shell"
+        );
+        assert!(
+            tools.contains(&"gobuster_scan".to_string()),
+            "researcher must have gobuster_scan"
+        );
+        assert!(
+            tools.contains(&"nuclei_scan".to_string()),
+            "researcher must have nuclei_scan"
+        );
         assert_eq!(tools.len(), 4, "researcher should have exactly 4 tools");
     }
 

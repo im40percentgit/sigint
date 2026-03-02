@@ -19,19 +19,14 @@ pub async fn run(core: AppCore, bind: &str) -> Result<(), sigint_core::Error> {
     let db = sigint_store::Database::open(&db_path)?;
 
     let addr: std::net::SocketAddr = bind.parse().map_err(|e| {
-        sigint_core::Error::InvalidInput(format!(
-            "Invalid bind address '{}': {}",
-            bind, e
-        ))
+        sigint_core::Error::InvalidInput(format!("Invalid bind address '{}': {}", bind, e))
     })?;
 
     println!("SIGINT web UI at http://{}", addr);
 
     let timeout_secs = core.config.agent.approval_timeout;
     let config = core.config.clone(); // Already Arc<Config>
-    let approval_registry = Arc::new(ApprovalRegistry::new(
-        Duration::from_secs(timeout_secs),
-    ));
+    let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(timeout_secs)));
 
     sigint_web::serve(db, core.events.clone(), config, approval_registry, addr).await
 }

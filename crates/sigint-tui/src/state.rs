@@ -137,7 +137,13 @@ impl AppState {
     pub fn new() -> Self {
         let mut scroll_offsets = HashMap::new();
         let mut auto_scroll = HashMap::new();
-        for panel in [Panel::Chat, Panel::ToolOutput, Panel::Findings, Panel::Assets, Panel::Input] {
+        for panel in [
+            Panel::Chat,
+            Panel::ToolOutput,
+            Panel::Findings,
+            Panel::Assets,
+            Panel::Input,
+        ] {
             scroll_offsets.insert(panel, 0);
             auto_scroll.insert(panel, true);
         }
@@ -201,7 +207,10 @@ impl AppState {
                     entry.completed = Some(Instant::now());
                 }
             }
-            Event::TokenReceived { session_id: _, token } => {
+            Event::TokenReceived {
+                session_id: _,
+                token,
+            } => {
                 self.streaming_buffer.push_str(&token);
             }
             Event::StreamCompleted { session_id: _ } => {
@@ -244,8 +253,8 @@ impl AppState {
                 risk_level,
             } => {
                 // Build a compact args summary (≤100 chars) for display.
-                let mut args_summary = serde_json::to_string(&args)
-                    .unwrap_or_else(|_| String::from("{…}"));
+                let mut args_summary =
+                    serde_json::to_string(&args).unwrap_or_else(|_| String::from("{…}"));
                 if args_summary.len() > 100 {
                     args_summary.truncate(97);
                     args_summary.push_str("...");
@@ -526,7 +535,9 @@ mod tests {
             risk_level: ToolRisk::High,
         });
 
-        let approval = state.pending_approval.expect("should have pending approval");
+        let approval = state
+            .pending_approval
+            .expect("should have pending approval");
         assert_eq!(approval.request_id, req_id);
         assert_eq!(approval.tool_name, "nmap_scan");
         assert_eq!(approval.risk_level, ToolRisk::High);
@@ -554,7 +565,10 @@ mod tests {
             "args_summary exceeded 100 chars: {} chars",
             approval.args_summary.len()
         );
-        assert!(approval.args_summary.ends_with("..."), "truncated summary should end with ...");
+        assert!(
+            approval.args_summary.ends_with("..."),
+            "truncated summary should end with ..."
+        );
     }
 
     #[test]
@@ -606,7 +620,10 @@ mod tests {
         });
 
         let approval = state.pending_approval.unwrap();
-        assert_eq!(approval.request_id, req2, "second request should replace first");
+        assert_eq!(
+            approval.request_id, req2,
+            "second request should replace first"
+        );
         assert_eq!(approval.tool_name, "second_tool");
     }
 }

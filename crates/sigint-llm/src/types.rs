@@ -31,7 +31,11 @@ pub struct ToolDefinition {
 
 impl ToolDefinition {
     /// Convenience constructor for the common "function" type.
-    pub fn function(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
+    pub fn function(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: Value,
+    ) -> Self {
         Self {
             type_: "function".into(),
             function: FunctionDef {
@@ -82,18 +86,34 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into(), tool_calls: None }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+            tool_calls: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: content.into(), tool_calls: None }
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+            tool_calls: None,
+        }
     }
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into(), tool_calls: None }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+            tool_calls: None,
+        }
     }
     /// Create a "tool" role message carrying the result of a tool invocation.
     /// The content should be the serialized tool output returned to the model.
     pub fn tool(content: impl Into<String>) -> Self {
-        Self { role: "tool".into(), content: content.into(), tool_calls: None }
+        Self {
+            role: "tool".into(),
+            content: content.into(),
+            tool_calls: None,
+        }
     }
 }
 
@@ -210,8 +230,7 @@ mod tests {
 
     #[test]
     fn chat_request_with_temperature() {
-        let req = ChatRequest::new("llama3.2", vec![])
-            .with_temperature(0.1);
+        let req = ChatRequest::new("llama3.2", vec![]).with_temperature(0.1);
         assert!((req.temperature - 0.1).abs() < f32::EPSILON);
     }
 
@@ -228,8 +247,7 @@ mod tests {
                 "required": ["location"]
             }),
         );
-        let req = ChatRequest::new("llama3.2", vec![])
-            .with_tools(vec![tool]);
+        let req = ChatRequest::new("llama3.2", vec![]).with_tools(vec![tool]);
         assert_eq!(req.tools.len(), 1);
         assert_eq!(req.tools[0].function.name, "get_weather");
         assert_eq!(req.tools[0].type_, "function");
@@ -251,7 +269,10 @@ mod tests {
         let serialized = serde_json::to_value(&tool).unwrap();
         assert_eq!(serialized["type"], "function");
         assert_eq!(serialized["function"]["name"], "get_weather");
-        assert_eq!(serialized["function"]["description"], "Get weather for a location");
+        assert_eq!(
+            serialized["function"]["description"],
+            "Get weather for a location"
+        );
         assert_eq!(serialized["function"]["parameters"]["type"], "object");
     }
 

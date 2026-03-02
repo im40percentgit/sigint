@@ -25,8 +25,8 @@ use tracing::{debug, warn};
 
 use crate::provider::{ChunkStream, LlmProvider};
 use crate::types::{
-    ChatMessage, ChatRequest, ChatResponse, FunctionCall, StreamChunk, ToolCall,
-    ToolDefinition, TokenUsage,
+    ChatMessage, ChatRequest, ChatResponse, FunctionCall, StreamChunk, TokenUsage, ToolCall,
+    ToolDefinition,
 };
 use sigint_core::Error;
 
@@ -157,7 +157,11 @@ impl OllamaProvider {
     fn build_options(&self, max_tokens: usize) -> Option<OllamaOptions> {
         Some(OllamaOptions {
             temperature: self.temperature,
-            num_predict: if max_tokens > 0 { Some(max_tokens as i32) } else { None },
+            num_predict: if max_tokens > 0 {
+                Some(max_tokens as i32)
+            } else {
+                None
+            },
         })
     }
 }
@@ -186,7 +190,12 @@ impl LlmProvider for OllamaProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| Error::Llm(format!("Cannot connect to Ollama at {}: {}", self.base_url, e)))?;
+            .map_err(|e| {
+                Error::Llm(format!(
+                    "Cannot connect to Ollama at {}: {}",
+                    self.base_url, e
+                ))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -194,9 +203,10 @@ impl LlmProvider for OllamaProvider {
             return Err(Error::Llm(format!("Ollama returned {}: {}", status, text)));
         }
 
-        let line: OllamaStreamLine = resp.json().await.map_err(|e| {
-            Error::Llm(format!("Failed to parse Ollama response: {}", e))
-        })?;
+        let line: OllamaStreamLine = resp
+            .json()
+            .await
+            .map_err(|e| Error::Llm(format!("Failed to parse Ollama response: {}", e)))?;
 
         let (content, tool_calls) = match line.message {
             Some(m) => (m.content, wire_tool_calls_to_domain(m.tool_calls)),
@@ -406,7 +416,11 @@ mod tests {
             "Get weather",
             json!({"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}),
         );
-        let msg = OllamaMessage { role: "user".into(), content: "What is the weather?".into(), tool_calls: None };
+        let msg = OllamaMessage {
+            role: "user".into(),
+            content: "What is the weather?".into(),
+            tool_calls: None,
+        };
         let req = OllamaRequest {
             model: "llama3.2",
             messages: &[msg],
@@ -422,7 +436,11 @@ mod tests {
 
     #[test]
     fn ollama_request_omits_tools_when_empty() {
-        let msg = OllamaMessage { role: "user".into(), content: "hello".into(), tool_calls: None };
+        let msg = OllamaMessage {
+            role: "user".into(),
+            content: "hello".into(),
+            tool_calls: None,
+        };
         let req = OllamaRequest {
             model: "llama3.2",
             messages: &[msg],
@@ -431,7 +449,10 @@ mod tests {
             tools: vec![],
         };
         let serialized = serde_json::to_value(&req).unwrap();
-        assert!(serialized.get("tools").is_none(), "tools key should be absent when empty");
+        assert!(
+            serialized.get("tools").is_none(),
+            "tools key should be absent when empty"
+        );
     }
 
     #[test]
@@ -475,7 +496,10 @@ mod tests {
         let parsed: OllamaStreamLine = serde_json::from_str(json_str).unwrap();
         let msg = parsed.message.expect("message should be present");
         assert_eq!(msg.content, "Hello, world!");
-        assert!(msg.tool_calls.is_empty(), "tool_calls should be empty when absent");
+        assert!(
+            msg.tool_calls.is_empty(),
+            "tool_calls should be empty when absent"
+        );
     }
 
     #[test]

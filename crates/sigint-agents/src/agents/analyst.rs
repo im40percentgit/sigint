@@ -85,7 +85,8 @@ mod tests {
         let prompt = agent.system_prompt();
         assert!(!prompt.is_empty());
         assert!(
-            prompt.to_lowercase().contains("finding") || prompt.to_lowercase().contains("vulnerabilit"),
+            prompt.to_lowercase().contains("finding")
+                || prompt.to_lowercase().contains("vulnerabilit"),
             "prompt should mention findings/vulnerabilities: {prompt}"
         );
         assert!(
@@ -98,7 +99,10 @@ mod tests {
     fn analyst_allowed_tools() {
         let agent = AnalystAgent::new();
         let tools = agent.allowed_tools();
-        assert!(tools.contains(&"shell".to_string()), "analyst must have shell");
+        assert!(
+            tools.contains(&"shell".to_string()),
+            "analyst must have shell"
+        );
         assert!(
             !tools.contains(&"nmap".to_string()),
             "analyst must not have nmap"

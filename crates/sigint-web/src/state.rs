@@ -16,7 +16,7 @@
 //! the dependency injection explicit and avoids global state.
 
 use sigint_agents::ScanService;
-use sigint_core::{ApprovalRegistry, Config, event::EventBus};
+use sigint_core::{event::EventBus, ApprovalRegistry, Config};
 use sigint_store::Database;
 use std::sync::Arc;
 

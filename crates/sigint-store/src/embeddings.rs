@@ -13,8 +13,8 @@
 use bytemuck;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use rusqlite::functions::FunctionFlags;
-use rusqlite::OptionalExtension;
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use sigint_core::Error;
 
 use crate::db::Database;
@@ -31,8 +31,7 @@ impl EmbeddingService {
     /// Load all-MiniLM-L6-v2 (384 dimensions). Blocks while the model loads.
     pub fn new() -> Result<Self, Error> {
         let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
-                .with_show_download_progress(true),
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
         )
         .map_err(|e| Error::Other(format!("Failed to load embedding model: {e}")))?;
 
@@ -253,8 +252,7 @@ impl Database {
             return Ok(vec![]);
         }
         self.with_conn(|conn| {
-            let placeholders: Vec<String> =
-                (1..=ids.len()).map(|i| format!("?{i}")).collect();
+            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
             let sql = match source_type {
                 "message" => format!(
                     "SELECT content FROM messages WHERE id IN ({}) ORDER BY id",
@@ -281,10 +279,7 @@ impl Database {
                 .prepare(&sql)
                 .map_err(|e| Error::Database(e.to_string()))?;
             let rows = stmt
-                .query_map(
-                    rusqlite::params_from_iter(ids.iter()),
-                    |row| row.get(0),
-                )
+                .query_map(rusqlite::params_from_iter(ids.iter()), |row| row.get(0))
                 .map_err(|e| Error::Database(e.to_string()))?;
             rows.collect::<Result<Vec<_>, _>>()
                 .map_err(|e| Error::Database(e.to_string()))

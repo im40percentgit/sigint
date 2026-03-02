@@ -58,14 +58,14 @@ impl Correlator {
             }
         }
 
-        let assets: Vec<Asset> = order
-            .into_iter()
-            .filter_map(|k| seen.remove(&k))
-            .collect();
+        let assets: Vec<Asset> = order.into_iter().filter_map(|k| seen.remove(&k)).collect();
 
         let duplicates_merged = input_len.saturating_sub(assets.len());
 
-        CorrelationResult { assets, duplicates_merged }
+        CorrelationResult {
+            assets,
+            duplicates_merged,
+        }
     }
 
     /// Link Host assets to the domains that resolved to them.
@@ -109,10 +109,7 @@ impl Correlator {
                 }
                 if let Some(obj) = asset.metadata.as_object_mut() {
                     if !obj.contains_key("resolved_from") {
-                        obj.insert(
-                            "resolved_from".to_string(),
-                            serde_json::json!(domain),
-                        );
+                        obj.insert("resolved_from".to_string(), serde_json::json!(domain));
                     }
                 }
             }

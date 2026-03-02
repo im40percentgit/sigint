@@ -247,7 +247,10 @@ mod tests {
 
     #[test]
     fn nuclei_risk_level_is_medium() {
-        assert_eq!(NucleiTool.risk_level(), sigint_core::types::ToolRisk::Medium);
+        assert_eq!(
+            NucleiTool.risk_level(),
+            sigint_core::types::ToolRisk::Medium
+        );
     }
 
     #[test]
@@ -272,14 +275,20 @@ mod tests {
 
         // target is required
         let required = params["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "target"), "target should be required");
+        assert!(
+            required.iter().any(|v| v == "target"),
+            "target should be required"
+        );
 
         // target property exists and is a string
         assert_eq!(params["properties"]["target"]["type"], "string");
 
         // templates is optional (not in required array)
         assert!(params["properties"]["templates"].is_object());
-        assert!(!required.iter().any(|v| v == "templates"), "templates should be optional");
+        assert!(
+            !required.iter().any(|v| v == "templates"),
+            "templates should be optional"
+        );
 
         // severity has enum constraint
         let severity_enum = params["properties"]["severity"]["enum"].as_array().unwrap();
@@ -312,7 +321,11 @@ mod tests {
     fn nuclei_valid_severities_accepted() {
         for sev in VALID_SEVERITIES {
             // Just verify the constant matches the schema — execution tests are #[ignore]
-            assert!(VALID_SEVERITIES.contains(sev), "severity '{}' should be valid", sev);
+            assert!(
+                VALID_SEVERITIES.contains(sev),
+                "severity '{}' should be valid",
+                sev
+            );
         }
     }
 
@@ -324,7 +337,9 @@ mod tests {
 
         let result = parse_nuclei_jsonl(input).expect("should parse findings");
 
-        let findings = result["findings"].as_array().expect("findings should be array");
+        let findings = result["findings"]
+            .as_array()
+            .expect("findings should be array");
         assert_eq!(findings.len(), 3, "should have 3 findings");
         assert_eq!(result["total"], 3, "total should be 3");
 
@@ -344,7 +359,10 @@ mod tests {
 
     #[test]
     fn parse_nuclei_jsonl_empty_output() {
-        assert!(parse_nuclei_jsonl("").is_none(), "empty string should return None");
+        assert!(
+            parse_nuclei_jsonl("").is_none(),
+            "empty string should return None"
+        );
     }
 
     #[test]
@@ -355,8 +373,14 @@ this is not json at all
 {"template-id":"cve-2022-5678","info":{"name":"Another","severity":"high"},"matched-at":"http://example.com/other","type":"dns"}"#;
 
         let result = parse_nuclei_jsonl(input).expect("should parse valid findings, skip invalid");
-        let findings = result["findings"].as_array().expect("findings should be array");
-        assert_eq!(findings.len(), 2, "should have 2 valid findings, skipping malformed lines");
+        let findings = result["findings"]
+            .as_array()
+            .expect("findings should be array");
+        assert_eq!(
+            findings.len(),
+            2,
+            "should have 2 valid findings, skipping malformed lines"
+        );
         assert_eq!(result["total"], 2);
     }
 
@@ -372,6 +396,10 @@ this is not json at all
             .await
             .expect("nuclei execution should not error");
         // nuclei exits 0 even when no templates match
-        assert_eq!(result.exit_code, 0, "nuclei should exit 0: {:?}", result.stderr);
+        assert_eq!(
+            result.exit_code, 0,
+            "nuclei should exit 0: {:?}",
+            result.stderr
+        );
     }
 }

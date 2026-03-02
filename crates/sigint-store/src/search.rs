@@ -237,8 +237,11 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let session = Session::new("test");
         db.create_session(&session).unwrap();
-        db.create_message(&Message::user(session.id, "SSRF vulnerability in webhook handler"))
-            .unwrap();
+        db.create_message(&Message::user(
+            session.id,
+            "SSRF vulnerability in webhook handler",
+        ))
+        .unwrap();
 
         let results = db.search_messages("SSRF").unwrap();
         assert_eq!(results.len(), 1);

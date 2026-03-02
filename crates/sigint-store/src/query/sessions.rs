@@ -94,10 +94,9 @@ impl<'a> SessionQuery<'a> {
                 .map_err(|e| Error::Database(e.to_string()))?;
 
             let rows = stmt
-                .query_map(
-                    rusqlite::params_from_iter(params.iter()),
-                    |row| Ok(row_to_session(row)),
-                )
+                .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                    Ok(row_to_session(row))
+                })
                 .map_err(|e| Error::Database(e.to_string()))?;
 
             let mut results = Vec::new();
@@ -128,11 +127,9 @@ impl<'a> SessionQuery<'a> {
                 sql.push_str(&conditions.join(" AND "));
             }
 
-            conn.query_row(
-                &sql,
-                rusqlite::params_from_iter(params.iter()),
-                |row| row.get(0),
-            )
+            conn.query_row(&sql, rusqlite::params_from_iter(params.iter()), |row| {
+                row.get(0)
+            })
             .map_err(|e| Error::Database(e.to_string()))
         })
     }

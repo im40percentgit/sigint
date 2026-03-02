@@ -6,7 +6,10 @@
 //! @rationale See query/sessions.rs for full rationale. FindingQuery adds
 //! severity and asset filters on top of the base pagination/count pattern.
 
-use sigint_core::{types::{Finding, Severity}, Error};
+use sigint_core::{
+    types::{Finding, Severity},
+    Error,
+};
 use uuid::Uuid;
 
 use crate::db::Database;
@@ -110,7 +113,9 @@ impl<'a> FindingQuery<'a> {
                 sql.push_str(&format!(" OFFSET {n}"));
             }
 
-            let mut stmt = conn.prepare(&sql).map_err(|e| Error::Database(e.to_string()))?;
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| Error::Database(e.to_string()))?;
             let rows = stmt
                 .query_map(rusqlite::params_from_iter(params.iter()), |row| {
                     Ok(row_to_finding(row))
@@ -140,11 +145,9 @@ impl<'a> FindingQuery<'a> {
                 sql.push_str(&conditions.join(" AND "));
             }
 
-            conn.query_row(
-                &sql,
-                rusqlite::params_from_iter(params.iter()),
-                |row| row.get(0),
-            )
+            conn.query_row(&sql, rusqlite::params_from_iter(params.iter()), |row| {
+                row.get(0)
+            })
             .map_err(|e| Error::Database(e.to_string()))
         })
     }
@@ -182,7 +185,12 @@ mod tests {
         db.create_finding(&f1).unwrap();
         db.create_finding(&f2).unwrap();
 
-        let highs = db.findings().by_session(sid).severity(Severity::High).list().unwrap();
+        let highs = db
+            .findings()
+            .by_session(sid)
+            .severity(Severity::High)
+            .list()
+            .unwrap();
         assert_eq!(highs.len(), 1);
         assert_eq!(highs[0].title, "XSS");
     }
@@ -191,7 +199,8 @@ mod tests {
     fn query_findings_count() {
         let (db, sid) = setup();
         for i in 0..4 {
-            db.create_finding(&Finding::new(sid, format!("f{i}"), "d", Severity::Info)).unwrap();
+            db.create_finding(&Finding::new(sid, format!("f{i}"), "d", Severity::Info))
+                .unwrap();
         }
         assert_eq!(db.findings().by_session(sid).count().unwrap(), 4);
     }
@@ -200,9 +209,16 @@ mod tests {
     fn query_findings_with_pagination() {
         let (db, sid) = setup();
         for i in 0..6 {
-            db.create_finding(&Finding::new(sid, format!("f{i}"), "d", Severity::Info)).unwrap();
+            db.create_finding(&Finding::new(sid, format!("f{i}"), "d", Severity::Info))
+                .unwrap();
         }
-        let page = db.findings().by_session(sid).limit(2).offset(1).list().unwrap();
+        let page = db
+            .findings()
+            .by_session(sid)
+            .limit(2)
+            .offset(1)
+            .list()
+            .unwrap();
         assert_eq!(page.len(), 2);
     }
 }

@@ -52,8 +52,11 @@ use std::time::Instant;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use sigint_core::{Error, ApprovalRegistry, event::{Event, EventBus}};
 use sigint_core::types::ToolRisk;
+use sigint_core::{
+    event::{Event, EventBus},
+    ApprovalRegistry, Error,
+};
 use sigint_llm::{
     provider::LlmProvider,
     types::{ChatMessage, ChatRequest, ToolDefinition},
@@ -164,9 +167,7 @@ pub async fn run_tool_loop(
             match maybe_tool {
                 None => {
                     warn!(tool_name = %name, "tool loop: unknown tool requested");
-                    event_bus.emit(Event::Status(format!(
-                        "Unknown tool requested: {name}"
-                    )));
+                    event_bus.emit(Event::Status(format!("Unknown tool requested: {name}")));
                     let error_msg = format!("Tool '{name}' is not available.");
                     state.add_message(ChatMessage::tool(error_msg));
                 }
@@ -198,27 +199,27 @@ pub async fn run_tool_loop(
                                         request_id,
                                         reason: None,
                                     });
-                                    state.add_message(ChatMessage::tool(
-                                        format!("Tool '{}' execution denied by operator.", name),
-                                    ));
+                                    state.add_message(ChatMessage::tool(format!(
+                                        "Tool '{}' execution denied by operator.",
+                                        name
+                                    )));
                                     continue;
                                 }
                                 Ok(Err(_)) => {
                                     // Sender dropped — approval channel cancelled.
-                                    state.add_message(ChatMessage::tool(
-                                        format!("Tool '{}' approval cancelled.", name),
-                                    ));
+                                    state.add_message(ChatMessage::tool(format!(
+                                        "Tool '{}' approval cancelled.",
+                                        name
+                                    )));
                                     continue;
                                 }
                                 Err(_) => {
                                     // tokio::time::timeout elapsed.
-                                    state.add_message(ChatMessage::tool(
-                                        format!(
-                                            "Tool '{}' approval timed out after {}s.",
-                                            name,
-                                            timeout_dur.as_secs()
-                                        ),
-                                    ));
+                                    state.add_message(ChatMessage::tool(format!(
+                                        "Tool '{}' approval timed out after {}s.",
+                                        name,
+                                        timeout_dur.as_secs()
+                                    )));
                                     continue;
                                 }
                             }
@@ -298,12 +299,12 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use sigint_core::{Error, ApprovalRegistry, event::EventBus};
+    use sigint_core::{event::EventBus, ApprovalRegistry, Error};
     use sigint_llm::{
         provider::{ChunkStream, LlmProvider},
         types::{ChatResponse, FunctionCall, StreamChunk, ToolCall},
     };
-    use sigint_tools::{result::ToolResult, tool::Tool, error::ToolError};
+    use sigint_tools::{error::ToolError, result::ToolResult, tool::Tool};
 
     use crate::state::ConversationState;
 
@@ -320,7 +321,9 @@ mod tests {
 
     impl MockProvider {
         fn new(responses: Vec<ChatResponse>) -> Self {
-            Self { responses: Mutex::new(responses) }
+            Self {
+                responses: Mutex::new(responses),
+            }
         }
 
         /// Build a plain-text response (no tool calls).
@@ -450,9 +453,19 @@ mod tests {
         let bus = EventBus::new();
         let tools: Vec<&dyn Tool> = vec![];
 
-        let result = run_tool_loop(&provider, &mut state, &tools, &no_tools(), 5, "mock", &bus, None, "all")
-            .await
-            .unwrap();
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &tools,
+            &no_tools(),
+            5,
+            "mock",
+            &bus,
+            None,
+            "all",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result, "All done!");
         // State should NOT have gained an assistant message from a tool-round
@@ -492,8 +505,14 @@ mod tests {
         assert_eq!(result, "Found open ports 22 and 80.");
         // State should contain: original user msg + assistant (tool_calls) + tool result
         let msgs = state.to_chat_messages();
-        assert!(msgs.iter().any(|m| m.role == "assistant"), "assistant message missing");
-        assert!(msgs.iter().any(|m| m.role == "tool"), "tool result message missing");
+        assert!(
+            msgs.iter().any(|m| m.role == "assistant"),
+            "assistant message missing"
+        );
+        assert!(
+            msgs.iter().any(|m| m.role == "tool"),
+            "tool result message missing"
+        );
     }
 
     #[tokio::test]
@@ -581,14 +600,27 @@ mod tests {
         let bus = EventBus::new();
         let tools: Vec<&dyn Tool> = vec![];
 
-        let result = run_tool_loop(&provider, &mut state, &tools, &no_tools(), 5, "mock", &bus, None, "all")
-            .await
-            .unwrap();
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &tools,
+            &no_tools(),
+            5,
+            "mock",
+            &bus,
+            None,
+            "all",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result, "I couldn't use that tool.");
         // The error should have been fed back as a tool-role message.
         let msgs = state.to_chat_messages();
-        let tool_msg = msgs.iter().find(|m| m.role == "tool").expect("tool message missing");
+        let tool_msg = msgs
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool message missing");
         assert!(
             tool_msg.content.contains("not available"),
             "expected 'not available' in tool error message: {}",
@@ -626,7 +658,10 @@ mod tests {
 
         assert_eq!(result, "The tool failed, I'll adapt.");
         let msgs = state.to_chat_messages();
-        let tool_msg = msgs.iter().find(|m| m.role == "tool").expect("tool message missing");
+        let tool_msg = msgs
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool message missing");
         assert!(
             tool_msg.content.contains("failed"),
             "expected 'failed' in error message: {}",
@@ -671,13 +706,19 @@ mod tests {
             events.push(e);
         }
 
-        let has_started = events.iter().any(|e| matches!(e, Event::ToolStarted { name, .. } if name == "scanner"));
-        let has_output  = events.iter().any(|e| matches!(e, Event::ToolOutput  { name, .. } if name == "scanner"));
-        let has_done    = events.iter().any(|e| matches!(e, Event::ToolCompleted { name, .. } if name == "scanner"));
+        let has_started = events
+            .iter()
+            .any(|e| matches!(e, Event::ToolStarted { name, .. } if name == "scanner"));
+        let has_output = events
+            .iter()
+            .any(|e| matches!(e, Event::ToolOutput  { name, .. } if name == "scanner"));
+        let has_done = events
+            .iter()
+            .any(|e| matches!(e, Event::ToolCompleted { name, .. } if name == "scanner"));
 
         assert!(has_started, "ToolStarted event missing");
-        assert!(has_output,  "ToolOutput event missing");
-        assert!(has_done,    "ToolCompleted event missing");
+        assert!(has_output, "ToolOutput event missing");
+        assert!(has_done, "ToolCompleted event missing");
     }
 
     #[tokio::test]
@@ -686,7 +727,9 @@ mod tests {
 
         #[async_trait]
         impl LlmProvider for FailingProvider {
-            fn name(&self) -> &str { "failing" }
+            fn name(&self) -> &str {
+                "failing"
+            }
             async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, Error> {
                 Err(Error::Llm("connection refused".into()))
             }
@@ -699,9 +742,19 @@ mod tests {
         let bus = EventBus::new();
         let tools: Vec<&dyn Tool> = vec![];
 
-        let err = run_tool_loop(&FailingProvider, &mut state, &tools, &no_tools(), 3, "mock", &bus, None, "all")
-            .await
-            .unwrap_err();
+        let err = run_tool_loop(
+            &FailingProvider,
+            &mut state,
+            &tools,
+            &no_tools(),
+            3,
+            "mock",
+            &bus,
+            None,
+            "all",
+        )
+        .await
+        .unwrap_err();
 
         assert!(err.to_string().contains("connection refused"));
     }
@@ -713,8 +766,12 @@ mod tests {
 
     #[async_trait]
     impl Tool for HighRiskTool {
-        fn name(&self) -> &str { "dangerous_tool" }
-        fn description(&self) -> &str { "a risky tool" }
+        fn name(&self) -> &str {
+            "dangerous_tool"
+        }
+        fn description(&self) -> &str {
+            "a risky tool"
+        }
         fn definition(&self) -> sigint_llm::ToolDefinition {
             sigint_llm::ToolDefinition::function(
                 "dangerous_tool",
@@ -722,7 +779,9 @@ mod tests {
                 json!({ "type": "object", "properties": {} }),
             )
         }
-        fn risk_level(&self) -> ToolRisk { ToolRisk::High }
+        fn risk_level(&self) -> ToolRisk {
+            ToolRisk::High
+        }
         async fn execute(&self, _args: Value) -> sigint_tools::error::Result<ToolResult> {
             Ok(ToolResult {
                 stdout: "executed".into(),
@@ -766,7 +825,10 @@ mod tests {
 
         assert_eq!(result, "Safe tool ran fine.");
         let msgs = state.to_chat_messages();
-        let tool_msg = msgs.iter().find(|m| m.role == "tool").expect("tool result missing");
+        let tool_msg = msgs
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool result missing");
         assert!(
             tool_msg.content.contains("output from safe tool"),
             "unexpected tool output: {}",
@@ -829,7 +891,10 @@ mod tests {
 
         assert_eq!(result, "Dangerous tool completed.");
         let msgs = state.to_chat_messages();
-        let tool_msg = msgs.iter().find(|m| m.role == "tool").expect("tool result missing");
+        let tool_msg = msgs
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool result missing");
         assert!(
             tool_msg.content.contains("executed"),
             "unexpected tool output: {}",
@@ -894,7 +959,10 @@ mod tests {
 
         // The tool message should say "denied", not contain tool execution output.
         let msgs = state.to_chat_messages();
-        let tool_msg = msgs.iter().find(|m| m.role == "tool").expect("tool result missing");
+        let tool_msg = msgs
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool result missing");
         assert!(
             tool_msg.content.contains("denied"),
             "expected 'denied' in tool message: {}",

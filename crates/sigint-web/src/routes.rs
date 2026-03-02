@@ -26,10 +26,10 @@
 //! ScanService.
 
 use axum::{
-    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
+    Json,
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -103,10 +103,7 @@ pub async fn cancel_scan(
     if state.scan_service.cancel(uuid).await {
         Ok(Json(serde_json::json!({ "cancelled": true })))
     } else {
-        Err(not_found(format!(
-            "scan '{}' not found or not running",
-            id
-        )))
+        Err(not_found(format!("scan '{}' not found or not running", id)))
     }
 }
 
@@ -222,8 +219,12 @@ pub struct ReportQuery {
     pub template: String,
 }
 
-fn default_format() -> String { "markdown".into() }
-fn default_template() -> String { "detailed".into() }
+fn default_format() -> String {
+    "markdown".into()
+}
+fn default_template() -> String {
+    "detailed".into()
+}
 
 /// `GET /api/report/{id}` — generate and return a report for the session.
 ///
@@ -249,18 +250,24 @@ pub async fn get_report(
         session_name: session.name.clone(),
         target: session.target.clone(),
         created_at: session.created_at,
-        findings: findings.iter().map(|f| sigint_report::FindingSummary {
-            title: f.title.clone(),
-            severity: f.severity.to_string(),
-            description: f.description.clone(),
-            asset: f.asset.clone(),
-            evidence: f.evidence.clone(),
-        }).collect(),
-        assets: assets.iter().map(|a| sigint_report::AssetSummary {
-            kind: a.kind.to_string(),
-            value: a.value.clone(),
-            services_count: 0, // service counts not eagerly loaded here
-        }).collect(),
+        findings: findings
+            .iter()
+            .map(|f| sigint_report::FindingSummary {
+                title: f.title.clone(),
+                severity: f.severity.to_string(),
+                description: f.description.clone(),
+                asset: f.asset.clone(),
+                evidence: f.evidence.clone(),
+            })
+            .collect(),
+        assets: assets
+            .iter()
+            .map(|a| sigint_report::AssetSummary {
+                kind: a.kind.to_string(),
+                value: a.value.clone(),
+                services_count: 0, // service counts not eagerly loaded here
+            })
+            .collect(),
         scan_count: 0,
     };
 
@@ -291,9 +298,7 @@ pub async fn get_report(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_uuid(s: &str) -> ApiResult<Uuid> {
-    Uuid::parse_str(s).map_err(|_| {
-        not_found(format!("'{}' is not a valid UUID", s))
-    })
+    Uuid::parse_str(s).map_err(|_| not_found(format!("'{}' is not a valid UUID", s)))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -308,7 +313,7 @@ mod tests {
     use tower::ServiceExt;
 
     use sigint_agents::ScanService;
-    use sigint_core::{ApprovalRegistry, Config, event::EventBus};
+    use sigint_core::{event::EventBus, ApprovalRegistry, Config};
     use sigint_store::Database;
     use std::time::Duration;
 
@@ -500,7 +505,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
         let body = body_string(resp.into_body()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert!(v["session_id"].is_string(), "expected session_id string, got: {}", body);
+        assert!(
+            v["session_id"].is_string(),
+            "expected session_id string, got: {}",
+            body
+        );
     }
 
     #[tokio::test]

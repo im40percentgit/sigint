@@ -246,7 +246,13 @@ mod tests {
             db.create_message(&Message::user(sid, format!("m{i}")))
                 .unwrap();
         }
-        let page = db.messages_query().by_session(sid).limit(3).offset(2).list().unwrap();
+        let page = db
+            .messages_query()
+            .by_session(sid)
+            .limit(3)
+            .offset(2)
+            .list()
+            .unwrap();
         assert_eq!(page.len(), 3);
     }
 }

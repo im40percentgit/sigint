@@ -109,10 +109,7 @@ pub fn model_available(model: &str, available: &[String]) -> bool {
 /// Check reachability of Ollama and model availability.
 ///
 /// Returns two `CheckResult`s: reachability and model availability.
-pub async fn check_ollama(
-    base_url: &str,
-    model: &str,
-) -> (CheckResult, CheckResult) {
+pub async fn check_ollama(base_url: &str, model: &str) -> (CheckResult, CheckResult) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -130,15 +127,9 @@ pub async fn check_ollama(
     let resp = match client.get(&url).send().await {
         Ok(r) => r,
         Err(e) => {
-            let hint = format!(
-                "Cannot reach {} — is Ollama running? ({})",
-                base_url, e
-            );
+            let hint = format!("Cannot reach {} — is Ollama running? ({})", base_url, e);
             return (
-                CheckResult::fail(
-                    format!("Ollama reachable ({})", base_url),
-                    hint,
-                ),
+                CheckResult::fail(format!("Ollama reachable ({})", base_url), hint),
                 CheckResult::fail(
                     format!("Model available ({})", model),
                     "Cannot check — Ollama unreachable",
@@ -171,10 +162,7 @@ pub async fn check_ollama(
         }
     };
 
-    let ollama_ok = CheckResult::pass(
-        "Ollama reachable",
-        base_url.to_owned(),
-    );
+    let ollama_ok = CheckResult::pass("Ollama reachable", base_url.to_owned());
 
     let models = match parse_ollama_models(&body) {
         Ok(m) => m,
@@ -194,10 +182,7 @@ pub async fn check_ollama(
     } else {
         CheckResult::fail(
             format!("Model available ({})", model),
-            format!(
-                "Model '{}' not found — run: ollama pull {}",
-                model, model
-            ),
+            format!("Model '{}' not found — run: ollama pull {}", model, model),
         )
     };
 
@@ -228,10 +213,9 @@ pub fn check_sandbox_tool(name: &str, package: &str) -> CheckResult {
         .stderr(std::process::Stdio::null())
         .status();
     match status {
-        Ok(s) if s.success() => CheckResult::pass(
-            format!("Sandbox: {} found", name),
-            String::new(),
-        ),
+        Ok(s) if s.success() => {
+            CheckResult::pass(format!("Sandbox: {} found", name), String::new())
+        }
         _ => CheckResult::fail(
             format!("Sandbox: {} not found", name),
             format!("install: sudo apt install {}", package),
@@ -263,10 +247,7 @@ pub fn check_database(db_path: &PathBuf) -> CheckResult {
     }) {
         Ok(v) => v,
         Err(e) => {
-            return CheckResult::fail(
-                "Database",
-                format!("Cannot read schema_version: {}", e),
-            )
+            return CheckResult::fail("Database", format!("Cannot read schema_version: {}", e))
         }
     };
 
@@ -311,21 +292,26 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
     results.push(check_config(&core.config));
 
     // 2 & 3. Ollama reachability + model availability
-    let (ollama, model) =
-        check_ollama(&core.config.llm.base_url, &core.config.llm.model).await;
+    let (ollama, model) = check_ollama(&core.config.llm.base_url, &core.config.llm.model).await;
     results.push(ollama);
     results.push(model);
 
     // 4. Tool availability
     let tools = [
-        ("nmap",        "sudo apt install nmap"),
-        ("gobuster",    "sudo apt install gobuster"),
-        ("nikto",       "sudo apt install nikto"),
-        ("nuclei",      "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"),
-        ("feroxbuster", "cargo install feroxbuster  OR  see https://github.com/epi052/feroxbuster"),
-        ("dig",         "sudo apt install dnsutils"),
-        ("whois",       "sudo apt install whois"),
-        ("curl",        "sudo apt install curl"),
+        ("nmap", "sudo apt install nmap"),
+        ("gobuster", "sudo apt install gobuster"),
+        ("nikto", "sudo apt install nikto"),
+        (
+            "nuclei",
+            "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+        ),
+        (
+            "feroxbuster",
+            "cargo install feroxbuster  OR  see https://github.com/epi052/feroxbuster",
+        ),
+        ("dig", "sudo apt install dnsutils"),
+        ("whois", "sudo apt install whois"),
+        ("curl", "sudo apt install curl"),
     ];
     for (name, hint) in &tools {
         results.push(check_tool(name, hint));
@@ -333,7 +319,7 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
 
     // 5. Sandbox prerequisites
     results.push(check_sandbox_tool("newuidmap", "uidmap"));
-    results.push(check_sandbox_tool("pasta",     "passt"));
+    results.push(check_sandbox_tool("pasta", "passt"));
 
     // 6. Database check
     let db_path = core.config.resolved_db_path();
@@ -519,7 +505,11 @@ mod tests {
         assert!(result.label.contains("Database OK"));
         // detail should include version number
         let detail = result.detail.unwrap();
-        assert!(detail.contains('v'), "expected version in detail: {}", detail);
+        assert!(
+            detail.contains('v'),
+            "expected version in detail: {}",
+            detail
+        );
     }
 
     #[test]

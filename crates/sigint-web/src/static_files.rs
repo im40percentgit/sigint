@@ -92,7 +92,7 @@ mod tests {
     use tower::ServiceExt;
 
     use sigint_agents::ScanService;
-    use sigint_core::{ApprovalRegistry, Config, event::EventBus};
+    use sigint_core::{event::EventBus, ApprovalRegistry, Config};
     use sigint_store::Database;
     use std::time::Duration;
 
@@ -108,7 +108,13 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
-        AppState { db: Arc::new(db), event_bus, config, approval_registry, scan_service }
+        AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+        }
     }
 
     async fn body_bytes(body: Body) -> Vec<u8> {
@@ -124,19 +130,20 @@ mod tests {
     #[tokio::test]
     async fn serves_index_html_at_root() {
         let app = create_router(test_state());
-        let req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers()
+        let ct = resp
+            .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert!(ct.contains("text/html"), "expected text/html, got: {ct}");
         let body = body_string(resp.into_body()).await;
-        assert!(body.contains("<div id=\"app\">"), "body did not contain SPA mount point");
+        assert!(
+            body.contains("<div id=\"app\">"),
+            "body did not contain SPA mount point"
+        );
     }
 
     #[tokio::test]
@@ -148,11 +155,15 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers()
+        let ct = resp
+            .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        assert!(ct.contains("javascript"), "expected JS content-type, got: {ct}");
+        assert!(
+            ct.contains("javascript"),
+            "expected JS content-type, got: {ct}"
+        );
         let bytes = body_bytes(resp.into_body()).await;
         assert!(!bytes.is_empty(), "JS bundle should not be empty");
     }
@@ -166,7 +177,8 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers()
+        let ct = resp
+            .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
@@ -183,11 +195,15 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers()
+        let ct = resp
+            .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        assert!(ct.contains("text/html"), "SPA fallback should return HTML, got: {ct}");
+        assert!(
+            ct.contains("text/html"),
+            "SPA fallback should return HTML, got: {ct}"
+        );
     }
 
     #[tokio::test]
@@ -201,8 +217,14 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_string(resp.into_body()).await;
-        assert!(body.contains("ok"), "health endpoint should return JSON status:ok, got: {body}");
+        assert!(
+            body.contains("ok"),
+            "health endpoint should return JSON status:ok, got: {body}"
+        );
         // Must NOT be an HTML page
-        assert!(!body.contains("<html"), "health should return JSON, not HTML");
+        assert!(
+            !body.contains("<html"),
+            "health should return JSON, not HTML"
+        );
     }
 }

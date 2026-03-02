@@ -217,7 +217,13 @@ mod tests {
             db.create_scan_record(&ScanRecord::new(sid, format!("tool{i}"), "{}"))
                 .unwrap();
         }
-        let page = db.scans_query().by_session(sid).limit(3).offset(1).list().unwrap();
+        let page = db
+            .scans_query()
+            .by_session(sid)
+            .limit(3)
+            .offset(1)
+            .list()
+            .unwrap();
         assert_eq!(page.len(), 3);
     }
 }

@@ -50,9 +50,8 @@ pub async fn run(core: AppCore, args: ReconArgs) -> Result<(), Error> {
     println!();
 
     let db_path = core.config.resolved_db_path();
-    let db = Database::open(&db_path).map_err(|e| {
-        Error::Database(format!("cannot open database at {:?}: {}", db_path, e))
-    })?;
+    let db = Database::open(&db_path)
+        .map_err(|e| Error::Database(format!("cannot open database at {:?}: {}", db_path, e)))?;
 
     // Create a session so the recon run is queryable via `sigint sessions`.
     let session_name = format!(
@@ -130,7 +129,9 @@ fn spawn_recon_printer(mut event_rx: tokio::sync::broadcast::Receiver<Event>) {
                 Ok(Event::AssetDiscovered(asset)) => {
                     println!("[recon] Found {:>13}: {}", asset.kind, asset.value);
                 }
-                Ok(Event::AssetChanged { field, old, new, .. }) => {
+                Ok(Event::AssetChanged {
+                    field, old, new, ..
+                }) => {
                     println!("[recon] Changed {}: {} -> {}", field, old, new);
                 }
                 Ok(Event::ReconCompleted { assets_found, .. }) => {
@@ -175,7 +176,11 @@ mod tests {
     #[test]
     fn parse_minimal_recon_command() {
         let cli = TestCli::parse_from(["sigint", "recon", "example.com"]);
-        let TestCommands::Recon { target, modules, watch } = cli.command;
+        let TestCommands::Recon {
+            target,
+            modules,
+            watch,
+        } = cli.command;
         assert_eq!(target, "example.com");
         assert!(modules.is_none());
         assert!(!watch);
@@ -184,7 +189,9 @@ mod tests {
     #[test]
     fn parse_recon_with_modules() {
         let cli = TestCli::parse_from(["sigint", "recon", "example.com", "--modules", "dns,cert"]);
-        let TestCommands::Recon { target, modules, .. } = cli.command;
+        let TestCommands::Recon {
+            target, modules, ..
+        } = cli.command;
         assert_eq!(target, "example.com");
         assert_eq!(modules.as_deref(), Some("dns,cert"));
     }

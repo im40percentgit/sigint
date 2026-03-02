@@ -27,7 +27,9 @@ async fn start_scan_returns_201() {
 
     assert_eq!(resp.status(), 201);
     let body: serde_json::Value = resp.json().await.unwrap();
-    let session_id = body["session_id"].as_str().expect("session_id should be a string");
+    let session_id = body["session_id"]
+        .as_str()
+        .expect("session_id should be a string");
     uuid::Uuid::parse_str(session_id).expect("session_id should be a valid UUID");
 }
 
@@ -71,7 +73,11 @@ async fn scan_status_after_start() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["session_id"], session_id);
-    assert!(body.get("status").is_some(), "expected 'status' field, got: {}", body);
+    assert!(
+        body.get("status").is_some(),
+        "expected 'status' field, got: {}",
+        body
+    );
 }
 
 /// GET /api/scan/{unknown}/status returns 404.
@@ -197,5 +203,9 @@ async fn scan_creates_session() {
         .unwrap()
         .iter()
         .any(|s| s["id"] == session_id);
-    assert!(found, "expected session {} in list: {}", session_id, sessions);
+    assert!(
+        found,
+        "expected session {} in list: {}",
+        session_id, sessions
+    );
 }

@@ -222,7 +222,10 @@ fn render_detailed(data: &ReportData) -> String {
         out.push_str("| Kind | Value | Services |\n");
         out.push_str("|------|-------|----------|\n");
         for a in &data.assets {
-            out.push_str(&format!("| {} | {} | {} |\n", a.kind, a.value, a.services_count));
+            out.push_str(&format!(
+                "| {} | {} | {} |\n",
+                a.kind, a.value, a.services_count
+            ));
         }
         out.push('\n');
     }
@@ -276,7 +279,10 @@ fn render_technical(data: &ReportData) -> String {
         out.push_str("| Kind | Value | Services Discovered |\n");
         out.push_str("|------|-------|--------------------|\n");
         for a in &data.assets {
-            out.push_str(&format!("| {} | {} | {} |\n", a.kind, a.value, a.services_count));
+            out.push_str(&format!(
+                "| {} | {} | {} |\n",
+                a.kind, a.value, a.services_count
+            ));
         }
         out.push('\n');
     }
@@ -346,13 +352,11 @@ mod tests {
                     evidence: None,
                 },
             ],
-            assets: vec![
-                AssetSummary {
-                    kind: "host".into(),
-                    value: "192.168.1.1".into(),
-                    services_count: 3,
-                },
-            ],
+            assets: vec![AssetSummary {
+                kind: "host".into(),
+                value: "192.168.1.1".into(),
+                services_count: 3,
+            }],
             scan_count: 5,
         }
     }
@@ -372,7 +376,10 @@ mod tests {
     fn build_executive_markdown() {
         let md = build_markdown(&sample_data(), ReportTemplate::Executive);
         // Must contain a header
-        assert!(md.contains("# SIGINT Security Report"), "missing main header");
+        assert!(
+            md.contains("# SIGINT Security Report"),
+            "missing main header"
+        );
         // Must contain summary table header
         assert!(md.contains("| Severity | Count |"), "missing summary table");
         // Severity column entries
@@ -394,13 +401,22 @@ mod tests {
     #[test]
     fn build_technical_markdown() {
         let md = build_markdown(&sample_data(), ReportTemplate::Technical);
-        assert!(md.contains("## Technical Findings"), "missing Technical Findings section");
+        assert!(
+            md.contains("## Technical Findings"),
+            "missing Technical Findings section"
+        );
         // Evidence block rendered as fenced code block
         assert!(md.contains("**Evidence:**"), "missing Evidence label");
         assert!(md.contains("```"), "missing code fence");
         // Asset inventory section
-        assert!(md.contains("## Asset Inventory"), "missing Asset Inventory section");
-        assert!(md.contains("Services Discovered"), "missing services column");
+        assert!(
+            md.contains("## Asset Inventory"),
+            "missing Asset Inventory section"
+        );
+        assert!(
+            md.contains("Services Discovered"),
+            "missing services column"
+        );
     }
 
     #[test]
@@ -418,9 +434,16 @@ mod tests {
 
     #[test]
     fn build_report_html() {
-        let bytes = build_report(&sample_data(), ReportTemplate::Executive, ReportFormat::Html);
+        let bytes = build_report(
+            &sample_data(),
+            ReportTemplate::Executive,
+            ReportFormat::Html,
+        );
         let html = String::from_utf8(bytes).expect("HTML should be valid UTF-8");
         assert!(html.contains("<html"), "HTML bytes should contain <html");
-        assert!(html.contains("</html>"), "HTML bytes should end with </html>");
+        assert!(
+            html.contains("</html>"),
+            "HTML bytes should end with </html>"
+        );
     }
 }

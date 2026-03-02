@@ -120,8 +120,7 @@ impl TuiApp {
             }
 
             // 4. Render frame.
-            self.terminal
-                .draw(|frame| ui::render(frame, &self.state))?;
+            self.terminal.draw(|frame| ui::render(frame, &self.state))?;
 
             // 5. Yield for tick duration to cap CPU usage at ~30fps.
             tokio::time::sleep(tick_rate).await;
@@ -158,7 +157,9 @@ impl TuiApp {
             }
 
             // Help overlay toggle.
-            (_, KeyCode::Char('?')) if !matches!(self.state.mode, Mode::Search(_) | Mode::Command(_)) => {
+            (_, KeyCode::Char('?'))
+                if !matches!(self.state.mode, Mode::Search(_) | Mode::Command(_)) =>
+            {
                 self.state.show_help = !self.state.show_help;
             }
 
@@ -190,19 +191,13 @@ impl TuiApp {
             }
 
             // Input panel text entry (Normal mode, Input panel focused).
-            (Mode::Normal, KeyCode::Char(c))
-                if self.state.focused_panel == Panel::Input =>
-            {
+            (Mode::Normal, KeyCode::Char(c)) if self.state.focused_panel == Panel::Input => {
                 self.state.input.push(c);
             }
-            (Mode::Normal, KeyCode::Backspace)
-                if self.state.focused_panel == Panel::Input =>
-            {
+            (Mode::Normal, KeyCode::Backspace) if self.state.focused_panel == Panel::Input => {
                 self.state.input.pop();
             }
-            (Mode::Normal, KeyCode::Enter)
-                if self.state.focused_panel == Panel::Input =>
-            {
+            (Mode::Normal, KeyCode::Enter) if self.state.focused_panel == Panel::Input => {
                 // TODO: route user input to agent pipeline via EventBus tx.
                 self.state.input.clear();
             }

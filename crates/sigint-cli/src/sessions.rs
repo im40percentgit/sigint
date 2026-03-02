@@ -241,7 +241,10 @@ mod tests {
         let result = export_session(&db, "not-a-uuid");
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("Invalid session ID"), "expected parse error in: {msg}");
+        assert!(
+            msg.contains("Invalid session ID"),
+            "expected parse error in: {msg}"
+        );
     }
 
     #[test]
@@ -291,7 +294,10 @@ mod tests {
         let result = delete_session(&db, "bad-uuid", true);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("Invalid session ID"), "expected parse error in: {msg}");
+        assert!(
+            msg.contains("Invalid session ID"),
+            "expected parse error in: {msg}"
+        );
     }
 
     // ── parse_uuid ────────────────────────────────────────────────────────────

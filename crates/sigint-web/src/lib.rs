@@ -39,13 +39,13 @@ pub mod ws;
 use std::sync::Arc;
 
 use axum::{
-    Router,
     routing::{delete, get, post},
+    Router,
 };
 use tower_http::cors::CorsLayer;
 
 use sigint_agents::ScanService;
-use sigint_core::{ApprovalRegistry, Config, event::EventBus};
+use sigint_core::{event::EventBus, ApprovalRegistry, Config};
 use sigint_store::Database;
 
 pub use state::AppState;
@@ -107,12 +107,12 @@ pub async fn serve(
         scan_service,
     };
     let app = create_router(state);
-    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
-        sigint_core::Error::Other(format!("Cannot bind to {}: {}", addr, e))
-    })?;
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| sigint_core::Error::Other(format!("Cannot bind to {}: {}", addr, e)))?;
     tracing::info!("SIGINT web server listening on {}", addr);
-    axum::serve(listener, app).await.map_err(|e| {
-        sigint_core::Error::Other(format!("Web server error: {}", e))
-    })?;
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| sigint_core::Error::Other(format!("Web server error: {}", e)))?;
     Ok(())
 }

@@ -12,8 +12,8 @@
 use crate::ollama::OllamaProvider;
 use crate::openai::OpenAiProvider;
 use crate::provider::LlmProvider;
-use sigint_core::Error;
 use sigint_core::config::LlmConfig;
+use sigint_core::Error;
 
 /// Create the appropriate `LlmProvider` for the given config.
 ///

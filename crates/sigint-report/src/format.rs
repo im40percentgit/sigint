@@ -55,9 +55,8 @@ const EMBEDDED_CSS: &str = r#"
 /// sending as an email attachment or saving as a standalone file.
 pub fn markdown_to_html(markdown: &str) -> String {
     // Enable extensions that the report templates use: tables and strikethrough.
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_HEADING_ATTRIBUTES;
+    let opts =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_HEADING_ATTRIBUTES;
 
     let parser = Parser::new_ext(markdown, opts);
 

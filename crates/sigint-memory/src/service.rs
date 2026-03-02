@@ -18,10 +18,10 @@
 //! Embeddings are optional so the service can be constructed without the
 //! ~80 MB fastembed model in tests and offline scenarios.
 
-use sigint_core::Error;
 use sigint_core::types::{Message, Role};
-use sigint_store::Database;
+use sigint_core::Error;
 use sigint_store::embeddings::EmbeddingService;
+use sigint_store::Database;
 use tracing::debug;
 
 use crate::types::{MemoryFragment, MemorySource};
@@ -87,10 +87,7 @@ impl MemoryService {
                 .iter()
                 .find(|m| m.content.starts_with("EPISODE_SUMMARY:"))
             {
-                let summary = msg
-                    .content
-                    .trim_start_matches("EPISODE_SUMMARY:")
-                    .trim();
+                let summary = msg.content.trim_start_matches("EPISODE_SUMMARY:").trim();
                 let token_est = MemoryFragment::estimate_tokens(summary);
                 fragments.push(MemoryFragment {
                     source: MemorySource::Episodic {
@@ -116,11 +113,7 @@ impl MemoryService {
     /// Retrieve semantically relevant fragments via cosine similarity.
     ///
     /// Returns empty if no `EmbeddingService` was provided at construction.
-    pub fn recall_semantic(
-        &self,
-        query: &str,
-        top_k: usize,
-    ) -> Result<Vec<MemoryFragment>, Error> {
+    pub fn recall_semantic(&self, query: &str, top_k: usize) -> Result<Vec<MemoryFragment>, Error> {
         let embeddings = match &self.embeddings {
             Some(e) => e,
             None => return Ok(Vec::new()),
@@ -131,9 +124,10 @@ impl MemoryService {
 
         let mut fragments = Vec::new();
         for result in results {
-            let texts = self
-                .store
-                .get_texts_for_embedding(&result.source_type, std::slice::from_ref(&result.source_id))?;
+            let texts = self.store.get_texts_for_embedding(
+                &result.source_type,
+                std::slice::from_ref(&result.source_id),
+            )?;
             if let Some(content) = texts.into_iter().next() {
                 let token_est = MemoryFragment::estimate_tokens(&content);
                 fragments.push(MemoryFragment {
@@ -298,17 +292,17 @@ mod tests {
         svc.store_episode(s1.id, "Other target summary").unwrap();
 
         let frags = svc.recall_episodic("example.com").unwrap();
-        assert!(frags.is_empty(), "should not return summaries for different targets");
+        assert!(
+            frags.is_empty(),
+            "should not return summaries for different targets"
+        );
     }
 
     // ── fit_to_budget ─────────────────────────────────────────────────────────
 
     #[test]
     fn fit_to_budget_includes_all_when_budget_sufficient() {
-        let frags = vec![
-            make_frag(50),
-            make_frag(30),
-        ];
+        let frags = vec![make_frag(50), make_frag(30)];
         let fitted = MemoryService::fit_to_budget(frags, 100);
         assert_eq!(fitted.len(), 2);
     }
@@ -358,9 +352,18 @@ mod tests {
             token_estimate: 12,
         }];
         let out = MemoryService::format_context(&frags);
-        assert!(out.contains("Prior Intelligence"), "should have section header");
-        assert!(out.contains("47 open ports"), "should include fragment content");
-        assert!(out.contains("example.com"), "should include target in session header");
+        assert!(
+            out.contains("Prior Intelligence"),
+            "should have section header"
+        );
+        assert!(
+            out.contains("47 open ports"),
+            "should include fragment content"
+        );
+        assert!(
+            out.contains("example.com"),
+            "should include target in session header"
+        );
     }
 
     #[test]

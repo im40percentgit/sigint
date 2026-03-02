@@ -135,14 +135,30 @@ impl Default for AgentConfig {
     }
 }
 
-fn default_provider() -> String { "ollama".into() }
-fn default_model() -> String { "llama3.2".into() }
-fn default_base_url() -> String { "http://localhost:11434".into() }
-fn default_temperature() -> f32 { 0.7 }
-fn default_db_path() -> String { "~/.local/share/sigint/sigint.db".into() }
-fn default_log_level() -> String { "sigint=info,warn".into() }
-fn default_auto_approve() -> String { "low".into() }
-fn default_approval_timeout() -> u64 { 300 }
+fn default_provider() -> String {
+    "ollama".into()
+}
+fn default_model() -> String {
+    "llama3.2".into()
+}
+fn default_base_url() -> String {
+    "http://localhost:11434".into()
+}
+fn default_temperature() -> f32 {
+    0.7
+}
+fn default_db_path() -> String {
+    "~/.local/share/sigint/sigint.db".into()
+}
+fn default_log_level() -> String {
+    "sigint=info,warn".into()
+}
+fn default_auto_approve() -> String {
+    "low".into()
+}
+fn default_approval_timeout() -> u64 {
+    300
+}
 
 // ── Loading ──────────────────────────────────────────────────────────────────
 
@@ -157,24 +173,20 @@ impl Config {
             tracing::debug!("No config file at {:?}, using defaults", path);
             return Ok(Self::default());
         }
-        let contents = std::fs::read_to_string(&path).map_err(|e| {
-            crate::Error::Config(format!("Cannot read {:?}: {}", path, e))
-        })?;
-        let config: Self = toml::from_str(&contents).map_err(|e| {
-            crate::Error::Config(format!("Cannot parse {:?}: {}", path, e))
-        })?;
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|e| crate::Error::Config(format!("Cannot read {:?}: {}", path, e)))?;
+        let config: Self = toml::from_str(&contents)
+            .map_err(|e| crate::Error::Config(format!("Cannot parse {:?}: {}", path, e)))?;
         tracing::debug!("Loaded config from {:?}", path);
         Ok(config)
     }
 
     /// Load from an explicit path (used in tests).
     pub fn load_from(path: &std::path::Path) -> crate::Result<Self> {
-        let contents = std::fs::read_to_string(path).map_err(|e| {
-            crate::Error::Config(format!("Cannot read {:?}: {}", path, e))
-        })?;
-        let config: Self = toml::from_str(&contents).map_err(|e| {
-            crate::Error::Config(format!("Cannot parse {:?}: {}", path, e))
-        })?;
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| crate::Error::Config(format!("Cannot read {:?}: {}", path, e)))?;
+        let config: Self = toml::from_str(&contents)
+            .map_err(|e| crate::Error::Config(format!("Cannot parse {:?}: {}", path, e)))?;
         Ok(config)
     }
 

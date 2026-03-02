@@ -23,10 +23,10 @@ use sigint_core::Error;
 
 use crate::embeddings::register_cosine_similarity_udf;
 use crate::migrations::run_migrations;
-use crate::query::sessions::SessionQuery;
 use crate::query::findings::FindingQuery;
 use crate::query::messages::MessageQuery;
 use crate::query::scans::ScanQuery;
+use crate::query::sessions::SessionQuery;
 
 /// Default pool size for file-backed databases.
 const FILE_POOL_SIZE: u32 = 4;
@@ -52,11 +52,12 @@ impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for ConnectionInit {
              PRAGMA cache_size = -8000;
              PRAGMA busy_timeout = 5000;",
         )?;
-        register_cosine_similarity_udf(conn)
-            .map_err(|e| rusqlite::Error::SqliteFailure(
+        register_cosine_similarity_udf(conn).map_err(|e| {
+            rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
                 Some(e.to_string()),
-            ))
+            )
+        })
     }
 }
 
@@ -83,9 +84,9 @@ impl Database {
 
         // Run migrations on a dedicated connection before returning.
         {
-            let conn = pool
-                .get()
-                .map_err(|e| Error::Database(format!("Cannot get connection for migrations: {e}")))?;
+            let conn = pool.get().map_err(|e| {
+                Error::Database(format!("Cannot get connection for migrations: {e}"))
+            })?;
             run_migrations(&conn)?;
         }
 
@@ -107,9 +108,9 @@ impl Database {
             .map_err(|e| Error::Database(format!("Cannot build in-memory pool: {e}")))?;
 
         {
-            let conn = pool
-                .get()
-                .map_err(|e| Error::Database(format!("Cannot get connection for migrations: {e}")))?;
+            let conn = pool.get().map_err(|e| {
+                Error::Database(format!("Cannot get connection for migrations: {e}"))
+            })?;
             run_migrations(&conn)?;
         }
 

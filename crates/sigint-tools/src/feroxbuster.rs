@@ -181,22 +181,34 @@ mod tests {
 
         // target is required
         let required = params["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "target"), "target should be required");
+        assert!(
+            required.iter().any(|v| v == "target"),
+            "target should be required"
+        );
 
         // target property exists and is a string
         assert_eq!(params["properties"]["target"]["type"], "string");
 
         // wordlist is optional (not in required array)
         assert!(params["properties"]["wordlist"].is_object());
-        assert!(!required.iter().any(|v| v == "wordlist"), "wordlist should be optional");
+        assert!(
+            !required.iter().any(|v| v == "wordlist"),
+            "wordlist should be optional"
+        );
 
         // extensions is optional
         assert!(params["properties"]["extensions"].is_object());
-        assert!(!required.iter().any(|v| v == "extensions"), "extensions should be optional");
+        assert!(
+            !required.iter().any(|v| v == "extensions"),
+            "extensions should be optional"
+        );
 
         // threads is optional integer
         assert_eq!(params["properties"]["threads"]["type"], "integer");
-        assert!(!required.iter().any(|v| v == "threads"), "threads should be optional");
+        assert!(
+            !required.iter().any(|v| v == "threads"),
+            "threads should be optional"
+        );
     }
 
     #[tokio::test]
@@ -238,6 +250,10 @@ mod tests {
             .await
             .expect("feroxbuster execution should not error");
         // feroxbuster exits 0 even when target is unreachable
-        assert_eq!(result.exit_code, 0, "feroxbuster should exit 0: {:?}", result.stderr);
+        assert_eq!(
+            result.exit_code, 0,
+            "feroxbuster should exit 0: {:?}",
+            result.stderr
+        );
     }
 }

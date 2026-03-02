@@ -7,22 +7,22 @@
 //! rusqlite `bundled` compiles SQLite into the binary, eliminating the
 //! system libsqlite3 dependency. WAL mode enables concurrent reads.
 
-pub mod db;
-pub mod migrations;
-pub mod sessions;
-pub mod messages;
-pub mod scans;
-pub mod findings;
 pub mod assets;
-pub mod query;
-pub mod search;
+pub mod db;
 pub mod embeddings;
+pub mod findings;
+pub mod messages;
+pub mod migrations;
+pub mod query;
+pub mod scans;
+pub mod search;
+pub mod sessions;
 pub mod worker;
 
 pub use db::Database;
+pub use embeddings::{cosine_similarity, EmbeddingService, SemanticResult};
 pub use scans::ScanRecord;
 pub use search::SearchResult;
-pub use embeddings::{EmbeddingService, SemanticResult, cosine_similarity};
 pub use worker::embedding_worker;
 
 #[cfg(test)]

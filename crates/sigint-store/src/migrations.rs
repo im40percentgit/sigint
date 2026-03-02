@@ -254,8 +254,15 @@ mod tests {
         run_migrations(&conn).unwrap();
 
         let expected_tables = [
-            "sessions", "messages", "tasks", "findings", "assets",
-            "asset_services", "asset_changes", "scan_history", "embeddings",
+            "sessions",
+            "messages",
+            "tasks",
+            "findings",
+            "assets",
+            "asset_services",
+            "asset_changes",
+            "scan_history",
+            "embeddings",
         ];
 
         for table in &expected_tables {
@@ -299,7 +306,11 @@ mod tests {
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert_eq!(count, 1, "FTS5 table '{}' should exist after migration 2", table);
+            assert_eq!(
+                count, 1,
+                "FTS5 table '{}' should exist after migration 2",
+                table
+            );
         }
     }
 
@@ -309,9 +320,15 @@ mod tests {
         run_migrations(&conn).unwrap();
 
         let expected_triggers = [
-            "messages_fts_ai", "messages_fts_ad", "messages_fts_au",
-            "findings_fts_ai", "findings_fts_ad", "findings_fts_au",
-            "scan_history_fts_ai", "scan_history_fts_ad", "scan_history_fts_au",
+            "messages_fts_ai",
+            "messages_fts_ad",
+            "messages_fts_au",
+            "findings_fts_ai",
+            "findings_fts_ad",
+            "findings_fts_au",
+            "scan_history_fts_ai",
+            "scan_history_fts_ad",
+            "scan_history_fts_au",
         ];
 
         for trigger in &expected_triggers {
@@ -322,7 +339,11 @@ mod tests {
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert_eq!(count, 1, "Trigger '{}' should exist after migration 2", trigger);
+            assert_eq!(
+                count, 1,
+                "Trigger '{}' should exist after migration 2",
+                trigger
+            );
         }
     }
 }

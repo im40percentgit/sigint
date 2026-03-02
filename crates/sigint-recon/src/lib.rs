@@ -15,8 +15,8 @@
 //! with remaining modules. This ensures a single broken tool doesn't abort the whole
 //! recon run. Parallel execution can be added later by spawning tokio tasks per module.
 
-pub mod change;
 pub mod cert;
+pub mod change;
 pub mod correlator;
 pub mod dns;
 pub mod error;
@@ -34,10 +34,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
-    change::ChangeDetector,
-    correlator::Correlator,
-    error::ReconError,
-    module::DiscoveryModule,
+    change::ChangeDetector, correlator::Correlator, error::ReconError, module::DiscoveryModule,
 };
 
 /// Orchestrates discovery modules, asset persistence, correlation, and change detection.
@@ -72,7 +69,11 @@ impl<'a> ReconEngine<'a> {
             Box::new(cert::CertModule),
             Box::new(osint::OsintModule),
         ];
-        Self { modules, store, event_bus }
+        Self {
+            modules,
+            store,
+            event_bus,
+        }
     }
 
     /// Create a ReconEngine with only the named modules enabled.
@@ -97,7 +98,11 @@ impl<'a> ReconEngine<'a> {
             .filter(|m| module_names.contains(&m.name()))
             .collect();
 
-        Self { modules, store, event_bus }
+        Self {
+            modules,
+            store,
+            event_bus,
+        }
     }
 
     /// Run all configured modules against `target` for `session_id`.
@@ -111,11 +116,7 @@ impl<'a> ReconEngine<'a> {
     /// 6. Emit `AssetDiscovered` for each new asset
     /// 7. Emit `ReconCompleted`
     /// 8. Return the full deduplicated asset list
-    pub async fn run(
-        &self,
-        target: &str,
-        session_id: Uuid,
-    ) -> Result<Vec<Asset>, ReconError> {
+    pub async fn run(&self, target: &str, session_id: Uuid) -> Result<Vec<Asset>, ReconError> {
         if self.modules.is_empty() {
             return Err(ReconError::NoModules);
         }
@@ -166,7 +167,10 @@ impl<'a> ReconEngine<'a> {
         match detector.detect_and_record(session_id, &correlation.assets) {
             Ok(changes) => {
                 if changes > 0 {
-                    info!(changes, "recon: change detection recorded {} changes", changes);
+                    info!(
+                        changes,
+                        "recon: change detection recorded {} changes", changes
+                    );
                 }
             }
             Err(e) => warn!(error = %e, "recon: change detection failed (continuing)"),
@@ -186,7 +190,8 @@ impl<'a> ReconEngine<'a> {
                 Ok((stored_asset, is_new)) => {
                     if is_new {
                         new_count += 1;
-                        self.event_bus.emit(Event::AssetDiscovered(stored_asset.clone()));
+                        self.event_bus
+                            .emit(Event::AssetDiscovered(stored_asset.clone()));
                     }
                     persisted_assets.push(stored_asset);
                 }
@@ -234,7 +239,10 @@ mod tests {
         }
 
         fn empty(name: &'static str) -> Self {
-            Self { name, assets: vec![] }
+            Self {
+                name,
+                assets: vec![],
+            }
         }
     }
 
@@ -346,7 +354,13 @@ mod tests {
         assert!(matches!(e1, Event::ReconStarted { .. }));
 
         let e2 = rx.recv().await.unwrap();
-        assert!(matches!(e2, Event::ReconCompleted { assets_found: 0, .. }));
+        assert!(matches!(
+            e2,
+            Event::ReconCompleted {
+                assets_found: 0,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -420,7 +434,13 @@ mod tests {
         assert!(matches!(e2, Event::AssetDiscovered(_)));
 
         let e3 = rx.recv().await.unwrap();
-        assert!(matches!(e3, Event::ReconCompleted { assets_found: 1, .. }));
+        assert!(matches!(
+            e3,
+            Event::ReconCompleted {
+                assets_found: 1,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

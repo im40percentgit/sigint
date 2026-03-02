@@ -8,17 +8,17 @@
 //! changing call sites. Ollama is default (local privacy); OpenAI-compatible
 //! cloud providers are supported via the openai module added in Phase 5B.
 
-pub mod provider;
+pub mod factory;
 pub mod ollama;
 pub mod openai;
-pub mod factory;
+pub mod provider;
 pub mod types;
 
-pub use provider::LlmProvider;
+pub use factory::create_provider;
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
-pub use factory::create_provider;
+pub use provider::LlmProvider;
 pub use types::{
-    ChatMessage, ChatRequest, ChatResponse, StreamChunk, TokenUsage,
-    ToolDefinition, FunctionDef, ToolCall, FunctionCall,
+    ChatMessage, ChatRequest, ChatResponse, FunctionCall, FunctionDef, StreamChunk, TokenUsage,
+    ToolCall, ToolDefinition,
 };

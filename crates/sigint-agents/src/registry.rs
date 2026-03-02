@@ -179,7 +179,11 @@ mod tests {
         reg.register(Box::new(FakeTool::new("nmap_scan")));
         reg.register(Box::new(FakeTool::new("nmap_scan"))); // replace
         assert!(reg.get("nmap_scan").is_some());
-        assert_eq!(reg.definitions().len(), 1, "should still have exactly one entry");
+        assert_eq!(
+            reg.definitions().len(),
+            1,
+            "should still have exactly one entry"
+        );
     }
 
     #[test]

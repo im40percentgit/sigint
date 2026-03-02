@@ -417,7 +417,12 @@ mod tests {
     #[test]
     fn finding_severity() {
         let sid = Uuid::new_v4();
-        let f = Finding::new(sid, "SQL Injection", "Unparameterized query", Severity::Critical);
+        let f = Finding::new(
+            sid,
+            "SQL Injection",
+            "Unparameterized query",
+            Severity::Critical,
+        );
         assert_eq!(f.severity, Severity::Critical);
         assert_eq!(f.severity.to_string(), "critical");
     }

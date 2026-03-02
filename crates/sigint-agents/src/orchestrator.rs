@@ -42,7 +42,7 @@ use std::sync::Arc;
 
 use tracing::info;
 
-use sigint_core::{Error, event::EventBus};
+use sigint_core::{event::EventBus, Error};
 use sigint_llm::provider::LlmProvider;
 use sigint_memory::MemoryService;
 
@@ -154,19 +154,22 @@ impl Orchestrator {
         let researcher = ResearcherAgent::new();
         info!("orchestrator: running researcher agent");
         let researcher_output = self.run_agent(&researcher, &mut ctx).await?;
-        ctx.agent_outputs.insert(AgentRole::Researcher, researcher_output);
+        ctx.agent_outputs
+            .insert(AgentRole::Researcher, researcher_output);
 
         // ── 2. Strategist ────────────────────────────────────────────────────
         let strategist = StrategistAgent::new();
         info!("orchestrator: running strategist agent");
         let strategist_output = self.run_agent(&strategist, &mut ctx).await?;
-        ctx.agent_outputs.insert(AgentRole::Strategist, strategist_output);
+        ctx.agent_outputs
+            .insert(AgentRole::Strategist, strategist_output);
 
         // ── 3. Executor ──────────────────────────────────────────────────────
         let executor = ExecutorAgent::new();
         info!("orchestrator: running executor agent");
         let executor_output = self.run_agent(&executor, &mut ctx).await?;
-        ctx.agent_outputs.insert(AgentRole::Executor, executor_output);
+        ctx.agent_outputs
+            .insert(AgentRole::Executor, executor_output);
 
         // ── 4. Analyst ───────────────────────────────────────────────────────
         let analyst = AnalystAgent::new();
@@ -192,15 +195,13 @@ impl Orchestrator {
     /// 3. Retrieves (tool references, tool definitions) from the registry filtered
     ///    by `agent.allowed_tools()`.
     /// 4. Runs `run_tool_loop` to completion and returns the text result.
-    async fn run_agent(
-        &self,
-        agent: &dyn Agent,
-        ctx: &mut TaskContext,
-    ) -> Result<String, Error> {
+    async fn run_agent(&self, agent: &dyn Agent, ctx: &mut TaskContext) -> Result<String, Error> {
         let mut state = ConversationState::new(self.context_window);
 
         // System prompt defines the agent's identity and behavioral constraints.
-        state.add_message(sigint_llm::types::ChatMessage::system(agent.system_prompt()));
+        state.add_message(sigint_llm::types::ChatMessage::system(
+            agent.system_prompt(),
+        ));
 
         // Inject memory context as a second system message, immediately after
         // the agent's own system prompt and before the user prompt. This gives
@@ -426,7 +427,9 @@ mod tests {
 
         #[async_trait]
         impl LlmProvider for FailingProvider {
-            fn name(&self) -> &str { "failing" }
+            fn name(&self) -> &str {
+                "failing"
+            }
             async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, Error> {
                 Err(Error::Llm("provider unavailable".into()))
             }

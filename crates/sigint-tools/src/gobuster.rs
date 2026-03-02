@@ -197,7 +197,10 @@ mod tests {
 
         // target is required
         let required = params["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "target"), "target should be required");
+        assert!(
+            required.iter().any(|v| v == "target"),
+            "target should be required"
+        );
 
         // target property exists and is a string
         assert_eq!(params["properties"]["target"]["type"], "string");
@@ -210,7 +213,10 @@ mod tests {
 
         // wordlist is optional (not in required array)
         assert!(params["properties"]["wordlist"].is_object());
-        assert!(!required.iter().any(|v| v == "wordlist"), "wordlist should be optional");
+        assert!(
+            !required.iter().any(|v| v == "wordlist"),
+            "wordlist should be optional"
+        );
     }
 
     #[tokio::test]
@@ -263,6 +269,10 @@ mod tests {
             .await
             .expect("gobuster execution should not error");
         // gobuster exits 0 even when no results are found
-        assert_eq!(result.exit_code, 0, "gobuster should exit 0: {:?}", result.stderr);
+        assert_eq!(
+            result.exit_code, 0,
+            "gobuster should exit 0: {:?}",
+            result.stderr
+        );
     }
 }

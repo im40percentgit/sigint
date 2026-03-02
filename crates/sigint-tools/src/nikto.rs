@@ -150,14 +150,20 @@ mod tests {
 
         // target is required
         let required = params["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "target"), "target should be required");
+        assert!(
+            required.iter().any(|v| v == "target"),
+            "target should be required"
+        );
 
         // target property exists and is a string
         assert_eq!(params["properties"]["target"]["type"], "string");
 
         // tuning is optional (not in required array)
         assert!(params["properties"]["tuning"].is_object());
-        assert!(!required.iter().any(|v| v == "tuning"), "tuning should be optional");
+        assert!(
+            !required.iter().any(|v| v == "tuning"),
+            "tuning should be optional"
+        );
     }
 
     #[tokio::test]

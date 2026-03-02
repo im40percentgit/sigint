@@ -28,7 +28,7 @@ pub mod builder;
 pub mod format;
 
 pub use builder::{
-    AssetSummary, FindingSummary, ReportData, ReportFormat, ReportTemplate,
-    build_markdown, build_report,
+    build_markdown, build_report, AssetSummary, FindingSummary, ReportData, ReportFormat,
+    ReportTemplate,
 };
 pub use format::markdown_to_html;

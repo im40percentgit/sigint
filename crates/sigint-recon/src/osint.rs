@@ -78,7 +78,11 @@ impl OsintModule {
                     }
                 }
                 "name server" | "nameserver" | "nserver" => {
-                    let ns = value.split_whitespace().next().unwrap_or(&value).to_ascii_lowercase();
+                    let ns = value
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(&value)
+                        .to_ascii_lowercase();
                     if !ns.is_empty() && !result.nameservers.contains(&ns) {
                         result.nameservers.push(ns);
                     }
@@ -101,11 +105,7 @@ impl OsintModule {
     }
 
     /// Build an enriched Domain asset from whois results.
-    pub(crate) fn whois_to_asset(
-        target: &str,
-        whois: &ParsedWhois,
-        session_id: Uuid,
-    ) -> Asset {
+    pub(crate) fn whois_to_asset(target: &str, whois: &ParsedWhois, session_id: Uuid) -> Asset {
         let metadata = serde_json::json!({
             "source": "whois",
             "registrar": whois.registrar,
@@ -144,9 +144,7 @@ impl DiscoveryModule for OsintModule {
             .unwrap_or(target)
             .to_string();
 
-        let cmd = SandboxProfile::recon()
-            .apply("whois")
-            .arg(&domain);
+        let cmd = SandboxProfile::recon().apply("whois").arg(&domain);
 
         let output = tokio::task::spawn_blocking(move || cmd.execute())
             .await
@@ -189,7 +187,10 @@ Registrant Organization: Internet Assigned Numbers Authority
         assert_eq!(w.nameservers.len(), 2);
         assert!(w.nameservers.contains(&"a.iana-servers.net".to_string()));
         assert!(w.nameservers.contains(&"b.iana-servers.net".to_string()));
-        assert_eq!(w.registrant_org.as_deref(), Some("Internet Assigned Numbers Authority"));
+        assert_eq!(
+            w.registrant_org.as_deref(),
+            Some("Internet Assigned Numbers Authority")
+        );
     }
 
     #[test]

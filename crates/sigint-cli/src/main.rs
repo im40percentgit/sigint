@@ -103,9 +103,7 @@ async fn main() {
     };
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_env("SIGINT_LOG").unwrap_or_else(|_| {
-                EnvFilter::new(filter)
-            }),
+            EnvFilter::try_from_env("SIGINT_LOG").unwrap_or_else(|_| EnvFilter::new(filter)),
         )
         .with_target(false)
         .init();
@@ -123,13 +121,30 @@ async fn main() {
         Commands::Chat(args) => chat::run(core, args).await,
         Commands::Doctor => doctor::run(core).await,
         Commands::Sessions(args) => sessions::run(core, args).await,
-        Commands::Scan { target, model, max_iterations, tui, no_tui, .. } => {
-            scan::run(core, target, model, max_iterations, tui, no_tui).await
-        }
+        Commands::Scan {
+            target,
+            model,
+            max_iterations,
+            tui,
+            no_tui,
+            ..
+        } => scan::run(core, target, model, max_iterations, tui, no_tui).await,
         Commands::Report(args) => report::run(core, args).await,
         Commands::Serve { bind } => serve::run(core, &bind).await,
-        Commands::Recon { target, modules, watch } => {
-            recon::run(core, recon::ReconArgs { target, modules, watch }).await
+        Commands::Recon {
+            target,
+            modules,
+            watch,
+        } => {
+            recon::run(
+                core,
+                recon::ReconArgs {
+                    target,
+                    modules,
+                    watch,
+                },
+            )
+            .await
         }
     };
 

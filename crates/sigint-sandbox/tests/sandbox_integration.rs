@@ -18,13 +18,13 @@
 //! The nmap test is #[ignore] so CI doesn't require passt/network access,
 //! but it can be run manually to prove the full Pasta networking path works.
 
-use sigint_sandbox::{NetworkMode, SandboxedCommand, SandboxError};
+use sigint_sandbox::{NetworkMode, SandboxError, SandboxedCommand};
 
 /// Returns true when newuidmap is on PATH (required by hakoniwa's uid mapping step).
 fn sandbox_available() -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|d| d.join("newuidmap").is_file())
-    }) || std::path::Path::new("/usr/bin/newuidmap").exists()
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join("newuidmap").is_file()))
+        || std::path::Path::new("/usr/bin/newuidmap").exists()
         || std::path::Path::new("/usr/sbin/newuidmap").exists()
 }
 
@@ -41,7 +41,11 @@ fn echo_hello_in_sandbox() {
         .execute()
         .expect("sandboxed echo should succeed");
 
-    assert!(out.success, "expected success, got exit_code={}", out.exit_code);
+    assert!(
+        out.success,
+        "expected success, got exit_code={}",
+        out.exit_code
+    );
     assert_eq!(out.stdout.trim(), "hello");
     assert_eq!(out.exit_code, 0);
     assert!(out.stderr.is_empty() || out.stderr.trim().is_empty());
@@ -136,7 +140,11 @@ fn echo_with_pasta_works() {
         .execute()
         .expect("echo with Pasta should not error");
 
-    assert!(out.success, "exit_code={}, stderr={}", out.exit_code, out.stderr);
+    assert!(
+        out.success,
+        "exit_code={}, stderr={}",
+        out.exit_code, out.stderr
+    );
     assert_eq!(out.stdout.trim(), "pasta-ok");
 }
 
@@ -157,8 +165,7 @@ fn dig_dns_lookup_via_pasta() {
     assert!(
         out.success,
         "dig exited with code {}. stderr: {}",
-        out.exit_code,
-        out.stderr
+        out.exit_code, out.stderr
     );
     assert!(
         !out.stdout.trim().is_empty(),
@@ -183,8 +190,7 @@ fn nmap_scan_scanme_via_pasta() {
     assert!(
         out.success,
         "nmap exited with code {}. stderr: {}",
-        out.exit_code,
-        out.stderr
+        out.exit_code, out.stderr
     );
     assert!(
         out.stdout.contains("Nmap scan report"),

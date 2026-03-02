@@ -121,7 +121,13 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .map_err(|e| Error::Database(format!("Invalid timestamp: {}", e)))?;
 
-    Ok(Session { id, name, target, created_at, updated_at })
+    Ok(Session {
+        id,
+        name,
+        target,
+        created_at,
+        updated_at,
+    })
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sigint_agents::ScanService;
-use sigint_core::{ApprovalRegistry, Config, event::EventBus};
+use sigint_core::{event::EventBus, ApprovalRegistry, Config};
 use sigint_store::Database;
 use sigint_web::AppState;
 

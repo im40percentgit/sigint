@@ -85,8 +85,13 @@ mod tests {
     fn no_changes_when_metadata_same() {
         let (db, sid) = setup_db();
         // Store the asset with initial metadata
-        db.upsert_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::json!({"os": "Linux"}))
-            .unwrap();
+        db.upsert_asset(
+            sid,
+            AssetKind::Host,
+            "10.0.0.1",
+            serde_json::json!({"os": "Linux"}),
+        )
+        .unwrap();
 
         // New asset with same metadata
         let new_asset = Asset {
@@ -107,12 +112,14 @@ mod tests {
     fn detects_metadata_change() {
         let (db, sid) = setup_db();
         // Store with old metadata
-        let (stored, _) = db.upsert_asset(
-            sid,
-            AssetKind::Host,
-            "10.0.0.1",
-            serde_json::json!({"os": "unknown"}),
-        ).unwrap();
+        let (stored, _) = db
+            .upsert_asset(
+                sid,
+                AssetKind::Host,
+                "10.0.0.1",
+                serde_json::json!({"os": "unknown"}),
+            )
+            .unwrap();
 
         // New asset with different metadata
         let new_asset = Asset {
@@ -156,9 +163,9 @@ mod tests {
     #[test]
     fn null_to_json_is_change() {
         let (db, sid) = setup_db();
-        let (stored, _) = db.upsert_asset(
-            sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null,
-        ).unwrap();
+        let (stored, _) = db
+            .upsert_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null)
+            .unwrap();
 
         let new_asset = Asset {
             id: Uuid::new_v4(),
@@ -181,13 +188,25 @@ mod tests {
     fn only_changed_assets_are_recorded() {
         let (db, sid) = setup_db();
 
-        db.upsert_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::json!({"os": "Linux"})).unwrap();
-        let (domain_asset, _) = db.upsert_asset(
-            sid, AssetKind::Domain, "example.com", serde_json::json!({"registrar": "ICANN"}),
-        ).unwrap();
+        db.upsert_asset(
+            sid,
+            AssetKind::Host,
+            "10.0.0.1",
+            serde_json::json!({"os": "Linux"}),
+        )
+        .unwrap();
+        let (domain_asset, _) = db
+            .upsert_asset(
+                sid,
+                AssetKind::Domain,
+                "example.com",
+                serde_json::json!({"registrar": "ICANN"}),
+            )
+            .unwrap();
 
         let new_assets = vec![
-            Asset { // unchanged
+            Asset {
+                // unchanged
                 id: Uuid::new_v4(),
                 session_id: sid,
                 kind: AssetKind::Host,
@@ -195,7 +214,8 @@ mod tests {
                 metadata: serde_json::json!({"os": "Linux"}),
                 discovered_at: chrono::Utc::now(),
             },
-            Asset { // changed
+            Asset {
+                // changed
                 id: Uuid::new_v4(),
                 session_id: sid,
                 kind: AssetKind::Domain,

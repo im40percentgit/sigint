@@ -227,7 +227,9 @@ impl SandboxedCommand {
             .map_err(|e| {
                 let msg = e.to_string();
                 // hakoniwa surfaces timeout as a specific error string.
-                if msg.to_lowercase().contains("timeout") || msg.to_lowercase().contains("timed out") {
+                if msg.to_lowercase().contains("timeout")
+                    || msg.to_lowercase().contains("timed out")
+                {
                     SandboxError::Timeout(self.timeout_secs)
                 } else {
                     SandboxError::Execution(msg)
@@ -297,8 +299,7 @@ mod tests {
         std::path::Path::new("/usr/bin/newuidmap").exists()
             || std::path::Path::new("/usr/sbin/newuidmap").exists()
             || std::env::var_os("PATH").is_some_and(|paths| {
-                std::env::split_paths(&paths)
-                    .any(|d| d.join("newuidmap").is_file())
+                std::env::split_paths(&paths).any(|d| d.join("newuidmap").is_file())
             })
     }
 
@@ -371,8 +372,7 @@ mod tests {
         assert!(
             out.success,
             "/dev/null write failed (exit {}): {}",
-            out.exit_code,
-            out.stderr
+            out.exit_code, out.stderr
         );
         assert_eq!(out.stdout.trim(), "success");
     }

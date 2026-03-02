@@ -103,7 +103,10 @@ mod tests {
         let r = make_result("hello", "", 0);
         let s = r.to_string();
         assert!(s.contains("exit: 0"), "should contain exit code: {s}");
-        assert!(s.contains("duration: 123ms"), "should contain duration: {s}");
+        assert!(
+            s.contains("duration: 123ms"),
+            "should contain duration: {s}"
+        );
     }
 
     #[test]
@@ -118,7 +121,10 @@ mod tests {
         let r = make_result("", "error line 1\nerror line 2", 1);
         let s = r.to_string();
         assert!(s.contains("[stderr: error line 1]"), "stderr missing: {s}");
-        assert!(!s.contains("error line 2"), "only first stderr line should appear: {s}");
+        assert!(
+            !s.contains("error line 2"),
+            "only first stderr line should appear: {s}"
+        );
     }
 
     #[test]
@@ -126,7 +132,10 @@ mod tests {
         let long = "x".repeat(5000);
         let r = make_result(&long, "", 0);
         let s = r.to_string();
-        assert!(s.contains("truncated at 4 KB"), "truncation marker missing: {s}");
+        assert!(
+            s.contains("truncated at 4 KB"),
+            "truncation marker missing: {s}"
+        );
     }
 
     #[test]

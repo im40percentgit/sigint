@@ -73,7 +73,8 @@ mod tests {
         let core = AppCore::default_for_test();
         let mut rx = core.events.subscribe();
 
-        core.events.emit(crate::event::Event::Status("ready".into()));
+        core.events
+            .emit(crate::event::Event::Status("ready".into()));
 
         let ev = rx.recv().await.unwrap();
         assert!(matches!(ev, crate::event::Event::Status(_)));

@@ -160,7 +160,7 @@ impl TaskContext {
 mod tests {
     use super::*;
     use crate::agents::{
-        AnalystAgent, ExecutorAgent, ResearcherAgent, ReporterAgent, StrategistAgent,
+        AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, StrategistAgent,
     };
 
     #[test]
@@ -177,7 +177,10 @@ mod tests {
         let ctx = TaskContext::new("10.0.0.1");
         let agent = ResearcherAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
-        assert!(prompt.contains("10.0.0.1"), "prompt missing target: {prompt}");
+        assert!(
+            prompt.contains("10.0.0.1"),
+            "prompt missing target: {prompt}"
+        );
         assert!(
             prompt.to_lowercase().contains("reconnaissance"),
             "researcher prompt should mention reconnaissance: {prompt}"
@@ -193,8 +196,14 @@ mod tests {
         );
         let agent = StrategistAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
-        assert!(prompt.contains("Found open ports"), "strategist should see researcher output");
-        assert!(prompt.contains("attack strategy") || prompt.contains("plan"), "strategist prompt should mention planning");
+        assert!(
+            prompt.contains("Found open ports"),
+            "strategist should see researcher output"
+        );
+        assert!(
+            prompt.contains("attack strategy") || prompt.contains("plan"),
+            "strategist prompt should mention planning"
+        );
     }
 
     #[test]
@@ -206,7 +215,10 @@ mod tests {
         );
         let agent = ExecutorAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
-        assert!(prompt.contains("Run nmap full port scan"), "executor should see strategist output");
+        assert!(
+            prompt.contains("Run nmap full port scan"),
+            "executor should see strategist output"
+        );
     }
 
     #[test]
@@ -218,9 +230,13 @@ mod tests {
         );
         let agent = AnalystAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
-        assert!(prompt.contains("PORT 22/tcp"), "analyst should see executor output");
         assert!(
-            prompt.to_lowercase().contains("vulnerabilit") || prompt.to_lowercase().contains("finding"),
+            prompt.contains("PORT 22/tcp"),
+            "analyst should see executor output"
+        );
+        assert!(
+            prompt.to_lowercase().contains("vulnerabilit")
+                || prompt.to_lowercase().contains("finding"),
             "analyst prompt should mention findings"
         );
     }
@@ -228,16 +244,32 @@ mod tests {
     #[test]
     fn reporter_prompt_includes_all_outputs() {
         let mut ctx = TaskContext::new("example.com");
-        ctx.agent_outputs.insert(AgentRole::Researcher, "recon data".to_string());
-        ctx.agent_outputs.insert(AgentRole::Strategist, "strategy data".to_string());
-        ctx.agent_outputs.insert(AgentRole::Executor, "tool output data".to_string());
-        ctx.agent_outputs.insert(AgentRole::Analyst, "analysis data".to_string());
+        ctx.agent_outputs
+            .insert(AgentRole::Researcher, "recon data".to_string());
+        ctx.agent_outputs
+            .insert(AgentRole::Strategist, "strategy data".to_string());
+        ctx.agent_outputs
+            .insert(AgentRole::Executor, "tool output data".to_string());
+        ctx.agent_outputs
+            .insert(AgentRole::Analyst, "analysis data".to_string());
         let agent = ReporterAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
-        assert!(prompt.contains("recon data"), "reporter should see researcher output");
-        assert!(prompt.contains("strategy data"), "reporter should see strategist output");
-        assert!(prompt.contains("tool output data"), "reporter should see executor output");
-        assert!(prompt.contains("analysis data"), "reporter should see analyst output");
+        assert!(
+            prompt.contains("recon data"),
+            "reporter should see researcher output"
+        );
+        assert!(
+            prompt.contains("strategy data"),
+            "reporter should see strategist output"
+        );
+        assert!(
+            prompt.contains("tool output data"),
+            "reporter should see executor output"
+        );
+        assert!(
+            prompt.contains("analysis data"),
+            "reporter should see analyst output"
+        );
         assert!(
             prompt.to_lowercase().contains("report"),
             "reporter prompt should mention report"
@@ -249,25 +281,34 @@ mod tests {
         let ctx = TaskContext::new("example.com");
         let agent = StrategistAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
-        assert!(prompt.contains("no researcher output yet"), "should show fallback text");
+        assert!(
+            prompt.contains("no researcher output yet"),
+            "should show fallback text"
+        );
     }
 
     #[test]
     fn agent_outputs_serialization_roundtrip() {
         let mut ctx = TaskContext::new("example.com");
-        ctx.agent_outputs.insert(AgentRole::Researcher, "recon results".to_string());
-        ctx.agent_outputs.insert(AgentRole::Analyst, "analysis results".to_string());
+        ctx.agent_outputs
+            .insert(AgentRole::Researcher, "recon results".to_string());
+        ctx.agent_outputs
+            .insert(AgentRole::Analyst, "analysis results".to_string());
 
         let json = serde_json::to_string(&ctx).unwrap();
         let back: TaskContext = serde_json::from_str(&json).unwrap();
 
         assert_eq!(back.target, "example.com");
         assert_eq!(
-            back.agent_outputs.get(&AgentRole::Researcher).map(String::as_str),
+            back.agent_outputs
+                .get(&AgentRole::Researcher)
+                .map(String::as_str),
             Some("recon results")
         );
         assert_eq!(
-            back.agent_outputs.get(&AgentRole::Analyst).map(String::as_str),
+            back.agent_outputs
+                .get(&AgentRole::Analyst)
+                .map(String::as_str),
             Some("analysis results")
         );
     }

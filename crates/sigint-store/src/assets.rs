@@ -41,7 +41,14 @@ fn row_to_asset(row: &rusqlite::Row<'_>) -> Result<Asset, Error> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .map_err(|e| Error::Database(format!("Invalid timestamp '{discovered_at_str}': {e}")))?;
 
-    Ok(Asset { id, session_id, kind, value, metadata, discovered_at })
+    Ok(Asset {
+        id,
+        session_id,
+        kind,
+        value,
+        metadata,
+        discovered_at,
+    })
 }
 
 fn row_to_service(row: &rusqlite::Row<'_>) -> Result<AssetService, Error> {
@@ -66,7 +73,16 @@ fn row_to_service(row: &rusqlite::Row<'_>) -> Result<AssetService, Error> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .map_err(|e| Error::Database(format!("Invalid timestamp '{discovered_at_str}': {e}")))?;
 
-    Ok(AssetService { id, asset_id, port, protocol, service, version, banner, discovered_at })
+    Ok(AssetService {
+        id,
+        asset_id,
+        port,
+        protocol,
+        service,
+        version,
+        banner,
+        discovered_at,
+    })
 }
 
 fn row_to_change(row: &rusqlite::Row<'_>) -> Result<AssetChange, Error> {
@@ -92,7 +108,14 @@ fn row_to_change(row: &rusqlite::Row<'_>) -> Result<AssetChange, Error> {
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .map_err(|e| Error::Database(format!("Invalid timestamp '{changed_at_str}': {e}")))?;
 
-    Ok(AssetChange { id, asset_id, field, old_value, new_value, changed_at })
+    Ok(AssetChange {
+        id,
+        asset_id,
+        field,
+        old_value,
+        new_value,
+        changed_at,
+    })
 }
 
 // ── Database impl ─────────────────────────────────────────────────────────────
@@ -146,9 +169,7 @@ impl Database {
                 .map_err(|e| Error::Database(e.to_string()))?;
 
             let assets = stmt
-                .query_map(params![session_id.to_string()], |row| {
-                    Ok(row_to_asset(row))
-                })
+                .query_map(params![session_id.to_string()], |row| Ok(row_to_asset(row)))
                 .map_err(|e| Error::Database(e.to_string()))?
                 .filter_map(|r| r.ok())
                 .filter_map(|r| r.ok())
@@ -212,11 +233,7 @@ impl Database {
                     .map_err(|e| Error::Database(e.to_string()))?;
 
                 let mut rows = stmt
-                    .query(params![
-                        session_id.to_string(),
-                        kind.to_string(),
-                        value,
-                    ])
+                    .query(params![session_id.to_string(), kind.to_string(), value,])
                     .map_err(|e| Error::Database(e.to_string()))?;
 
                 if let Some(row) = rows.next().map_err(|e| Error::Database(e.to_string()))? {
@@ -321,9 +338,7 @@ impl Database {
                 .map_err(|e| Error::Database(e.to_string()))?;
 
             let services = stmt
-                .query_map(params![asset_id.to_string()], |row| {
-                    Ok(row_to_service(row))
-                })
+                .query_map(params![asset_id.to_string()], |row| Ok(row_to_service(row)))
                 .map_err(|e| Error::Database(e.to_string()))?
                 .filter_map(|r| r.ok())
                 .filter_map(|r| r.ok())
@@ -381,9 +396,7 @@ impl Database {
                 .map_err(|e| Error::Database(e.to_string()))?;
 
             let changes = stmt
-                .query_map(params![asset_id.to_string()], |row| {
-                    Ok(row_to_change(row))
-                })
+                .query_map(params![asset_id.to_string()], |row| Ok(row_to_change(row)))
                 .map_err(|e| Error::Database(e.to_string()))?
                 .filter_map(|r| r.ok())
                 .filter_map(|r| r.ok())
@@ -442,9 +455,17 @@ mod tests {
     fn get_assets_by_kind_filters_correctly() {
         let db = db();
         let sid = make_session(&db);
-        db.create_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null).unwrap();
-        db.create_asset(sid, AssetKind::Domain, "example.com", serde_json::Value::Null).unwrap();
-        db.create_asset(sid, AssetKind::Host, "10.0.0.2", serde_json::Value::Null).unwrap();
+        db.create_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null)
+            .unwrap();
+        db.create_asset(
+            sid,
+            AssetKind::Domain,
+            "example.com",
+            serde_json::Value::Null,
+        )
+        .unwrap();
+        db.create_asset(sid, AssetKind::Host, "10.0.0.2", serde_json::Value::Null)
+            .unwrap();
 
         let hosts = db.get_assets_by_kind(sid, AssetKind::Host).unwrap();
         let domains = db.get_assets_by_kind(sid, AssetKind::Domain).unwrap();
@@ -460,7 +481,9 @@ mod tests {
         let db = db();
         let sid = make_session(&db);
         let metadata = serde_json::json!({"os": "Linux", "ttl": 64});
-        let asset = db.create_asset(sid, AssetKind::Host, "10.0.0.1", metadata.clone()).unwrap();
+        let asset = db
+            .create_asset(sid, AssetKind::Host, "10.0.0.1", metadata.clone())
+            .unwrap();
 
         let fetched = db.get_assets(sid).unwrap();
         assert_eq!(fetched[0].id, asset.id);
@@ -471,7 +494,8 @@ mod tests {
     fn assets_cascade_delete_with_session() {
         let db = db();
         let sid = make_session(&db);
-        db.create_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null).unwrap();
+        db.create_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null)
+            .unwrap();
         db.delete_session(sid).unwrap();
         let assets = db.get_assets(sid).unwrap();
         assert!(assets.is_empty());
@@ -522,7 +546,12 @@ mod tests {
             .upsert_asset(sid, AssetKind::Host, "example.com", serde_json::Value::Null)
             .unwrap();
         let (_, is_new2) = db
-            .upsert_asset(sid, AssetKind::Domain, "example.com", serde_json::Value::Null)
+            .upsert_asset(
+                sid,
+                AssetKind::Domain,
+                "example.com",
+                serde_json::Value::Null,
+            )
             .unwrap();
 
         assert!(is_new1);
@@ -541,7 +570,14 @@ mod tests {
             .unwrap();
 
         let svc = db
-            .create_service(asset.id, 443, "tcp", "https", Some("nginx/1.24"), Some("HTTP/1.1"))
+            .create_service(
+                asset.id,
+                443,
+                "tcp",
+                "https",
+                Some("nginx/1.24"),
+                Some("HTTP/1.1"),
+            )
             .unwrap();
 
         let services = db.get_services(asset.id).unwrap();
@@ -562,7 +598,8 @@ mod tests {
             .create_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null)
             .unwrap();
 
-        db.create_service(asset.id, 22, "tcp", "ssh", None, None).unwrap();
+        db.create_service(asset.id, 22, "tcp", "ssh", None, None)
+            .unwrap();
 
         let services = db.get_services(asset.id).unwrap();
         assert_eq!(services.len(), 1);
@@ -578,9 +615,12 @@ mod tests {
             .create_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null)
             .unwrap();
 
-        db.create_service(asset.id, 8080, "tcp", "http", None, None).unwrap();
-        db.create_service(asset.id, 22, "tcp", "ssh", None, None).unwrap();
-        db.create_service(asset.id, 443, "tcp", "https", None, None).unwrap();
+        db.create_service(asset.id, 8080, "tcp", "http", None, None)
+            .unwrap();
+        db.create_service(asset.id, 22, "tcp", "ssh", None, None)
+            .unwrap();
+        db.create_service(asset.id, 443, "tcp", "https", None, None)
+            .unwrap();
 
         let services = db.get_services(asset.id).unwrap();
         let ports: Vec<i32> = services.iter().map(|s| s.port).collect();
@@ -594,7 +634,8 @@ mod tests {
         let asset = db
             .create_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null)
             .unwrap();
-        db.create_service(asset.id, 443, "tcp", "https", None, None).unwrap();
+        db.create_service(asset.id, 443, "tcp", "https", None, None)
+            .unwrap();
         db.delete_session(sid).unwrap();
         // Asset is deleted by session CASCADE; service is deleted by asset CASCADE
         let services = db.get_services(asset.id).unwrap();
@@ -631,8 +672,10 @@ mod tests {
             .create_asset(sid, AssetKind::Host, "10.0.0.1", serde_json::Value::Null)
             .unwrap();
 
-        db.record_change(asset.id, "status", "unknown", "up").unwrap();
-        db.record_change(asset.id, "os", "unknown", "Linux").unwrap();
+        db.record_change(asset.id, "status", "unknown", "up")
+            .unwrap();
+        db.record_change(asset.id, "os", "unknown", "Linux")
+            .unwrap();
         db.record_change(asset.id, "version", "old", "new").unwrap();
 
         let changes = db.get_changes(asset.id).unwrap();

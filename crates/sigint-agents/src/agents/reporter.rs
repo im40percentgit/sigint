@@ -97,7 +97,8 @@ mod tests {
             "prompt should mention report: {prompt}"
         );
         assert!(
-            prompt.to_lowercase().contains("finding") || prompt.to_lowercase().contains("remediation"),
+            prompt.to_lowercase().contains("finding")
+                || prompt.to_lowercase().contains("remediation"),
             "prompt should mention findings or remediation: {prompt}"
         );
     }

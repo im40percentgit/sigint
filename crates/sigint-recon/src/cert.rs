@@ -26,10 +26,7 @@ impl CertModule {
     ///
     /// Filters out wildcard entries (starting with `*.`) and deduplicates
     /// by domain value. Each unique domain becomes an `AssetKind::Domain` asset.
-    pub(crate) fn parse_crtsh_response(
-        json: &serde_json::Value,
-        session_id: Uuid,
-    ) -> Vec<Asset> {
+    pub(crate) fn parse_crtsh_response(json: &serde_json::Value, session_id: Uuid) -> Vec<Asset> {
         let entries = match json.as_array() {
             Some(arr) => arr,
             None => return vec![],
@@ -163,10 +160,7 @@ mod tests {
 
     #[test]
     fn parse_crtsh_skips_wildcards() {
-        let json = make_crtsh_json(&[
-            ("*.example.com",),
-            ("www.example.com",),
-        ]);
+        let json = make_crtsh_json(&[("*.example.com",), ("www.example.com",)]);
         let assets = CertModule::parse_crtsh_response(&json, sid());
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].value, "www.example.com");

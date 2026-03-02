@@ -34,17 +34,15 @@ use sigint_core::types::ToolRisk;
 /// are excluded. Recon commands (whois, dig, etc.) run in the Recon sandbox
 /// profile which provides Pasta networking for DNS/WHOIS resolution.
 const ALLOWED_COMMANDS: &[&str] = &[
-    "grep", "awk", "sed", "cat", "head", "tail", "sort", "uniq", "wc", "jq",
-    "curl", "find", "ls", "file", "strings", "xxd",
+    "grep", "awk", "sed", "cat", "head", "tail", "sort", "uniq", "wc", "jq", "curl", "find", "ls",
+    "file", "strings", "xxd",
     // Recon commands — DNS, WHOIS, certificate inspection
     "whois", "dig", "host", "nslookup", "openssl",
 ];
 
 /// Commands that require network access and use the Recon sandbox profile
 /// instead of the Offline profile.
-const NETWORK_COMMANDS: &[&str] = &[
-    "whois", "dig", "host", "nslookup", "curl", "openssl",
-];
+const NETWORK_COMMANDS: &[&str] = &["whois", "dig", "host", "nslookup", "curl", "openssl"];
 
 /// Sandboxed shell command wrapper with an allowlist.
 ///
@@ -231,11 +229,17 @@ mod tests {
         assert_eq!(params["type"], "object");
 
         let required = params["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "command"), "command should be required");
+        assert!(
+            required.iter().any(|v| v == "command"),
+            "command should be required"
+        );
 
         assert_eq!(params["properties"]["command"]["type"], "string");
         assert_eq!(params["properties"]["args"]["type"], "array");
-        assert!(!required.iter().any(|v| v == "args"), "args should be optional");
+        assert!(
+            !required.iter().any(|v| v == "args"),
+            "args should be optional"
+        );
     }
 
     #[test]
@@ -372,6 +376,10 @@ mod tests {
             .execute(json!({"command": "grep", "args": ["-c", "root", "/etc/passwd"]}))
             .await
             .expect("grep execution should not error");
-        assert_eq!(result.exit_code, 0, "grep should find root: {:?}", result.stderr);
+        assert_eq!(
+            result.exit_code, 0,
+            "grep should find root: {:?}",
+            result.stderr
+        );
     }
 }

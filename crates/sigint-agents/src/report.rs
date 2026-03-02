@@ -38,15 +38,25 @@ pub struct ScanReport {
 impl ScanReport {
     /// Create a new `ScanReport`.
     pub fn new(target: String, context: TaskContext, summary: String) -> Self {
-        Self { target, context, summary }
+        Self {
+            target,
+            context,
+            summary,
+        }
     }
 }
 
 impl fmt::Display for ScanReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "╔══════════════════════════════════════════════════════╗")?;
+        writeln!(
+            f,
+            "╔══════════════════════════════════════════════════════╗"
+        )?;
         writeln!(f, "║              SIGINT SCAN REPORT                     ║")?;
-        writeln!(f, "╚══════════════════════════════════════════════════════╝")?;
+        writeln!(
+            f,
+            "╚══════════════════════════════════════════════════════╝"
+        )?;
         writeln!(f)?;
         writeln!(f, "Target: {}", self.target)?;
         writeln!(f)?;
@@ -90,7 +100,10 @@ mod tests {
         let ctx = TaskContext::new("example.com");
         let report = ScanReport::new("example.com".into(), ctx, "Summary text here.".into());
         let output = report.to_string();
-        assert!(output.contains("example.com"), "report should contain the target: {output}");
+        assert!(
+            output.contains("example.com"),
+            "report should contain the target: {output}"
+        );
     }
 
     #[test]
@@ -98,7 +111,10 @@ mod tests {
         let ctx = TaskContext::new("10.0.0.1");
         let report = ScanReport::new("10.0.0.1".into(), ctx, "Critical RCE found.".into());
         let output = report.to_string();
-        assert!(output.contains("Critical RCE found."), "report should contain summary: {output}");
+        assert!(
+            output.contains("Critical RCE found."),
+            "report should contain summary: {output}"
+        );
     }
 
     #[test]

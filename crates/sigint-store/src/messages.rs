@@ -155,7 +155,10 @@ mod tests {
 
         db.create_message(&msg).unwrap();
 
-        let fetched = db.get_message(msg.id).unwrap().expect("message should exist");
+        let fetched = db
+            .get_message(msg.id)
+            .unwrap()
+            .expect("message should exist");
         assert_eq!(fetched.id, msg.id);
         assert_eq!(fetched.role, Role::User);
         assert_eq!(fetched.content, "hello world");

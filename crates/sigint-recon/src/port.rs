@@ -50,8 +50,16 @@ impl PortModule {
                     let port: i32 = caps[1].parse().unwrap_or(0);
                     let protocol = caps[2].to_string();
                     let service = caps[3].to_string();
-                    let version = caps.get(4).map(|m| m.as_str().trim().to_string()).filter(|s| !s.is_empty());
-                    ParsedPort { port, protocol, service, version }
+                    let version = caps
+                        .get(4)
+                        .map(|m| m.as_str().trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    ParsedPort {
+                        port,
+                        protocol,
+                        service,
+                        version,
+                    }
                 })
             })
             .collect()
@@ -128,11 +136,7 @@ impl DiscoveryModule for PortModule {
             discovered_at: chrono::Utc::now(),
         });
 
-        info!(
-            target,
-            open_ports = ports.len(),
-            "port: discovery complete"
-        );
+        info!(target, open_ports = ports.len(), "port: discovery complete");
         Ok(assets)
     }
 }
@@ -198,14 +202,12 @@ Nmap done: 1 IP address (1 host up) scanned in 5.23 seconds
     #[test]
     fn ports_to_assets_creates_service_kind() {
         let sid = Uuid::new_v4();
-        let ports = vec![
-            ParsedPort {
-                port: 80,
-                protocol: "tcp".to_string(),
-                service: "http".to_string(),
-                version: Some("Apache 2.4".to_string()),
-            },
-        ];
+        let ports = vec![ParsedPort {
+            port: 80,
+            protocol: "tcp".to_string(),
+            service: "http".to_string(),
+            version: Some("Apache 2.4".to_string()),
+        }];
         let assets = PortModule::ports_to_assets(&ports, "10.0.0.1", sid);
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].kind, AssetKind::Service);

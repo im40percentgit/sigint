@@ -139,8 +139,7 @@ fn parse_nmap_xml(xml: &str) -> Option<Value> {
                 match name {
                     "port" => {
                         // Commit the current port into the current host.
-                        if let (Some(ref mut h), Some(p)) =
-                            (&mut current_host, current_port.take())
+                        if let (Some(ref mut h), Some(p)) = (&mut current_host, current_port.take())
                         {
                             h.ports.push(p.into_value());
                         }
@@ -187,11 +186,11 @@ impl HostBuilder {
 /// Per-port accumulator used while parsing nmap XML.
 #[derive(Default)]
 struct PortBuilder {
-    port:     u16,
+    port: u16,
     protocol: String,
-    state:    String,
-    service:  String,
-    version:  String,
+    state: String,
+    service: String,
+    version: String,
 }
 
 impl PortBuilder {
@@ -211,7 +210,11 @@ fn attr_value(e: &quick_xml::events::BytesStart<'_>, attr_name: &[u8]) -> Option
     e.attributes()
         .filter_map(|a| a.ok())
         .find(|a| a.key.as_ref() == attr_name)
-        .and_then(|a| std::str::from_utf8(a.value.as_ref()).ok().map(|s| s.to_owned()))
+        .and_then(|a| {
+            std::str::from_utf8(a.value.as_ref())
+                .ok()
+                .map(|s| s.to_owned())
+        })
 }
 
 /// Scan type requested by the LLM agent.
@@ -393,17 +396,25 @@ mod tests {
 
         // target is required
         let required = params["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "target"), "target should be required");
+        assert!(
+            required.iter().any(|v| v == "target"),
+            "target should be required"
+        );
 
         // target property exists and is a string
         assert_eq!(params["properties"]["target"]["type"], "string");
 
         // ports property is optional (not in required array)
         assert!(params["properties"]["ports"].is_object());
-        assert!(!required.iter().any(|v| v == "ports"), "ports should be optional");
+        assert!(
+            !required.iter().any(|v| v == "ports"),
+            "ports should be optional"
+        );
 
         // scan_type has enum constraint
-        let scan_type_enum = params["properties"]["scan_type"]["enum"].as_array().unwrap();
+        let scan_type_enum = params["properties"]["scan_type"]["enum"]
+            .as_array()
+            .unwrap();
         assert!(scan_type_enum.iter().any(|v| v == "quick"));
         assert!(scan_type_enum.iter().any(|v| v == "full"));
         assert!(scan_type_enum.iter().any(|v| v == "service"));
@@ -481,17 +492,20 @@ mod tests {
 
     #[test]
     fn parse_nmap_xml_single_host() {
-        let result = parse_nmap_xml(NMAP_XML_SINGLE_HOST)
-            .expect("should parse valid nmap XML");
+        let result = parse_nmap_xml(NMAP_XML_SINGLE_HOST).expect("should parse valid nmap XML");
 
-        let hosts = result["hosts"].as_array().expect("hosts should be an array");
+        let hosts = result["hosts"]
+            .as_array()
+            .expect("hosts should be an array");
         assert_eq!(hosts.len(), 1, "expected exactly 1 host");
 
         let host = &hosts[0];
         assert_eq!(host["address"], "93.184.216.34", "address mismatch");
         assert_eq!(host["status"], "up", "status mismatch");
 
-        let hostnames = host["hostnames"].as_array().expect("hostnames should be an array");
+        let hostnames = host["hostnames"]
+            .as_array()
+            .expect("hostnames should be an array");
         assert!(
             hostnames.iter().any(|h| h == "example.com"),
             "expected example.com in hostnames"
@@ -501,7 +515,10 @@ mod tests {
         assert_eq!(ports.len(), 2, "expected 2 ports");
 
         // Port 80
-        let p80 = ports.iter().find(|p| p["port"] == 80).expect("port 80 should be present");
+        let p80 = ports
+            .iter()
+            .find(|p| p["port"] == 80)
+            .expect("port 80 should be present");
         assert_eq!(p80["protocol"], "tcp");
         assert_eq!(p80["state"], "open");
         assert_eq!(p80["service"], "http");
@@ -511,7 +528,10 @@ mod tests {
         );
 
         // Port 443
-        let p443 = ports.iter().find(|p| p["port"] == 443).expect("port 443 should be present");
+        let p443 = ports
+            .iter()
+            .find(|p| p["port"] == 443)
+            .expect("port 443 should be present");
         assert_eq!(p443["protocol"], "tcp");
         assert_eq!(p443["state"], "open");
         assert_eq!(p443["service"], "https");
@@ -526,10 +546,12 @@ mod tests {
 
     #[test]
     fn parse_nmap_xml_empty_hosts() {
-        let result = parse_nmap_xml(NMAP_XML_NO_HOSTS)
-            .expect("should parse valid nmap XML with no hosts");
+        let result =
+            parse_nmap_xml(NMAP_XML_NO_HOSTS).expect("should parse valid nmap XML with no hosts");
 
-        let hosts = result["hosts"].as_array().expect("hosts should be an array");
+        let hosts = result["hosts"]
+            .as_array()
+            .expect("hosts should be an array");
         assert_eq!(hosts.len(), 0, "expected empty hosts array");
     }
 
@@ -542,7 +564,11 @@ mod tests {
             .await
             .expect("nmap execution should not error");
         // nmap on loopback always exits 0 even with no open ports.
-        assert_eq!(result.exit_code, 0, "nmap should exit 0: {:?}", result.stderr);
+        assert_eq!(
+            result.exit_code, 0,
+            "nmap should exit 0: {:?}",
+            result.stderr
+        );
         assert!(
             result.stdout.contains("Nmap scan report"),
             "stdout should contain scan report: {}",

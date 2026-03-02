@@ -92,11 +92,7 @@ impl WebModule {
     }
 
     /// Build a URL-kind asset from a URL and parsed headers.
-    fn headers_to_asset(
-        url: &str,
-        headers: &ParsedHttpHeaders,
-        session_id: Uuid,
-    ) -> Asset {
+    fn headers_to_asset(url: &str, headers: &ParsedHttpHeaders, session_id: Uuid) -> Asset {
         let metadata = serde_json::json!({
             "status_code": headers.status_code,
             "server": headers.server,

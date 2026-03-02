@@ -34,7 +34,7 @@ use sigint_agents::{Orchestrator, ToolRegistry};
 use sigint_core::{event::Event, AppCore, Error};
 use sigint_llm::OllamaProvider;
 use sigint_memory::MemoryService;
-use sigint_store::{Database, EmbeddingService, ScanRecord, embedding_worker};
+use sigint_store::{embedding_worker, Database, EmbeddingService, ScanRecord};
 use sigint_tools;
 use tracing::warn;
 
@@ -326,7 +326,13 @@ mod tests {
     #[test]
     fn parse_minimal_scan_command() {
         let cli = TestCli::parse_from(["sigint", "scan", "scanme.nmap.org"]);
-        let TestCommands::Scan { target, ports, model, max_iterations, .. } = cli.command;
+        let TestCommands::Scan {
+            target,
+            ports,
+            model,
+            max_iterations,
+            ..
+        } = cli.command;
         assert_eq!(target, "scanme.nmap.org");
         assert!(ports.is_none());
         assert!(model.is_none());
@@ -336,12 +342,23 @@ mod tests {
     #[test]
     fn parse_full_scan_command() {
         let cli = TestCli::parse_from([
-            "sigint", "scan", "192.168.1.1",
-            "--ports", "80,443",
-            "--model", "llama3.2",
-            "--max-iterations", "5",
+            "sigint",
+            "scan",
+            "192.168.1.1",
+            "--ports",
+            "80,443",
+            "--model",
+            "llama3.2",
+            "--max-iterations",
+            "5",
         ]);
-        let TestCommands::Scan { target, ports, model, max_iterations, .. } = cli.command;
+        let TestCommands::Scan {
+            target,
+            ports,
+            model,
+            max_iterations,
+            ..
+        } = cli.command;
         assert_eq!(target, "192.168.1.1");
         assert_eq!(ports.as_deref(), Some("80,443"));
         assert_eq!(model.as_deref(), Some("llama3.2"));
@@ -358,11 +375,20 @@ mod tests {
     #[test]
     fn parse_short_flags() {
         let cli = TestCli::parse_from([
-            "sigint", "scan", "target.local",
-            "-p", "22,80",
-            "-m", "mistral",
+            "sigint",
+            "scan",
+            "target.local",
+            "-p",
+            "22,80",
+            "-m",
+            "mistral",
         ]);
-        let TestCommands::Scan { target, ports, model, .. } = cli.command;
+        let TestCommands::Scan {
+            target,
+            ports,
+            model,
+            ..
+        } = cli.command;
         assert_eq!(target, "target.local");
         assert_eq!(ports.as_deref(), Some("22,80"));
         assert_eq!(model.as_deref(), Some("mistral"));

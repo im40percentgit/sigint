@@ -54,23 +54,26 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
 
     if area.width < 80 || area.height < 24 {
-        let msg = Paragraph::new("Terminal too small (min 80x24)")
-            .alignment(Alignment::Center);
+        let msg = Paragraph::new("Terminal too small (min 80x24)").alignment(Alignment::Center);
         frame.render_widget(msg, area);
         return;
     }
 
     // The approval bar takes 1 row when pending; 0 rows otherwise.
-    let approval_height = if state.pending_approval.is_some() { 1 } else { 0 };
+    let approval_height = if state.pending_approval.is_some() {
+        1
+    } else {
+        0
+    };
 
     let main_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),                      // Agent status bar
-            Constraint::Min(10),                        // Chat + Tool panels
-            Constraint::Length(8),                      // Findings | Assets (split horizontally)
-            Constraint::Length(3),                      // Input bar
-            Constraint::Length(approval_height),        // Approval bar (0 or 1 row)
+            Constraint::Length(1),               // Agent status bar
+            Constraint::Min(10),                 // Chat + Tool panels
+            Constraint::Length(8),               // Findings | Assets (split horizontally)
+            Constraint::Length(3),               // Input bar
+            Constraint::Length(approval_height), // Approval bar (0 or 1 row)
         ])
         .split(area);
 
@@ -101,8 +104,7 @@ fn render_status_bar(frame: &mut Frame, state: &AppState, area: Rect) {
         " Idle — waiting for task".to_string()
     };
 
-    let bar = Paragraph::new(content)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let bar = Paragraph::new(content).style(Style::default().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(bar, area);
 }
 
@@ -127,14 +129,17 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     for msg in &state.messages {
         let (prefix, color) = match msg.role.as_str() {
-            "user"      => ("[User] ", Color::Blue),
+            "user" => ("[User] ", Color::Blue),
             "assistant" => ("[Agent] ", Color::Green),
-            "system"    => ("[System] ", Color::DarkGray),
-            "tool"      => ("[Tool] ", Color::Yellow),
-            _           => ("", Color::White),
+            "system" => ("[System] ", Color::DarkGray),
+            "tool" => ("[Tool] ", Color::Yellow),
+            _ => ("", Color::White),
         };
         lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                prefix,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
             Span::raw(msg.content.clone()),
         ]));
     }
@@ -142,7 +147,12 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
     // Show streaming buffer with cursor indicator when non-empty.
     if !state.streaming_buffer.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled("[Agent] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[Agent] ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(state.streaming_buffer.clone()),
             Span::styled("\u{2588}", Style::default().fg(Color::Green)),
         ]));
@@ -173,7 +183,7 @@ fn render_tool_output(frame: &mut Frame, state: &AppState, area: Rect) {
         let status = match entry.exit_code {
             Some(0) => "ok",
             Some(_) => "err",
-            None    => "...",
+            None => "...",
         };
         let duration = entry
             .completed
@@ -183,7 +193,9 @@ fn render_tool_output(frame: &mut Frame, state: &AppState, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled(
                 format!("[{}] {}", status, entry.name),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(" ({})", duration)),
         ]));
@@ -233,14 +245,13 @@ fn render_findings(frame: &mut Frame, state: &AppState, area: Rect) {
         .map(|f| {
             let sev_color = match f.severity {
                 sigint_core::types::Severity::Critical => Color::Red,
-                sigint_core::types::Severity::High     => Color::LightRed,
-                sigint_core::types::Severity::Medium   => Color::Yellow,
-                sigint_core::types::Severity::Low      => Color::Blue,
-                sigint_core::types::Severity::Info     => Color::Gray,
+                sigint_core::types::Severity::High => Color::LightRed,
+                sigint_core::types::Severity::Medium => Color::Yellow,
+                sigint_core::types::Severity::Low => Color::Blue,
+                sigint_core::types::Severity::Info => Color::Gray,
             };
             Row::new(vec![
-                Cell::from(f.severity.to_string())
-                    .style(Style::default().fg(sev_color)),
+                Cell::from(f.severity.to_string()).style(Style::default().fg(sev_color)),
                 Cell::from(f.title.clone()),
                 Cell::from(f.asset.clone().unwrap_or_default()),
             ])
@@ -256,8 +267,7 @@ fn render_findings(frame: &mut Frame, state: &AppState, area: Rect) {
         ],
     )
     .header(
-        Row::new(["SEV", "TITLE", "ASSET"])
-            .style(Style::default().add_modifier(Modifier::BOLD)),
+        Row::new(["SEV", "TITLE", "ASSET"]).style(Style::default().add_modifier(Modifier::BOLD)),
     )
     .block(
         Block::default()
@@ -279,36 +289,34 @@ fn render_assets_panel(frame: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let rows: Vec<Row> = state.assets.iter().map(|asset| {
-        let kind_color = match asset.kind {
-            AssetKind::Host        => Color::Green,
-            AssetKind::Domain      => Color::Blue,
-            AssetKind::Url         => Color::Yellow,
-            AssetKind::Service     => Color::Magenta,
-            AssetKind::Certificate => Color::Cyan,
-            AssetKind::Email       => Color::LightBlue,
-            AssetKind::Other       => Color::White,
-        };
-        Row::new(vec![
-            Cell::from(asset.kind.to_string()).style(Style::default().fg(kind_color)),
-            Cell::from(asset.value.clone()),
-        ])
-    }).collect();
+    let rows: Vec<Row> = state
+        .assets
+        .iter()
+        .map(|asset| {
+            let kind_color = match asset.kind {
+                AssetKind::Host => Color::Green,
+                AssetKind::Domain => Color::Blue,
+                AssetKind::Url => Color::Yellow,
+                AssetKind::Service => Color::Magenta,
+                AssetKind::Certificate => Color::Cyan,
+                AssetKind::Email => Color::LightBlue,
+                AssetKind::Other => Color::White,
+            };
+            Row::new(vec![
+                Cell::from(asset.kind.to_string()).style(Style::default().fg(kind_color)),
+                Cell::from(asset.value.clone()),
+            ])
+        })
+        .collect();
 
-    let table = Table::new(
-        rows,
-        [Constraint::Length(12), Constraint::Min(20)],
-    )
-    .header(
-        Row::new(["KIND", "VALUE"])
-            .style(Style::default().add_modifier(Modifier::BOLD)),
-    )
-    .block(
-        Block::default()
-            .title(format!(" Assets ({}) ", state.assets.len()))
-            .borders(Borders::ALL)
-            .border_style(border_style),
-    );
+    let table = Table::new(rows, [Constraint::Length(12), Constraint::Min(20)])
+        .header(Row::new(["KIND", "VALUE"]).style(Style::default().add_modifier(Modifier::BOLD)))
+        .block(
+            Block::default()
+                .title(format!(" Assets ({}) ", state.assets.len()))
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        );
 
     frame.render_widget(table, area);
 }
@@ -322,18 +330,17 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect) {
     };
 
     let prefix = match &state.mode {
-        Mode::Normal      => "> ",
-        Mode::Search(_)   => "/",
-        Mode::Command(_)  => ":",
+        Mode::Normal => "> ",
+        Mode::Search(_) => "/",
+        Mode::Command(_) => ":",
     };
 
-    let input = Paragraph::new(format!("{prefix}{}", state.input))
-        .block(
-            Block::default()
-                .title(" Input ")
-                .borders(Borders::ALL)
-                .border_style(border_style),
-        );
+    let input = Paragraph::new(format!("{prefix}{}", state.input)).block(
+        Block::default()
+            .title(" Input ")
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
 
     frame.render_widget(input, area);
 }
@@ -345,41 +352,49 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect) {
 ///
 /// Risk level color: Low=green, Medium=yellow, High=red. The bar uses a dark
 /// background to distinguish it clearly from the input bar above.
-fn render_approval_bar(
-    frame: &mut Frame,
-    approval: &crate::state::PendingApproval,
-    area: Rect,
-) {
+fn render_approval_bar(frame: &mut Frame, approval: &crate::state::PendingApproval, area: Rect) {
     // Skip rendering into a zero-height area to avoid ratatui panics.
     if area.height == 0 {
         return;
     }
 
     let risk_color = match approval.risk_level {
-        ToolRisk::Low    => Color::Green,
+        ToolRisk::Low => Color::Green,
         ToolRisk::Medium => Color::Yellow,
-        ToolRisk::High   => Color::Red,
+        ToolRisk::High => Color::Red,
     };
 
     let risk_label = match approval.risk_level {
-        ToolRisk::Low    => "low",
+        ToolRisk::Low => "low",
         ToolRisk::Medium => "medium",
-        ToolRisk::High   => "HIGH",
+        ToolRisk::High => "HIGH",
     };
 
     let line = Line::from(vec![
         Span::styled(
             " [APPROVAL] ",
-            Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" Run ", Style::default().fg(Color::White).bg(Color::DarkGray)),
+        Span::styled(
+            " Run ",
+            Style::default().fg(Color::White).bg(Color::DarkGray),
+        ),
         Span::styled(
             approval.tool_name.clone(),
-            Style::default().fg(Color::Cyan).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" ({risk_label})"),
-            Style::default().fg(risk_color).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(risk_color)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("? Args: {}", approval.args_summary),
@@ -387,12 +402,14 @@ fn render_approval_bar(
         ),
         Span::styled(
             "  [y] approve  [n] deny ",
-            Style::default().fg(Color::White).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
     ]);
 
-    let bar = Paragraph::new(line)
-        .style(Style::default().bg(Color::DarkGray));
+    let bar = Paragraph::new(line).style(Style::default().bg(Color::DarkGray));
     frame.render_widget(bar, area);
 }
 
@@ -412,7 +429,9 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     let help_text = vec![
         Line::from(Span::styled(
             " Keybindings ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::default(),
         Line::from("  ?          Toggle this help"),
@@ -510,8 +529,15 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
         let sid = uuid::Uuid::new_v4();
-        state.findings.push(Finding::new(sid, "Open port 22", "SSH exposed", Severity::Medium));
-        state.findings.push(Finding::new(sid, "XSS", "reflected", Severity::High));
+        state.findings.push(Finding::new(
+            sid,
+            "Open port 22",
+            "SSH exposed",
+            Severity::Medium,
+        ));
+        state
+            .findings
+            .push(Finding::new(sid, "XSS", "reflected", Severity::High));
         terminal.draw(|frame| render(frame, &state)).unwrap();
     }
 

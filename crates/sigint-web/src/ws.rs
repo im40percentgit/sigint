@@ -17,20 +17,17 @@
 //! from futures-util are used to split the WebSocket into independent halves so
 //! the select! arms can borrow them mutably without conflict.
 
+use axum::extract::ws::{Message, WebSocket};
 use axum::{
     extract::{State, WebSocketUpgrade},
     response::IntoResponse,
 };
-use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 
 use crate::state::AppState;
 
 /// Upgrade handler: accepts the WebSocket handshake and spawns the event loop.
-pub async fn ws_events(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_events(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 

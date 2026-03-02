@@ -120,12 +120,30 @@ mod tests {
     fn executor_allowed_tools() {
         let agent = ExecutorAgent::new();
         let tools = agent.allowed_tools();
-        assert!(tools.contains(&"nmap_scan".to_string()), "executor must have nmap_scan");
-        assert!(tools.contains(&"shell".to_string()), "executor must have shell");
-        assert!(tools.contains(&"gobuster_scan".to_string()), "executor must have gobuster_scan");
-        assert!(tools.contains(&"nikto_scan".to_string()), "executor must have nikto_scan");
-        assert!(tools.contains(&"nuclei_scan".to_string()), "executor must have nuclei_scan");
-        assert!(tools.contains(&"feroxbuster_scan".to_string()), "executor must have feroxbuster_scan");
+        assert!(
+            tools.contains(&"nmap_scan".to_string()),
+            "executor must have nmap_scan"
+        );
+        assert!(
+            tools.contains(&"shell".to_string()),
+            "executor must have shell"
+        );
+        assert!(
+            tools.contains(&"gobuster_scan".to_string()),
+            "executor must have gobuster_scan"
+        );
+        assert!(
+            tools.contains(&"nikto_scan".to_string()),
+            "executor must have nikto_scan"
+        );
+        assert!(
+            tools.contains(&"nuclei_scan".to_string()),
+            "executor must have nuclei_scan"
+        );
+        assert!(
+            tools.contains(&"feroxbuster_scan".to_string()),
+            "executor must have feroxbuster_scan"
+        );
         assert_eq!(tools.len(), 6, "executor should have exactly 6 tools");
     }
 
