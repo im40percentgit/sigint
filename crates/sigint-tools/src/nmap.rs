@@ -1,17 +1,22 @@
 //! NmapTool — sandboxed nmap wrapper with network access via pasta.
 //!
 //! @decision DEC-TOOL-004
-//! @title NmapTool uses SandboxProfile::nmap() for pasta networking
+//! @title NmapTool uses SandboxProfile::nmap() for pasta networking, -oX for structured output
 //! @status accepted
 //! @rationale nmap requires real network access to scan targets. SandboxProfile::Nmap
 //! applies pasta user-mode networking (300s timeout) so nmap can reach the network
 //! while remaining isolated from the host filesystem and process tree. The execute()
 //! method is async and bridges to the synchronous SandboxedCommand::execute() via
 //! tokio::task::spawn_blocking, matching the pattern documented in DEC-SAND-002.
-//! The `-oN -` flag writes normal-format output to stdout, making it easy to
-//! return raw scan results to the LLM as text without an XML parsing step.
+//! The `-oX -` flag writes XML output to stdout. parse_nmap_xml() converts the XML
+//! into structured JSON (hosts → address, hostnames, status, ports → port, protocol,
+//! state, service, version) for structured_data. Raw XML is preserved in stdout for
+//! LLM consumption. quick-xml event-based parsing is used to avoid materialising a
+//! DOM tree, keeping memory overhead minimal for large scan outputs.
 
 use async_trait::async_trait;
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use serde_json::{json, Value};
 use sigint_llm::ToolDefinition;
 use sigint_sandbox::profile::SandboxProfile;
@@ -20,6 +25,194 @@ use tracing::info;
 use crate::error::{Result, ToolError};
 use crate::result::ToolResult;
 use crate::tool::Tool;
+
+/// Parse nmap XML output (`-oX -`) into structured JSON.
+///
+/// Returns `Some(json)` on success, `None` if the input is not valid nmap XML or
+/// cannot be parsed. The output shape is:
+///
+/// ```json
+/// {
+///   "hosts": [{
+///     "address": "93.184.216.34",
+///     "hostnames": ["example.com"],
+///     "status": "up",
+///     "ports": [{
+///       "port": 80,
+///       "protocol": "tcp",
+///       "state": "open",
+///       "service": "http",
+///       "version": "nginx 1.25.3"
+///     }]
+///   }]
+/// }
+/// ```
+///
+/// Uses quick-xml event-based parsing so no DOM tree is materialised.
+fn parse_nmap_xml(xml: &str) -> Option<Value> {
+    // Require the input to contain the nmap XML root element as a basic sanity check
+    // before spending time on full parsing.
+    if !xml.contains("<nmaprun") {
+        return None;
+    }
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    // Per-host accumulator state.
+    let mut hosts: Vec<Value> = Vec::new();
+
+    // Current host being built (Some while inside a <host> element).
+    let mut current_host: Option<HostBuilder> = None;
+    // Current port being built (Some while inside a <port> element).
+    let mut current_port: Option<PortBuilder> = None;
+
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let raw_name = e.name();
+                let name = std::str::from_utf8(raw_name.as_ref()).unwrap_or("");
+                match name {
+                    "host" => {
+                        current_host = Some(HostBuilder::default());
+                    }
+                    "status" if current_host.is_some() => {
+                        if let Some(ref mut h) = current_host {
+                            if let Some(state) = attr_value(e, b"state") {
+                                h.status = state;
+                            }
+                        }
+                    }
+                    "address" if current_host.is_some() => {
+                        if let Some(ref mut h) = current_host {
+                            // Only take the first IPv4/IPv6 address; skip MAC.
+                            let addrtype = attr_value(e, b"addrtype").unwrap_or_default();
+                            if (addrtype == "ipv4" || addrtype == "ipv6") && h.address.is_empty() {
+                                h.address = attr_value(e, b"addr").unwrap_or_default();
+                            }
+                        }
+                    }
+                    "hostname" if current_host.is_some() => {
+                        if let Some(ref mut h) = current_host {
+                            if let Some(hn) = attr_value(e, b"name") {
+                                if !hn.is_empty() {
+                                    h.hostnames.push(hn);
+                                }
+                            }
+                        }
+                    }
+                    "port" if current_host.is_some() => {
+                        let mut pb = PortBuilder::default();
+                        pb.protocol = attr_value(e, b"protocol").unwrap_or_default();
+                        if let Some(pid) = attr_value(e, b"portid") {
+                            pb.port = pid.parse::<u16>().unwrap_or(0);
+                        }
+                        current_port = Some(pb);
+                    }
+                    "state" if current_port.is_some() => {
+                        if let Some(ref mut p) = current_port {
+                            p.state = attr_value(e, b"state").unwrap_or_default();
+                        }
+                    }
+                    "service" if current_port.is_some() => {
+                        if let Some(ref mut p) = current_port {
+                            p.service = attr_value(e, b"name").unwrap_or_default();
+                            // Combine product + version into a single version string.
+                            let product = attr_value(e, b"product").unwrap_or_default();
+                            let version = attr_value(e, b"version").unwrap_or_default();
+                            p.version = match (product.is_empty(), version.is_empty()) {
+                                (false, false) => format!("{product} {version}"),
+                                (false, true) => product,
+                                (true, false) => version,
+                                (true, true) => String::new(),
+                            };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let raw_name = e.name();
+                let name = std::str::from_utf8(raw_name.as_ref()).unwrap_or("");
+                match name {
+                    "port" => {
+                        // Commit the current port into the current host.
+                        if let (Some(ref mut h), Some(p)) =
+                            (&mut current_host, current_port.take())
+                        {
+                            h.ports.push(p.into_value());
+                        }
+                    }
+                    "host" => {
+                        // Commit the current host.
+                        if let Some(h) = current_host.take() {
+                            hosts.push(h.into_value());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Some(json!({ "hosts": hosts }))
+}
+
+/// Per-host accumulator used while parsing nmap XML.
+#[derive(Default)]
+struct HostBuilder {
+    address: String,
+    hostnames: Vec<String>,
+    status: String,
+    ports: Vec<Value>,
+}
+
+impl HostBuilder {
+    fn into_value(self) -> Value {
+        json!({
+            "address":   self.address,
+            "hostnames": self.hostnames,
+            "status":    self.status,
+            "ports":     self.ports,
+        })
+    }
+}
+
+/// Per-port accumulator used while parsing nmap XML.
+#[derive(Default)]
+struct PortBuilder {
+    port:     u16,
+    protocol: String,
+    state:    String,
+    service:  String,
+    version:  String,
+}
+
+impl PortBuilder {
+    fn into_value(self) -> Value {
+        json!({
+            "port":     self.port,
+            "protocol": self.protocol,
+            "state":    self.state,
+            "service":  self.service,
+            "version":  self.version,
+        })
+    }
+}
+
+/// Extract the value of an XML attribute by name.
+fn attr_value(e: &quick_xml::events::BytesStart<'_>, attr_name: &[u8]) -> Option<String> {
+    e.attributes()
+        .filter_map(|a| a.ok())
+        .find(|a| a.key.as_ref() == attr_name)
+        .and_then(|a| std::str::from_utf8(a.value.as_ref()).ok().map(|s| s.to_owned()))
+}
 
 /// Scan type requested by the LLM agent.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -136,8 +329,9 @@ impl Tool for NmapTool {
             cmd = cmd.arg("-p").arg(p);
         }
 
-        // Write normal-format output to stdout for easy LLM consumption.
-        cmd = cmd.arg("-oN").arg("-");
+        // Write XML output to stdout. parse_nmap_xml() converts it to structured JSON.
+        // Raw XML is preserved in ToolResult::stdout for LLM consumption.
+        cmd = cmd.arg("-oX").arg("-");
 
         // Append the target last.
         cmd = cmd.arg(&target);
@@ -155,12 +349,15 @@ impl Tool for NmapTool {
                 }
             })?;
 
+        // Parse the XML output into structured JSON for the agent layer.
+        let structured_data = parse_nmap_xml(&output.stdout);
+
         Ok(ToolResult {
             stdout: output.stdout,
             stderr: output.stderr,
             exit_code: output.exit_code,
             duration: output.duration,
-            structured_data: None,
+            structured_data,
         })
     }
 }
@@ -242,6 +439,93 @@ mod tests {
         assert_eq!(ScanType::from_str("service"), Some(ScanType::Service));
         assert_eq!(ScanType::from_str("stealth"), None);
         assert_eq!(ScanType::from_str(""), None);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // parse_nmap_xml tests
+    // ──────────────────────────────────────────────────────────────────────
+
+    const NMAP_XML_SINGLE_HOST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -T4 -F -oX - 93.184.216.34" start="1709000000" version="7.94">
+<host starttime="1709000001" endtime="1709000010">
+<status state="up" reason="echo-reply"/>
+<address addr="93.184.216.34" addrtype="ipv4"/>
+<hostnames>
+<hostname name="example.com" type="PTR"/>
+</hostnames>
+<ports>
+<port protocol="tcp" portid="80">
+<state state="open" reason="syn-ack"/>
+<service name="http" product="nginx" version="1.25.3"/>
+</port>
+<port protocol="tcp" portid="443">
+<state state="open" reason="syn-ack"/>
+<service name="https" product="nginx" version="1.25.3"/>
+</port>
+</ports>
+</host>
+<runstats><finished time="1709000020" elapsed="19.0"/></runstats>
+</nmaprun>"#;
+
+    const NMAP_XML_NO_HOSTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -T4 -F -oX - 192.0.2.0" start="1709000000" version="7.94">
+<runstats><finished time="1709000010" elapsed="10.0"/></runstats>
+</nmaprun>"#;
+
+    #[test]
+    fn parse_nmap_xml_single_host() {
+        let result = parse_nmap_xml(NMAP_XML_SINGLE_HOST)
+            .expect("should parse valid nmap XML");
+
+        let hosts = result["hosts"].as_array().expect("hosts should be an array");
+        assert_eq!(hosts.len(), 1, "expected exactly 1 host");
+
+        let host = &hosts[0];
+        assert_eq!(host["address"], "93.184.216.34", "address mismatch");
+        assert_eq!(host["status"], "up", "status mismatch");
+
+        let hostnames = host["hostnames"].as_array().expect("hostnames should be an array");
+        assert!(
+            hostnames.iter().any(|h| h == "example.com"),
+            "expected example.com in hostnames"
+        );
+
+        let ports = host["ports"].as_array().expect("ports should be an array");
+        assert_eq!(ports.len(), 2, "expected 2 ports");
+
+        // Port 80
+        let p80 = ports.iter().find(|p| p["port"] == 80).expect("port 80 should be present");
+        assert_eq!(p80["protocol"], "tcp");
+        assert_eq!(p80["state"], "open");
+        assert_eq!(p80["service"], "http");
+        assert!(
+            p80["version"].as_str().unwrap_or("").contains("nginx"),
+            "version should contain nginx"
+        );
+
+        // Port 443
+        let p443 = ports.iter().find(|p| p["port"] == 443).expect("port 443 should be present");
+        assert_eq!(p443["protocol"], "tcp");
+        assert_eq!(p443["state"], "open");
+        assert_eq!(p443["service"], "https");
+    }
+
+    #[test]
+    fn parse_nmap_xml_malformed_returns_none() {
+        assert!(parse_nmap_xml("this is not xml at all").is_none());
+        assert!(parse_nmap_xml("").is_none());
+        assert!(parse_nmap_xml("<broken>").is_none());
+    }
+
+    #[test]
+    fn parse_nmap_xml_empty_hosts() {
+        let result = parse_nmap_xml(NMAP_XML_NO_HOSTS)
+            .expect("should parse valid nmap XML with no hosts");
+
+        let hosts = result["hosts"].as_array().expect("hosts should be an array");
+        assert_eq!(hosts.len(), 0, "expected empty hosts array");
     }
 
     /// Requires nmap + passt + newuidmap. Run with: cargo test -p sigint-tools -- --ignored
