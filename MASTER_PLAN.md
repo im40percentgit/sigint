@@ -8,9 +8,9 @@
 
 **SIGINT** is a single-binary AI-powered penetration testing tool built in Rust. It replaces overengineered multi-container pentest orchestrators (like PentAGI) with a local-first design: embedded SQLite, local LLM via Ollama, native Linux sandboxing via hakoniwa, and continuous attack surface mapping.
 
-**Architecture:** Cargo workspace with 10 crates, shared `AppCore` backend, dual interface (TUI + Web), 5-role agent system with Orchestrator dispatch.
+**Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 5-role agent system with Orchestrator dispatch.
 
-**Current Phase:** Phase 4 — Attack Surface Mapping
+**Current Phase:** Phase 5 completed — all phases done
 
 ### Architecture
 
@@ -25,8 +25,10 @@ sigint/
     sigint-tools/      # Tool trait, nmap/gobuster/shell wrappers, registry
     sigint-recon/      # Attack surface mapping, change detection
     sigint-tui/        # Ratatui terminal interface
-    sigint-web/        # Axum embedded web UI
+    sigint-web/        # Axum embedded web UI + REST API + WebSocket
+    sigint-report/     # Report generation (Markdown, HTML)
     sigint-cli/        # Binary entry point
+    sigint-memory/     # Episodic + semantic memory
 ```
 
 **Interfaces:** TUI (default), Web (`sigint serve`), dual (`sigint --web`), headless (`sigint run <task>`)
@@ -38,7 +40,8 @@ sigint/
 - Phase 1 completed (commit 862f9e1)
 - Phase 2 completed (commits d8e5c4a–031276b, 4 hotfix rounds)
 - Phase 3 completed (commits 8bcf354–0fee08c) — TUI, memory, embeddings, session CLI, integration wiring
-- Phase 4 planning next — Attack Surface Mapping
+- Phase 4 completed (commits 65588ba–a1b59d2) — ASM store, discovery, tools, TUI+CLI
+- Phase 5 completed (commits 654eaa2–ec9ccf0) — Doctor, OpenAI provider, reports, REST API, SPA frontend
 
 ---
 
@@ -62,14 +65,16 @@ Build a single-binary AI-powered penetration testing tool in Rust that replaces 
 | Component | Crate |
 |-----------|-------|
 | Runtime | `tokio` |
-| HTTP | `reqwest` (stream), `axum` |
-| SSE | `eventsource-stream` |
+| HTTP | `reqwest` (stream), `axum` (REST + WS) |
+| SSE | `eventsource-stream` (OpenAI streaming) |
 | CLI | `clap` |
 | TUI | `ratatui` + `crossterm` |
 | DB | `rusqlite` (bundled) |
 | Embeddings | `fastembed` |
 | Sandbox | `hakoniwa` |
 | Logging | `tracing` |
+| Reports | `pulldown-cmark` (Markdown→HTML) |
+| Frontend | Preact + HTM + esbuild, `rust-embed` |
 | Serialization | `serde`, `serde_json`, `toml` |
 
 ## Phases
@@ -520,20 +525,28 @@ Depends on: P2-5
 - [x] Sub-Phase 3E: Integration — sessions CLI (list/export/delete), memory+embedding wiring in scan, TUI help overlay
 
 ### Phase 4: Attack Surface Mapping
-**Status:** active
-- [ ] Discovery modules (DNS, port scan, web, cert, OSINT)
-- [ ] Asset correlator + change detector
-- [ ] Recon scheduler
-- [ ] TUI ASM dashboard
-- [ ] Additional tools: nikto, sqlmap, feroxbuster, nuclei
+**Status:** completed
+**Sub-phases:** 4A (Store) → 4B (Discovery) → 4C (Tools) → 4D (TUI+CLI)
+**Plan:** `docs/plans/2026-03-01-phase5-web-ui-polish-design.md` (Phase 5 design includes Phase 4 context)
+**Decisions:** DEC-ASM-001, DEC-RECON-001–008, DEC-TOOL-005–008, DEC-4D-STATE-001, DEC-4D-UI-001, DEC-4D-RECON-001–002
+
+- [x] Sub-Phase 4A: Store layer — Asset/AssetService/AssetChange CRUD, 4 ASM events
+- [x] Sub-Phase 4B: Discovery modules — DNS, port, web, cert, OSINT + correlator + change detector
+- [x] Sub-Phase 4C: Offensive tools — gobuster, nikto, nuclei, feroxbuster + WebScanner/Bruteforce sandbox profiles
+- [x] Sub-Phase 4D: TUI + CLI — Assets panel, `sigint recon <target>` subcommand
 
 ### Phase 5: Web UI + Polish
-**Status:** planned
-- [ ] Axum server + embedded SPA
-- [ ] REST API + WebSocket
-- [ ] Report generation (HTML, Markdown, PDF)
-- [ ] Additional LLM providers
-- [ ] `sigint doctor`
+**Status:** completed
+**Sub-phases:** 5A (Doctor) → 5B (OpenAI Provider) → 5C (Reports) → 5D (REST API) → 5E (SPA)
+**Design:** `docs/plans/2026-03-01-phase5-web-ui-polish-design.md`
+**Plan:** `docs/plans/2026-03-01-phase5-implementation.md`
+**Decisions:** DEC-P5-DOCTOR, DEC-P5-OPENAI, DEC-LLM-005, DEC-P5-REPORT, DEC-REPORT-001, DEC-WEB-001–010
+
+- [x] Sub-Phase 5A: `sigint doctor` — 6 health checks (config, Ollama, model, tools, sandbox, DB)
+- [x] Sub-Phase 5B: OpenAI-compatible LLM provider + factory + SSE streaming
+- [x] Sub-Phase 5C: Report generation (Markdown, HTML) with 3 templates + CLI command
+- [x] Sub-Phase 5D: Axum REST API (8 routes) + WebSocket event bridge + `sigint serve`
+- [x] Sub-Phase 5E: Embedded SPA frontend (Preact + HTM + rust-embed)
 
 ## Architectural Decisions
 
