@@ -11,6 +11,7 @@
 //! another. This decouples the UI layer from the core completely.
 
 use crate::types::{Asset, Finding, Message, Session, Task};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -18,7 +19,10 @@ use uuid::Uuid;
 const BUS_CAPACITY: usize = 256;
 
 /// Domain events emitted by SIGINT components.
-#[derive(Debug, Clone)]
+///
+/// All variants derive `Serialize` so the WebSocket bridge can stream events
+/// as JSON to connected browser clients without an intermediate DTO layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
     /// A new chat message was created.
     MessageCreated(Message),

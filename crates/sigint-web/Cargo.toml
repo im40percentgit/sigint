@@ -5,6 +5,21 @@ edition.workspace = true
 
 [dependencies]
 sigint-core = { workspace = true }
+sigint-store = { workspace = true }
+sigint-report = { workspace = true }
 tokio = { workspace = true }
-thiserror = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
+tokio = { workspace = true }

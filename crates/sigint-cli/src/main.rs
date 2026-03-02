@@ -15,6 +15,7 @@ mod doctor;
 mod recon;
 mod report;
 mod scan;
+mod serve;
 mod sessions;
 
 use clap::{Parser, Subcommand};
@@ -70,6 +71,12 @@ enum Commands {
     },
     /// Generate a report for a scan session.
     Report(report::ReportArgs),
+    /// Start the SIGINT web UI server.
+    Serve {
+        /// Address to bind (e.g. "127.0.0.1:8080").
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: String,
+    },
     /// Run attack surface reconnaissance against a target (Phase 4 ASM).
     Recon {
         /// Target domain, hostname, or IP address.
@@ -120,6 +127,7 @@ async fn main() {
             scan::run(core, target, model, max_iterations, tui, no_tui).await
         }
         Commands::Report(args) => report::run(core, args).await,
+        Commands::Serve { bind } => serve::run(core, &bind).await,
         Commands::Recon { target, modules, watch } => {
             recon::run(core, recon::ReconArgs { target, modules, watch }).await
         }
