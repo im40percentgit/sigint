@@ -11,6 +11,7 @@
 //! so the main.rs stays minimal and each command can be tested in isolation.
 
 mod chat;
+mod diff;
 mod doctor;
 mod recon;
 mod report;
@@ -69,6 +70,8 @@ enum Commands {
         #[arg(long)]
         no_tui: bool,
     },
+    /// Compare findings between two scan sessions.
+    Diff(diff::DiffArgs),
     /// Generate a report for a scan session.
     Report(report::ReportArgs),
     /// Start the SIGINT web UI server.
@@ -129,6 +132,7 @@ async fn main() {
             no_tui,
             ..
         } => scan::run(core, target, model, max_iterations, tui, no_tui).await,
+        Commands::Diff(args) => diff::run(core, args).await,
         Commands::Report(args) => report::run(core, args).await,
         Commands::Serve { bind } => serve::run(core, &bind).await,
         Commands::Recon {
