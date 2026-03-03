@@ -52,8 +52,8 @@ pub async fn run(core: AppCore, args: DiffArgs) -> Result<(), Error> {
     match args.format.as_str() {
         "markdown" => print_markdown(&diff),
         _ => {
-            let json = serde_json::to_string_pretty(&diff)
-                .map_err(|e| Error::Other(e.to_string()))?;
+            let json =
+                serde_json::to_string_pretty(&diff).map_err(|e| Error::Other(e.to_string()))?;
             println!("{}", json);
         }
     }
@@ -77,7 +77,12 @@ fn print_markdown(diff: &sigint_core::diff::ScanDiff) {
         println!("| Severity | Title | Asset |");
         println!("|----------|-------|-------|");
         for f in &diff.new {
-            println!("| {} | {} | {} |", f.severity, f.title, f.asset.as_deref().unwrap_or("-"));
+            println!(
+                "| {} | {} | {} |",
+                f.severity,
+                f.title,
+                f.asset.as_deref().unwrap_or("-")
+            );
         }
     }
 
@@ -88,7 +93,12 @@ fn print_markdown(diff: &sigint_core::diff::ScanDiff) {
         println!("| Severity | Title | Asset |");
         println!("|----------|-------|-------|");
         for f in &diff.fixed {
-            println!("| {} | {} | {} |", f.severity, f.title, f.asset.as_deref().unwrap_or("-"));
+            println!(
+                "| {} | {} | {} |",
+                f.severity,
+                f.title,
+                f.asset.as_deref().unwrap_or("-")
+            );
         }
     }
 
@@ -99,7 +109,12 @@ fn print_markdown(diff: &sigint_core::diff::ScanDiff) {
         println!("| Severity | Title | Asset |");
         println!("|----------|-------|-------|");
         for f in &diff.unchanged {
-            println!("| {} | {} | {} |", f.severity, f.title, f.asset.as_deref().unwrap_or("-"));
+            println!(
+                "| {} | {} | {} |",
+                f.severity,
+                f.title,
+                f.asset.as_deref().unwrap_or("-")
+            );
         }
     }
 }
@@ -135,7 +150,10 @@ mod tests {
         // We test the UUID parsing logic directly since run() is async + needs config
         let result = Uuid::parse_str("not-a-uuid");
         assert!(result.is_err());
-        let err = Error::Other(format!("Invalid UUID 'not-a-uuid': {}", result.unwrap_err()));
+        let err = Error::Other(format!(
+            "Invalid UUID 'not-a-uuid': {}",
+            result.unwrap_err()
+        ));
         assert!(err.to_string().contains("Invalid UUID"));
     }
 

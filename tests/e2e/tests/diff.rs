@@ -15,7 +15,7 @@
 //! db.create_finding() before firing HTTP requests. This tests the full path:
 //! seeded data → HTTP request → diff engine → JSON response validation.
 
-use sigint_core::types::{Finding, Severity, Session};
+use sigint_core::types::{Finding, Session, Severity};
 use sigint_e2e::{base_url, start_server_with_db};
 use uuid::Uuid;
 
@@ -157,7 +157,11 @@ async fn diff_empty_sessions_returns_all_zeros() {
     let url = format!("{}/api/diff/{}/{}", base_url(addr), s1.id, s2.id);
     let resp = client.get(&url).send().await.unwrap();
 
-    assert_eq!(resp.status(), 200, "expected 200 OK for empty sessions diff");
+    assert_eq!(
+        resp.status(),
+        200,
+        "expected 200 OK for empty sessions diff"
+    );
 
     let body: serde_json::Value = resp.json().await.unwrap();
 

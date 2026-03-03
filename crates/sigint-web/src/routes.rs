@@ -217,9 +217,15 @@ pub async fn diff_scans(
     let uuid_b = parse_uuid(&id_b)?;
 
     // Verify both sessions exist
-    state.db.get_session(uuid_a).map_err(internal)?
+    state
+        .db
+        .get_session(uuid_a)
+        .map_err(internal)?
         .ok_or_else(|| not_found(format!("session '{}' not found", id_a)))?;
-    state.db.get_session(uuid_b).map_err(internal)?
+    state
+        .db
+        .get_session(uuid_b)
+        .map_err(internal)?
         .ok_or_else(|| not_found(format!("session '{}' not found", id_b)))?;
 
     let findings_a = state.db.get_findings(uuid_a).map_err(internal)?;
@@ -560,17 +566,26 @@ mod tests {
         state.db.create_session(&s2).unwrap();
 
         let mut f1 = sigint_core::types::Finding::new(
-            s1.id, "XSS", "reflected xss", sigint_core::types::Severity::High,
+            s1.id,
+            "XSS",
+            "reflected xss",
+            sigint_core::types::Severity::High,
         );
         f1.asset = Some("10.0.0.1".into());
         state.db.create_finding(&f1).unwrap();
 
         let mut f2 = sigint_core::types::Finding::new(
-            s2.id, "XSS", "reflected xss", sigint_core::types::Severity::High,
+            s2.id,
+            "XSS",
+            "reflected xss",
+            sigint_core::types::Severity::High,
         );
         f2.asset = Some("10.0.0.1".into());
         let mut f3 = sigint_core::types::Finding::new(
-            s2.id, "RCE", "remote code exec", sigint_core::types::Severity::Critical,
+            s2.id,
+            "RCE",
+            "remote code exec",
+            sigint_core::types::Severity::Critical,
         );
         f3.asset = Some("10.0.0.1".into());
         state.db.create_finding(&f2).unwrap();

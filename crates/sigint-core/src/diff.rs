@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::types::{Finding};
+use crate::types::Finding;
 
 // ── Match key ────────────────────────────────────────────────────────────────
 
@@ -29,10 +29,7 @@ use crate::types::{Finding};
 type MatchKey = (String, String);
 
 fn match_key(f: &Finding) -> MatchKey {
-    (
-        f.title.to_lowercase(),
-        f.asset.clone().unwrap_or_default(),
-    )
+    (f.title.to_lowercase(), f.asset.clone().unwrap_or_default())
 }
 
 // ── Public types ─────────────────────────────────────────────────────────────
@@ -207,7 +204,11 @@ mod tests {
         let findings_a = vec![make_finding(a, "SQL Injection", Some("api.example.com"))];
         let findings_b = vec![make_finding(b, "sql injection", Some("api.example.com"))];
         let diff = diff_findings(a, &findings_a, b, &findings_b);
-        assert_eq!(diff.unchanged.len(), 1, "case difference should not create new finding");
+        assert_eq!(
+            diff.unchanged.len(),
+            1,
+            "case difference should not create new finding"
+        );
         assert_eq!(diff.new.len(), 0);
         assert_eq!(diff.fixed.len(), 0);
     }
@@ -232,18 +233,22 @@ mod tests {
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
         let findings_a = vec![
-            make_finding(a, "XSS", Some("app.example.com")),       // will be unchanged
-            make_finding(a, "SQLi", Some("db.example.com")),       // will be fixed
+            make_finding(a, "XSS", Some("app.example.com")), // will be unchanged
+            make_finding(a, "SQLi", Some("db.example.com")), // will be fixed
             make_finding(a, "Open Redirect", Some("app.example.com")), // will be fixed
         ];
         let findings_b = vec![
-            make_finding(b, "XSS", Some("app.example.com")),       // unchanged
-            make_finding(b, "RCE", Some("api.example.com")),       // new
+            make_finding(b, "XSS", Some("app.example.com")), // unchanged
+            make_finding(b, "RCE", Some("api.example.com")), // new
         ];
         let diff = diff_findings(a, &findings_a, b, &findings_b);
         assert_eq!(diff.unchanged.len(), 1, "XSS should be unchanged");
         assert_eq!(diff.new.len(), 1, "RCE should be new");
-        assert_eq!(diff.fixed.len(), 2, "SQLi and Open Redirect should be fixed");
+        assert_eq!(
+            diff.fixed.len(),
+            2,
+            "SQLi and Open Redirect should be fixed"
+        );
         assert_eq!(diff.summary.unchanged, 1);
         assert_eq!(diff.summary.new, 1);
         assert_eq!(diff.summary.fixed, 2);
@@ -257,7 +262,11 @@ mod tests {
         let findings_a = vec![make_finding(a, "Weak TLS", None)];
         let findings_b = vec![make_finding(b, "Weak TLS", None)];
         let diff = diff_findings(a, &findings_a, b, &findings_b);
-        assert_eq!(diff.unchanged.len(), 1, "None asset should match None asset");
+        assert_eq!(
+            diff.unchanged.len(),
+            1,
+            "None asset should match None asset"
+        );
         assert_eq!(diff.new.len(), 0);
         assert_eq!(diff.fixed.len(), 0);
     }
