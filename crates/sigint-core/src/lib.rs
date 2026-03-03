@@ -15,6 +15,7 @@ pub mod approval;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod diff;
 pub mod types;
 
 pub use app::AppCore;
