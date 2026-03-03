@@ -58,6 +58,43 @@ pub async fn start_server() -> SocketAddr {
     addr
 }
 
+/// Start a real Axum server on a random port, returning both the address and
+/// the database handle so tests can seed data directly.
+///
+/// Use this variant when you need to insert findings, sessions, or other
+/// records before making HTTP requests (e.g. diff tests that require pre-seeded
+/// findings in two sessions).
+pub async fn start_server_with_db() -> (SocketAddr, Arc<Database>) {
+    let db = Arc::new(Database::open_in_memory().expect("in-memory db"));
+    let event_bus = EventBus::new();
+    let config = Arc::new(Config::default());
+    let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(30)));
+    let scan_service = Arc::new(ScanService::new(
+        config.clone(),
+        event_bus.clone(),
+        approval_registry.clone(),
+    ));
+    let state = AppState {
+        db: Arc::clone(&db),
+        event_bus,
+        config,
+        approval_registry,
+        scan_service,
+    };
+
+    let app = sigint_web::create_router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind to random port");
+    let addr = listener.local_addr().expect("local addr");
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    (addr, db)
+}
+
 /// Build a base URL from a socket address.
 pub fn base_url(addr: SocketAddr) -> String {
     format!("http://{}", addr)
