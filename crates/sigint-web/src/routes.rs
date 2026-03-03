@@ -206,6 +206,29 @@ pub async fn session_findings(
     Ok(Json(findings))
 }
 
+// ── Diff ─────────────────────────────────────────────────────────────────────
+
+/// `GET /api/diff/{scan_a}/{scan_b}` — compare findings between two scans.
+pub async fn diff_scans(
+    State(state): State<AppState>,
+    Path((id_a, id_b)): Path<(String, String)>,
+) -> ApiResult<impl IntoResponse> {
+    let uuid_a = parse_uuid(&id_a)?;
+    let uuid_b = parse_uuid(&id_b)?;
+
+    // Verify both sessions exist
+    state.db.get_session(uuid_a).map_err(internal)?
+        .ok_or_else(|| not_found(format!("session '{}' not found", id_a)))?;
+    state.db.get_session(uuid_b).map_err(internal)?
+        .ok_or_else(|| not_found(format!("session '{}' not found", id_b)))?;
+
+    let findings_a = state.db.get_findings(uuid_a).map_err(internal)?;
+    let findings_b = state.db.get_findings(uuid_b).map_err(internal)?;
+
+    let diff = sigint_core::diff::diff_findings(uuid_a, &findings_a, uuid_b, &findings_b);
+    Ok(Json(diff))
+}
+
 // ── Report ────────────────────────────────────────────────────────────────────
 
 /// Query parameters for the report endpoint.
@@ -524,6 +547,64 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── Diff ──────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn diff_two_sessions_returns_200() {
+        let state = test_state();
+        let s1 = sigint_core::types::Session::new("scan-a");
+        let s2 = sigint_core::types::Session::new("scan-b");
+        state.db.create_session(&s1).unwrap();
+        state.db.create_session(&s2).unwrap();
+
+        let mut f1 = sigint_core::types::Finding::new(
+            s1.id, "XSS", "reflected xss", sigint_core::types::Severity::High,
+        );
+        f1.asset = Some("10.0.0.1".into());
+        state.db.create_finding(&f1).unwrap();
+
+        let mut f2 = sigint_core::types::Finding::new(
+            s2.id, "XSS", "reflected xss", sigint_core::types::Severity::High,
+        );
+        f2.asset = Some("10.0.0.1".into());
+        let mut f3 = sigint_core::types::Finding::new(
+            s2.id, "RCE", "remote code exec", sigint_core::types::Severity::Critical,
+        );
+        f3.asset = Some("10.0.0.1".into());
+        state.db.create_finding(&f2).unwrap();
+        state.db.create_finding(&f3).unwrap();
+
+        let app = create_router(state);
+        let req = Request::builder()
+            .uri(format!("/api/diff/{}/{}", s1.id, s2.id))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["summary"]["new"], 1);
+        assert_eq!(v["summary"]["unchanged"], 1);
+        assert_eq!(v["summary"]["fixed"], 0);
+    }
+
+    #[tokio::test]
+    async fn diff_nonexistent_session_returns_404() {
+        let state = test_state();
+        let s1 = sigint_core::types::Session::new("exists");
+        state.db.create_session(&s1).unwrap();
+
+        let app = create_router(state);
+        let fake_id = "00000000-0000-0000-0000-000000000000";
+        let req = Request::builder()
+            .uri(format!("/api/diff/{}/{}", s1.id, fake_id))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     // ── Scan lifecycle endpoints ───────────────────────────────────────────────
