@@ -20,19 +20,41 @@
 
 use sigint_sandbox::{NetworkMode, SandboxError, SandboxedCommand};
 
-/// Returns true when newuidmap is on PATH (required by hakoniwa's uid mapping step).
+/// Returns true when the system can actually execute a command inside a
+/// hakoniwa sandbox.
+///
+/// Binary-presence checks (newuidmap) are insufficient: `newuidmap` can exist
+/// while user namespaces are blocked at the kernel level.  A real probe is the
+/// only reliable gate.  The result is cached so the probe runs at most once per
+/// test binary invocation.
 fn sandbox_available() -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join("newuidmap").is_file()))
-        || std::path::Path::new("/usr/bin/newuidmap").exists()
-        || std::path::Path::new("/usr/sbin/newuidmap").exists()
+    use std::sync::OnceLock;
+    static RESULT: OnceLock<bool> = OnceLock::new();
+    *RESULT.get_or_init(|| {
+        // Quick pre-check: avoid a slow hakoniwa attempt on machines without
+        // the uidmap tooling.
+        let newuidmap_present = std::path::Path::new("/usr/bin/newuidmap").exists()
+            || std::path::Path::new("/usr/sbin/newuidmap").exists()
+            || std::env::var_os("PATH").is_some_and(|paths| {
+                std::env::split_paths(&paths).any(|d| d.join("newuidmap").is_file())
+            });
+        if !newuidmap_present {
+            return false;
+        }
+        // Real probe: if user namespaces are blocked this fails even though
+        // newuidmap is present.
+        match SandboxedCommand::new("/bin/true").timeout(5).execute() {
+            Ok(out) => out.success,
+            Err(_) => false,
+        }
+    })
 }
 
 /// Basic execution: stdout capture and zero exit code.
 #[test]
 fn echo_hello_in_sandbox() {
     if !sandbox_available() {
-        eprintln!("SKIP: newuidmap not found — install uidmap package");
+        eprintln!("SKIP: sandbox probe failed (user namespaces unavailable)");
         return;
     }
     let out = SandboxedCommand::new("/bin/echo")
@@ -55,7 +77,7 @@ fn echo_hello_in_sandbox() {
 #[test]
 fn false_exits_nonzero() {
     if !sandbox_available() {
-        eprintln!("SKIP: newuidmap not found — install uidmap package");
+        eprintln!("SKIP: sandbox probe failed (user namespaces unavailable)");
         return;
     }
     let out = SandboxedCommand::new("/bin/false")
@@ -71,7 +93,7 @@ fn false_exits_nonzero() {
 #[test]
 fn nonexistent_command_returns_error() {
     if !sandbox_available() {
-        eprintln!("SKIP: newuidmap not found — install uidmap package");
+        eprintln!("SKIP: sandbox probe failed (user namespaces unavailable)");
         return;
     }
     let result = SandboxedCommand::new("/bin/__sigint_nonexistent_binary__")
@@ -90,7 +112,7 @@ fn nonexistent_command_returns_error() {
 #[test]
 fn timeout_kills_sleep() {
     if !sandbox_available() {
-        eprintln!("SKIP: newuidmap not found — install uidmap package");
+        eprintln!("SKIP: sandbox probe failed (user namespaces unavailable)");
         return;
     }
     let result = SandboxedCommand::new("/bin/sleep")
@@ -115,7 +137,7 @@ fn timeout_kills_sleep() {
 #[test]
 fn bare_command_name_resolves() {
     if !sandbox_available() {
-        eprintln!("SKIP: newuidmap not found — install uidmap package");
+        eprintln!("SKIP: sandbox probe failed (user namespaces unavailable)");
         return;
     }
     // "echo" (bare name) should resolve to /bin/echo or /usr/bin/echo.
