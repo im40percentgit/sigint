@@ -148,11 +148,24 @@ pub async fn run(
     // ── LLM provider ──────────────────────────────────────────────────────────
     let provider = Arc::new(OllamaProvider::from_config(&core.config.llm));
 
-    // ── Session ID — shared between orchestrator and post-scan persistence ────
-    // Generate upfront so per-tool ScanRecords and the pipeline summary record
-    // both reference the same session. The session row itself is created by
-    // persist_scan after the pipeline completes.
+    // ── Session — create upfront so per-tool ScanRecords can reference it ─────
+    // The session row MUST exist before the orchestrator runs because per-tool
+    // ScanRecord inserts have a FOREIGN KEY constraint on session_id.
+    // Best-effort: if the DB is unavailable the scan still runs.
     let scan_session_id = uuid::Uuid::new_v4();
+    if let Ok(session_db) = Database::open(&db_path) {
+        let session_name = format!(
+            "scan-{}-{}",
+            target.replace(['.', '/'], "-"),
+            chrono::Utc::now().format("%Y%m%d-%H%M%S"),
+        );
+        let mut session =
+            sigint_core::types::Session::new(&session_name).with_target(&target);
+        session.id = scan_session_id;
+        if let Err(e) = session_db.create_session(&session) {
+            warn!("scan: cannot create session upfront: {e}");
+        }
+    }
 
     // ── Orchestrator ──────────────────────────────────────────────────────────
     let mut orchestrator = Orchestrator::new(
@@ -194,8 +207,8 @@ pub async fn run(
     println!("{}", report);
 
     // ── Persist to database + episodic memory (best-effort) ──────────────────
-    // Pass the pre-generated session_id so the session row matches the per-tool
-    // ScanRecords already written during the pipeline.
+    // Pass the pre-generated session_id so the summary record links to the
+    // session row created upfront (and matches per-tool ScanRecords).
     let session_id = persist_scan(&core, &target, &report, scan_session_id).await;
 
     // Store episode summary so future scans of the same target recall this session.
@@ -249,11 +262,15 @@ fn spawn_stdout_printer(mut event_rx: tokio::sync::broadcast::Receiver<Event>) {
 
 /// Persist the scan session and one summary record to SQLite.
 ///
-/// Uses the pre-generated `session_id` so the session row matches the per-tool
-/// `ScanRecord`s already written by the orchestrator during the pipeline run.
+/// The session was created upfront (before `run_scan`) so that per-tool
+/// `ScanRecord` inserts during the pipeline can satisfy the FOREIGN KEY
+/// constraint. This function serves as a fallback if the upfront create
+/// failed, and always writes the aggregate pipeline summary.
 ///
 /// Persists:
-///   1. A `sessions` row keyed to this target, using the supplied `session_id`.
+///   1. A `sessions` row keyed to this target, using the pre-generated
+///      `session_id`. If the upfront create succeeded this is a harmless
+///      no-op (duplicate-key error is ignored).
 ///   2. One `scan_history` row whose `tool` is "pipeline" and `output` is the
 ///      Reporter's final summary — an aggregate audit record alongside the
 ///      per-tool records written during execution.
@@ -277,25 +294,33 @@ async fn persist_scan(
         }
     };
 
-    // Create a session record scoped to this scan, using the pre-generated ID.
+    // Attempt to create the session using the pre-generated ID.
+    // The session was already created upfront before the orchestrator ran;
+    // this is a fallback in case that failed (e.g. DB was transiently
+    // unavailable). If the upfront create succeeded this will return a
+    // duplicate-key error which we treat as a harmless no-op.
     let session_name = format!(
         "scan-{}-{}",
         target.replace(['.', '/'], "-"),
         chrono::Utc::now().format("%Y%m%d-%H%M%S"),
     );
     let mut session = sigint_core::types::Session::new(&session_name).with_target(target);
-    // Override the auto-generated UUID with the pre-generated one so this
-    // session row matches the per-tool ScanRecords written during the pipeline.
     session.id = session_id;
-
+    // INSERT OR IGNORE semantics: ignore duplicate-key errors (upfront create
+    // already succeeded), but warn on any other error.
     if let Err(e) = db.create_session(&session) {
-        warn!("scan: cannot persist session: {}", e);
-        return None;
+        let msg = e.to_string();
+        if msg.contains("UNIQUE constraint") || msg.contains("already exists") {
+            // Session was created upfront — this is expected and harmless.
+        } else {
+            warn!("scan: cannot persist session: {}", e);
+            return None;
+        }
     }
 
     // Persist one aggregate scan_history row with the pipeline summary.
     let mut record = ScanRecord::new(
-        session.id,
+        session_id,
         "pipeline",
         serde_json::json!({"target": target}).to_string(),
     );
@@ -307,7 +332,7 @@ async fn persist_scan(
         warn!("scan: cannot persist scan history record: {}", e);
     }
 
-    Some(session.id)
+    Some(session_id)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
