@@ -112,3 +112,79 @@ async fn handle_client_message(text: &str, state: &AppState) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sigint_agents::ScanService;
+    use sigint_core::{event::EventBus, ApprovalRegistry, Config};
+    use sigint_store::Database;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn test_state() -> AppState {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let event_bus = EventBus::new();
+        let config = Arc::new(Config::default());
+        let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(30)));
+        let scan_service = Arc::new(ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+        }
+    }
+
+    #[tokio::test]
+    async fn approve_valid_request() {
+        let state = test_state();
+        let request_id = uuid::Uuid::new_v4();
+        let rx = state.approval_registry.request(request_id);
+
+        let msg = format!(r#"{{"type":"approve","request_id":"{}"}}"#, request_id);
+        handle_client_message(&msg, &state).await;
+
+        let result = rx.await.unwrap();
+        assert!(result, "approval should be true");
+    }
+
+    #[tokio::test]
+    async fn deny_valid_request() {
+        let state = test_state();
+        let request_id = uuid::Uuid::new_v4();
+        let rx = state.approval_registry.request(request_id);
+
+        let msg = format!(r#"{{"type":"deny","request_id":"{}"}}"#, request_id);
+        handle_client_message(&msg, &state).await;
+
+        let result = rx.await.unwrap();
+        assert!(!result, "denial should be false");
+    }
+
+    #[tokio::test]
+    async fn malformed_json_does_not_panic() {
+        let state = test_state();
+        handle_client_message("not json at all", &state).await;
+        // Should not panic — just logs a warning
+    }
+
+    #[tokio::test]
+    async fn unknown_command_type_does_not_panic() {
+        let state = test_state();
+        handle_client_message(r#"{"type":"unknown_cmd","data":123}"#, &state).await;
+        // Should not panic — logs debug and returns
+    }
+
+    #[tokio::test]
+    async fn invalid_uuid_does_not_panic() {
+        let state = test_state();
+        handle_client_message(r#"{"type":"approve","request_id":"not-a-uuid"}"#, &state).await;
+        // Should not panic — uuid parse fails silently
+    }
+}
