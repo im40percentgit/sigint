@@ -52,6 +52,11 @@ pub enum Event {
     Status(String),
     /// Shutdown signal.
     Shutdown,
+    /// User submitted text input from the TUI or web interface.
+    UserInput {
+        session_id: Uuid,
+        text: String,
+    },
     // ── Attack Surface Mapping events ─────────────────────────────────────────
     /// A new asset was discovered during reconnaissance.
     AssetDiscovered(Asset),
@@ -199,5 +204,19 @@ mod tests {
         let json = serde_json::to_string(&denied).unwrap();
         assert!(json.contains("ToolApprovalDenied"));
         assert!(json.contains("too risky"));
+    }
+
+    #[test]
+    fn user_input_event_serializes() {
+        let ev = Event::UserInput {
+            session_id: Uuid::nil(),
+            text: "hello".into(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("UserInput"));
+        assert!(json.contains("hello"));
+        // Roundtrip
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Event::UserInput { text, .. } if text == "hello"));
     }
 }

@@ -244,6 +244,12 @@ impl AppState {
             Event::Shutdown => {
                 self.should_quit = true;
             }
+            Event::UserInput { session_id: _, text } => {
+                self.messages.push(DisplayMessage {
+                    role: "user".to_string(),
+                    content: text,
+                });
+            }
             // ── Approval gate events ───────────────────────────────────────
             Event::ToolApprovalRequested {
                 request_id,
@@ -594,6 +600,18 @@ mod tests {
         // Simulate what app.rs does on 'y': clear pending_approval.
         state.pending_approval = None;
         assert!(state.pending_approval.is_none());
+    }
+
+    #[test]
+    fn user_input_adds_message_to_chat() {
+        let mut state = AppState::new();
+        state.apply(Event::UserInput {
+            session_id: Uuid::nil(),
+            text: "scan 10.0.0.1".to_string(),
+        });
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].role, "user");
+        assert_eq!(state.messages[0].content, "scan 10.0.0.1");
     }
 
     #[test]
