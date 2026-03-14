@@ -75,7 +75,6 @@ pub struct ScanInfo {
 pub struct ScanService {
     config: Arc<Config>,
     event_bus: EventBus,
-    #[allow(dead_code)]
     approval_registry: Arc<ApprovalRegistry>,
     scans: Arc<Mutex<HashMap<Uuid, ScanHandle>>>,
 }
@@ -157,7 +156,11 @@ impl ScanService {
             context_window,
             model,
         )
-        .with_max_iterations(10);
+        .with_max_iterations(10)
+        .with_approval_registry(self.approval_registry.clone())
+        // Web-initiated scans auto-approve only Low-risk (info-gathering) tools.
+        // Medium and High risk tools require explicit operator approval via WebSocket.
+        .with_auto_approve("low");
 
         if let Some(memory) = memory_service {
             orchestrator = orchestrator.with_memory(memory);
