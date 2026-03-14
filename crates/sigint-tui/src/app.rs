@@ -198,8 +198,13 @@ impl TuiApp {
                 self.state.input.pop();
             }
             (Mode::Normal, KeyCode::Enter) if self.state.focused_panel == Panel::Input => {
-                // TODO: route user input to agent pipeline via EventBus tx.
-                self.state.input.clear();
+                if !self.state.input.is_empty() {
+                    let text = std::mem::take(&mut self.state.input);
+                    let _ = self.event_tx.send(Event::UserInput {
+                        session_id: uuid::Uuid::nil(), // No active session yet — Phase 8
+                        text,
+                    });
+                }
             }
 
             // Escape exits Search/Command modes.
