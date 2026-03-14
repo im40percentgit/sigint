@@ -59,6 +59,18 @@
 //! best-effort (warn on `Err`, never propagate), so a transient SQLite error
 //! cannot abort a live scan. Records are created before execution (so a record
 //! exists even if the process dies mid-run) and updated after (output + exit code).
+//!
+//! @decision DEC-AGENT-016
+//! @title Per-chunk 30-second timeout guards against stalled LLM streams (Phase 8D)
+//! @status accepted
+//! @rationale A stalled Ollama process (OOM-killed, network drop, hung generate
+//! goroutine) never closes the HTTP response body — `StreamExt::next()` pends
+//! forever, hanging the agent loop indefinitely. A per-chunk timeout (30s) fires
+//! only when no new token arrives for 30 seconds, so legitimate long-running
+//! generations (slow hardware, large outputs) are unaffected. On timeout the loop
+//! breaks and any text accumulated so far is returned as partial output; the loop
+//! treats the stalled stream as a text-only response (no tool calls) and terminates
+//! the current iteration gracefully — no error is propagated, no panic occurs.
 
 use std::time::Instant;
 
@@ -199,20 +211,47 @@ pub async fn run_tool_loop(
         let mut accumulated_text = String::new();
         let mut final_tool_calls: Vec<sigint_llm::types::ToolCall> = Vec::new();
 
-        while let Some(chunk_result) = StreamExt::next(&mut stream).await {
-            let chunk = chunk_result?;
+        // Per-chunk timeout: if no token arrives within 30 seconds the stream is
+        // considered stalled and we break out with whatever text we have so far.
+        // This guards against Ollama hanging indefinitely (DEC-AGENT-016).
+        const CHUNK_TIMEOUT_SECS: u64 = 30;
+        loop {
+            let maybe_chunk = tokio::time::timeout(
+                std::time::Duration::from_secs(CHUNK_TIMEOUT_SECS),
+                StreamExt::next(&mut stream),
+            )
+            .await;
 
-            if !chunk.delta.is_empty() {
-                accumulated_text.push_str(&chunk.delta);
-                event_bus.emit(Event::AgentThinking {
-                    agent_role: agent_role.to_string(),
-                    token: chunk.delta.clone(),
-                });
-            }
+            match maybe_chunk {
+                Ok(Some(chunk_result)) => {
+                    let chunk = chunk_result?;
 
-            if chunk.done {
-                final_tool_calls = chunk.tool_calls;
-                break;
+                    if !chunk.delta.is_empty() {
+                        accumulated_text.push_str(&chunk.delta);
+                        event_bus.emit(Event::AgentThinking {
+                            agent_role: agent_role.to_string(),
+                            token: chunk.delta.clone(),
+                        });
+                    }
+
+                    if chunk.done {
+                        final_tool_calls = chunk.tool_calls;
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    // Stream ended without a done=true chunk — treat as text response.
+                    break;
+                }
+                Err(_elapsed) => {
+                    // Per-chunk timeout: LLM stalled for 30 seconds.
+                    warn!(
+                        iteration,
+                        timeout_secs = CHUNK_TIMEOUT_SECS,
+                        "tool loop: LLM stream stalled, breaking with partial output"
+                    );
+                    break;
+                }
             }
         }
 
@@ -1217,6 +1256,154 @@ mod tests {
         assert!(
             done_event.is_some(),
             "expected AgentThinkingDone with role 'researcher'"
+        );
+    }
+
+    // ── Per-chunk timeout tests (8D-1) ────────────────────────────────────────
+
+    /// Build a `ChunkStream` that yields `initial_text` as a delta chunk then
+    /// stalls forever (never yields `done=true`). Used to test the 30-second
+    /// per-chunk timeout guard (DEC-AGENT-016).
+    ///
+    /// The stream pends on `std::future::pending::<()>()` after the first chunk
+    /// so `StreamExt::next()` will never resolve for the second item.
+    fn stalling_stream(initial_text: &str) -> ChunkStream {
+        let text = initial_text.to_string();
+        let stream = async_stream::stream! {
+            yield Ok::<StreamChunk, sigint_core::Error>(StreamChunk {
+                delta: text,
+                done: false,
+                usage: None,
+                tool_calls: vec![],
+            });
+            // Hang forever — simulates a stalled Ollama process.
+            std::future::pending::<()>().await;
+        };
+        Box::pin(stream)
+    }
+
+    /// A mock LLM provider that returns a stalling stream (one chunk then hangs).
+    struct StallingProvider {
+        initial_text: String,
+    }
+
+    #[async_trait]
+    impl LlmProvider for StallingProvider {
+        fn name(&self) -> &str {
+            "stalling"
+        }
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, Error> {
+            Err(Error::Llm("not used".into()))
+        }
+        async fn chat_stream(&self, _: ChatRequest) -> Result<ChunkStream, Error> {
+            Ok(stalling_stream(&self.initial_text))
+        }
+    }
+
+    /// The per-chunk timeout must fire when the LLM stops sending chunks.
+    ///
+    /// Strategy: use `tokio::time::pause()` + `tokio::time::advance()` to jump
+    /// the clock forward 31 seconds without real wall-clock waiting. The loop
+    /// engine has a 30-second per-chunk timeout (CHUNK_TIMEOUT_SECS), so after
+    /// advancing 31 seconds the timeout elapses and the loop should break and
+    /// return the partial accumulated text.
+    #[tokio::test(start_paused = true)]
+    async fn streaming_timeout_returns_partial_text() {
+        let provider = StallingProvider {
+            initial_text: "partial output here".to_string(),
+        };
+        let mut state = make_state();
+        let bus = EventBus::new();
+        let tools: Vec<&dyn Tool> = vec![];
+
+        // Advance time past the 30-second per-chunk timeout while the loop runs.
+        let advance_task = tokio::spawn(async {
+            // Yield once so the tool-loop task gets to poll the stalling stream.
+            tokio::task::yield_now().await;
+            // Jump the clock past the chunk timeout.
+            tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        });
+
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &tools,
+            &no_tools(),
+            make_opts(1, &bus, None, "all"),
+        )
+        .await
+        .unwrap();
+
+        advance_task.await.expect("advance task panicked");
+
+        // The partial text from the first chunk should be returned.
+        assert_eq!(
+            result, "partial output here",
+            "expected partial accumulated text; got: {result}"
+        );
+    }
+
+    /// Verify that conversation state is updated correctly after a tool-call
+    /// round in the streaming path (8D-3 accounting check).
+    ///
+    /// The assistant message (with tool_calls) must be appended to state BEFORE
+    /// `trim_to_budget()` is called so the token budget accounts for it. This
+    /// mirrors what the non-streaming path has always done.
+    #[tokio::test]
+    async fn streaming_adds_assistant_message_before_tool_execution() {
+        let tool = MockTool::success("probe", "probe output");
+        let tool_def = tool.definition();
+        let tool_ref: &dyn Tool = &tool;
+
+        let provider = MockProvider::new(vec![
+            MockProvider::tool_response("probe", json!({"target": "192.168.1.1"})),
+            MockProvider::text_response("Probe complete."),
+        ]);
+
+        let mut state = make_state();
+        let initial_len = state.to_chat_messages().len();
+        let bus = EventBus::new();
+
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &[tool_ref],
+            &[tool_def],
+            make_opts(5, &bus, None, "all"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, "Probe complete.");
+
+        let msgs = state.to_chat_messages();
+        // After one tool round: initial user msg + assistant (tool_calls) + tool result.
+        assert_eq!(
+            msgs.len(),
+            initial_len + 2,
+            "expected initial + assistant + tool messages; got {} messages",
+            msgs.len()
+        );
+
+        // The assistant message must carry the tool_calls list (non-empty).
+        let asst = msgs
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant message missing");
+        assert!(
+            asst.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()),
+            "assistant message should carry tool_calls"
+        );
+
+        // The tool-result message follows the assistant message.
+        let tool_msg = msgs
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool message missing");
+        assert!(
+            tool_msg.content.contains("probe output"),
+            "tool message should contain probe output: {}",
+            tool_msg.content
         );
     }
 }
