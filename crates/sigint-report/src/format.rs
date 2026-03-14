@@ -111,4 +111,85 @@ mod tests {
         assert!(html.contains("<code>"), "should wrap code in <code>");
         assert!(html.contains("foo --bar"), "should preserve code content");
     }
+
+    // ── Edge-case tests ───────────────────────────────────────────────────────
+
+    /// Headings at multiple levels must each produce the corresponding
+    /// `<h1>`…`<h3>` elements in the HTML output.
+    #[test]
+    fn headings_converted_to_html_elements() {
+        let md = "# Level 1\n\n## Level 2\n\n### Level 3\n";
+        let html = markdown_to_html(md);
+
+        assert!(html.contains("<h1>"), "h1 heading must appear");
+        assert!(html.contains("Level 1"), "h1 text must be preserved");
+        assert!(html.contains("<h2>"), "h2 heading must appear");
+        assert!(html.contains("Level 2"), "h2 text must be preserved");
+        assert!(html.contains("<h3>"), "h3 heading must appear");
+        assert!(html.contains("Level 3"), "h3 text must be preserved");
+    }
+
+    /// Unordered lists must produce `<ul>` and `<li>` elements.
+    #[test]
+    fn unordered_lists_converted_to_html() {
+        let md = "- item alpha\n- item beta\n- item gamma\n";
+        let html = markdown_to_html(md);
+
+        assert!(html.contains("<ul>"), "unordered list must use <ul>");
+        assert!(html.contains("<li>"), "list items must use <li>");
+        assert!(html.contains("item alpha"), "first item text must appear");
+        assert!(html.contains("item beta"), "second item text must appear");
+        assert!(html.contains("item gamma"), "third item text must appear");
+    }
+
+    /// Ordered lists must produce `<ol>` and `<li>` elements.
+    #[test]
+    fn ordered_lists_converted_to_html() {
+        let md = "1. first\n2. second\n3. third\n";
+        let html = markdown_to_html(md);
+
+        assert!(html.contains("<ol>"), "ordered list must use <ol>");
+        assert!(html.contains("<li>"), "list items must use <li>");
+        assert!(html.contains("first"), "first item must appear");
+        assert!(html.contains("second"), "second item must appear");
+    }
+
+    /// An empty Markdown string must produce a valid, non-empty HTML document
+    /// without panicking.
+    #[test]
+    fn empty_markdown_produces_valid_html_document() {
+        let html = markdown_to_html("");
+        assert!(!html.is_empty(), "output must not be empty");
+        assert!(html.contains("<!DOCTYPE html>"), "must have doctype");
+        assert!(html.contains("<html"), "must have <html");
+        assert!(html.contains("</html>"), "must close </html>");
+        assert!(html.contains("<body>"), "must have <body>");
+        assert!(html.contains("</body>"), "must close </body>");
+    }
+
+    /// The HTML wrapper must include `<head>` with charset and viewport meta
+    /// tags for correct rendering in browsers.
+    #[test]
+    fn html_document_has_head_with_meta_tags() {
+        let html = markdown_to_html("# Test");
+        assert!(html.contains("<head>"), "must have <head>");
+        assert!(html.contains("charset=\"UTF-8\""), "must set charset");
+        assert!(
+            html.contains("name=\"viewport\""),
+            "must set viewport meta"
+        );
+    }
+
+    /// A very long Markdown paragraph (10 000 chars) must survive conversion
+    /// without truncation or panic.
+    #[test]
+    fn very_long_markdown_preserved_in_html() {
+        let long_text = "x".repeat(10_000);
+        let md = format!("# Title\n\n{long_text}\n");
+        let html = markdown_to_html(&md);
+        assert!(
+            html.contains(&long_text),
+            "10 000-char paragraph must appear verbatim in HTML output"
+        );
+    }
 }

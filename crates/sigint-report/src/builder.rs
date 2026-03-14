@@ -446,4 +446,251 @@ mod tests {
             "HTML bytes should end with </html>"
         );
     }
+
+    // ── Edge-case tests ───────────────────────────────────────────────────────
+
+    /// All three templates must produce non-empty output even with no findings
+    /// or assets.  This guards against panics in the empty-state branches.
+    #[test]
+    fn all_templates_non_empty_with_zero_findings() {
+        let data = empty_data();
+        for template in [
+            ReportTemplate::Executive,
+            ReportTemplate::Detailed,
+            ReportTemplate::Technical,
+        ] {
+            let md = build_markdown(&data, template);
+            assert!(
+                !md.is_empty(),
+                "template {:?} produced empty output with zero findings",
+                template
+            );
+            assert!(
+                md.contains("# SIGINT Security Report"),
+                "template {:?} missing main header",
+                template
+            );
+        }
+    }
+
+    /// HTML output must include the four structural tags that make it a valid
+    /// self-contained document: `<!DOCTYPE html>`, `<html`, `<body>`, `</body>`.
+    #[test]
+    fn html_output_contains_structural_tags() {
+        for template in [
+            ReportTemplate::Executive,
+            ReportTemplate::Detailed,
+            ReportTemplate::Technical,
+        ] {
+            let bytes =
+                build_report(&sample_data(), template, ReportFormat::Html);
+            let html =
+                String::from_utf8(bytes).expect("HTML must be valid UTF-8");
+
+            assert!(
+                html.contains("<!DOCTYPE html>"),
+                "template {:?}: missing <!DOCTYPE html>",
+                template
+            );
+            assert!(
+                html.contains("<html"),
+                "template {:?}: missing <html",
+                template
+            );
+            assert!(
+                html.contains("<body>"),
+                "template {:?}: missing <body>",
+                template
+            );
+            assert!(
+                html.contains("</body>"),
+                "template {:?}: missing </body>",
+                template
+            );
+            assert!(
+                html.contains("</html>"),
+                "template {:?}: missing </html>",
+                template
+            );
+        }
+    }
+
+    /// A finding with `asset: None` must render without panicking and must
+    /// show the em-dash placeholder in the Executive table.
+    #[test]
+    fn finding_with_no_asset_renders_placeholder() {
+        let data = ReportData {
+            session_name: "No Asset Test".into(),
+            target: None,
+            created_at: chrono::Utc::now(),
+            findings: vec![FindingSummary {
+                title: "Open Port".into(),
+                severity: "low".into(),
+                description: "Port 8080 open with no service banner.".into(),
+                asset: None,
+                evidence: None,
+            }],
+            assets: vec![],
+            scan_count: 1,
+        };
+
+        let md = build_markdown(&data, ReportTemplate::Executive);
+        // The em-dash placeholder must appear in the findings overview table.
+        assert!(
+            md.contains("—"),
+            "nil asset should render em-dash placeholder in executive table"
+        );
+    }
+
+    /// A finding with `evidence: None` in the Technical template must not
+    /// emit the Evidence block at all — no panic, no stray fence markers.
+    #[test]
+    fn technical_template_skips_evidence_block_when_none() {
+        let data = ReportData {
+            session_name: "No Evidence Test".into(),
+            target: None,
+            created_at: chrono::Utc::now(),
+            findings: vec![FindingSummary {
+                title: "Outdated TLS".into(),
+                severity: "medium".into(),
+                description: "Server still accepts TLSv1.0.".into(),
+                asset: Some("10.0.0.1:443".into()),
+                evidence: None,
+            }],
+            assets: vec![],
+            scan_count: 1,
+        };
+
+        let md = build_markdown(&data, ReportTemplate::Technical);
+        // The evidence header must not appear when evidence is None.
+        assert!(
+            !md.contains("**Evidence:**"),
+            "evidence block should be absent when evidence is None"
+        );
+    }
+
+    /// Findings must be sorted critical → high → medium → low in the rendered
+    /// output regardless of the order they are supplied.
+    #[test]
+    fn findings_sorted_by_severity_in_output() {
+        let data = ReportData {
+            session_name: "Sort Test".into(),
+            target: None,
+            created_at: chrono::Utc::now(),
+            findings: vec![
+                FindingSummary {
+                    title: "Low Finding".into(),
+                    severity: "low".into(),
+                    description: "Minor issue.".into(),
+                    asset: None,
+                    evidence: None,
+                },
+                FindingSummary {
+                    title: "Critical Finding".into(),
+                    severity: "critical".into(),
+                    description: "Very bad issue.".into(),
+                    asset: None,
+                    evidence: None,
+                },
+                FindingSummary {
+                    title: "Medium Finding".into(),
+                    severity: "medium".into(),
+                    description: "Moderate issue.".into(),
+                    asset: None,
+                    evidence: None,
+                },
+            ],
+            assets: vec![],
+            scan_count: 0,
+        };
+
+        let md = build_markdown(&data, ReportTemplate::Detailed);
+
+        // Find positions of each title in the Markdown.
+        let pos_critical = md
+            .find("Critical Finding")
+            .expect("Critical Finding must appear");
+        let pos_medium = md
+            .find("Medium Finding")
+            .expect("Medium Finding must appear");
+        let pos_low = md.find("Low Finding").expect("Low Finding must appear");
+
+        assert!(
+            pos_critical < pos_medium,
+            "critical must appear before medium"
+        );
+        assert!(pos_medium < pos_low, "medium must appear before low");
+    }
+
+    /// A very long description (10 000 characters) must survive the round-trip
+    /// through every template without being truncated or causing a panic.
+    #[test]
+    fn very_long_description_preserved() {
+        let long_desc = "A".repeat(10_000);
+        let data = ReportData {
+            session_name: "Long Desc Test".into(),
+            target: None,
+            created_at: chrono::Utc::now(),
+            findings: vec![FindingSummary {
+                title: "Verbose Finding".into(),
+                severity: "info".into(),
+                description: long_desc.clone(),
+                asset: None,
+                evidence: None,
+            }],
+            assets: vec![],
+            scan_count: 1,
+        };
+
+        for template in [
+            ReportTemplate::Executive,
+            ReportTemplate::Detailed,
+            ReportTemplate::Technical,
+        ] {
+            // Executive template only shows the title in the overview table,
+            // not the description — so only check Detailed and Technical.
+            let md = build_markdown(&data, template);
+            if template != ReportTemplate::Executive {
+                assert!(
+                    md.contains(&long_desc),
+                    "template {:?}: long description must not be truncated",
+                    template
+                );
+            }
+            // All templates must produce non-empty output without panicking.
+            assert!(!md.is_empty(), "template {:?}: output must not be empty", template);
+        }
+    }
+
+    /// `target: None` must not panic and must produce a valid header without
+    /// the target line.
+    #[test]
+    fn no_target_produces_valid_header() {
+        let data = ReportData {
+            session_name: "Targetless Session".into(),
+            target: None,
+            created_at: chrono::Utc::now(),
+            findings: vec![],
+            assets: vec![],
+            scan_count: 0,
+        };
+
+        for template in [
+            ReportTemplate::Executive,
+            ReportTemplate::Detailed,
+            ReportTemplate::Technical,
+        ] {
+            let md = build_markdown(&data, template);
+            assert!(
+                md.contains("# SIGINT Security Report"),
+                "template {:?}: must have report header even without target",
+                template
+            );
+            assert!(
+                !md.contains("**Target:**"),
+                "template {:?}: must not emit Target line when target is None",
+                template
+            );
+        }
+    }
 }
