@@ -126,12 +126,12 @@ async fn main() {
         Commands::Sessions(args) => sessions::run(core, args).await,
         Commands::Scan {
             target,
+            ports,
             model,
             max_iterations,
             tui,
             no_tui,
-            ..
-        } => scan::run(core, target, model, max_iterations, tui, no_tui).await,
+        } => scan::run(core, target, ports, model, max_iterations, tui, no_tui).await,
         Commands::Diff(args) => diff::run(core, args).await,
         Commands::Report(args) => report::run(core, args).await,
         Commands::Serve { bind } => serve::run(core, &bind).await,

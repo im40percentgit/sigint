@@ -41,6 +41,11 @@ use crate::{agent::Agent, role::AgentRole};
 pub struct TaskContext {
     /// The primary target (hostname, IP, or CIDR range).
     pub target: String,
+    /// Optional port specification forwarded from `--ports` CLI flag.
+    ///
+    /// When set, the Executor's prompt explicitly instructs the LLM to pass
+    /// this value as the `"ports"` argument to `nmap_scan`.
+    pub ports: Option<String>,
     /// Security findings raised by the Analyst agent.
     pub findings: Vec<Finding>,
     /// Raw tool execution results collected during Executor phase.
@@ -55,10 +60,20 @@ impl TaskContext {
     pub fn new(target: &str) -> Self {
         Self {
             target: target.to_string(),
+            ports: None,
             findings: Vec::new(),
             scan_results: Vec::new(),
             agent_outputs: HashMap::new(),
         }
+    }
+
+    /// Set the port specification for this scan engagement.
+    ///
+    /// The value is threaded into the Executor's initial prompt so that the LLM
+    /// can pass it as the `"ports"` argument to `nmap_scan`.
+    pub fn with_ports(mut self, ports: Option<String>) -> Self {
+        self.ports = ports;
+        self
     }
 
     /// Format the accumulated context into a role-appropriate initial prompt.
@@ -99,13 +114,21 @@ impl TaskContext {
                     .get(&AgentRole::Strategist)
                     .map(String::as_str)
                     .unwrap_or("(no strategist output yet)");
-                format!(
+                let base = format!(
                     "Target: {}. Strategy:\n{}\n\n\
                      Execute the planned tools against the target. \
                      Use the available tools to carry out the strategy. \
                      Report the raw output of each tool invocation.",
                     self.target, strategist_output
-                )
+                );
+                if let Some(ref ports) = self.ports {
+                    format!(
+                        "{}\n\nPort specification: {}. Pass this as the \"ports\" argument to nmap_scan.",
+                        base, ports
+                    )
+                } else {
+                    base
+                }
             }
             AgentRole::Analyst => {
                 let executor_output = self
@@ -284,6 +307,43 @@ mod tests {
         assert!(
             prompt.contains("no researcher output yet"),
             "should show fallback text"
+        );
+    }
+
+    #[test]
+    fn executor_prompt_includes_ports_when_set() {
+        let ctx = TaskContext::new("example.com")
+            .with_ports(Some("80,443".to_string()));
+        // Provide strategist output so the executor prompt is fully populated.
+        let mut ctx = ctx;
+        ctx.agent_outputs.insert(
+            AgentRole::Strategist,
+            "Run nmap scan".to_string(),
+        );
+        let agent = ExecutorAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            prompt.contains("80,443"),
+            "executor prompt should include ports: {prompt}"
+        );
+        assert!(
+            prompt.contains("Port specification"),
+            "executor prompt should mention 'Port specification': {prompt}"
+        );
+    }
+
+    #[test]
+    fn executor_prompt_omits_ports_when_none() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs.insert(
+            AgentRole::Strategist,
+            "Run nmap scan".to_string(),
+        );
+        let agent = ExecutorAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            !prompt.contains("Port specification"),
+            "should not mention ports: {prompt}"
         );
     }
 

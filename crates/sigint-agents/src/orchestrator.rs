@@ -84,6 +84,11 @@ pub struct Orchestrator {
     /// as a system message before the agent's own system prompt.
     /// When `None` (the default), no memory context is injected.
     memory: Option<MemoryService>,
+    /// Optional port specification forwarded from the `--ports` CLI flag.
+    ///
+    /// When `Some`, the value is threaded into `TaskContext` and surfaced in
+    /// the Executor's initial prompt so the LLM passes it to `nmap_scan`.
+    ports: Option<String>,
 }
 
 impl Orchestrator {
@@ -110,6 +115,7 @@ impl Orchestrator {
             model,
             max_iterations: DEFAULT_MAX_ITERATIONS,
             memory: None,
+            ports: None,
         }
     }
 
@@ -132,6 +138,15 @@ impl Orchestrator {
         self
     }
 
+    /// Set the port specification forwarded from the `--ports` CLI flag.
+    ///
+    /// The value is passed to `TaskContext::with_ports` so the Executor agent's
+    /// initial prompt explicitly instructs the LLM to pass it to `nmap_scan`.
+    pub fn with_ports(mut self, ports: Option<String>) -> Self {
+        self.ports = ports;
+        self
+    }
+
     /// Run the full five-agent scan pipeline against `target`.
     ///
     /// Pipeline order: Researcher → Strategist → Executor → Analyst → Reporter.
@@ -148,7 +163,7 @@ impl Orchestrator {
     pub async fn run_scan(&self, target: &str) -> Result<ScanReport, Error> {
         info!(target, "orchestrator: starting scan pipeline");
 
-        let mut ctx = TaskContext::new(target);
+        let mut ctx = TaskContext::new(target).with_ports(self.ports.clone());
 
         // ── 1. Researcher ────────────────────────────────────────────────────
         let researcher = ResearcherAgent::new();
@@ -421,6 +436,18 @@ mod tests {
         let result = orch.run_agent(&agent, &mut ctx).await.unwrap();
 
         assert_eq!(result, "agent text response");
+    }
+
+    #[tokio::test]
+    async fn with_ports_threads_ports_to_context() {
+        // Verify that with_ports does not break the pipeline and the report
+        // target is preserved. Ports are reflected in the Executor prompt but
+        // we cannot intercept the prompt without a recording provider — so we
+        // verify the observable invariant: target and report structure are intact.
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let orch = make_orchestrator(provider).with_ports(Some("80,443".into()));
+        let report = orch.run_scan("test.local").await.unwrap();
+        assert_eq!(report.target, "test.local");
     }
 
     #[tokio::test]

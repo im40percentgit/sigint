@@ -50,6 +50,7 @@ const DEFAULT_CONTEXT_WINDOW: usize = 8192;
 /// # Arguments
 /// * `core`           — Loaded AppCore (config + event bus).
 /// * `target`         — Hostname, IP, or CIDR range to scan.
+/// * `ports`          — Optional port specification forwarded to nmap (e.g. "80,443").
 /// * `model`          — Optional model override (uses config default if None).
 /// * `max_iterations` — Hard cap on tool-call rounds per agent turn.
 /// * `force_tui`      — `--tui` flag: force TUI mode on.
@@ -62,6 +63,7 @@ const DEFAULT_CONTEXT_WINDOW: usize = 8192;
 pub async fn run(
     core: AppCore,
     target: String,
+    ports: Option<String>,
     model: Option<String>,
     max_iterations: usize,
     force_tui: bool,
@@ -73,6 +75,9 @@ pub async fn run(
     println!();
     println!("SIGINT — multi-agent scan");
     println!("  target : {}", target);
+    if let Some(ref p) = ports {
+        println!("  ports  : {}", p);
+    }
     println!("  model  : {}", model);
     println!("  agents : researcher → strategist → executor → analyst → reporter");
     println!();
@@ -151,7 +156,8 @@ pub async fn run(
         context_window,
         model,
     )
-    .with_max_iterations(max_iterations);
+    .with_max_iterations(max_iterations)
+    .with_ports(ports);
 
     if let Some(memory) = memory_service {
         orchestrator = orchestrator.with_memory(memory);
@@ -437,7 +443,7 @@ mod tests {
     #[ignore]
     async fn integration_scan_scanme_nmap_org() {
         let core = AppCore::default_for_test();
-        run(core, "scanme.nmap.org".into(), None, 3, false, true)
+        run(core, "scanme.nmap.org".into(), None, None, 3, false, true)
             .await
             .expect("scan should complete without error");
     }
