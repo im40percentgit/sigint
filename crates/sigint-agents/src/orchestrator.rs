@@ -53,7 +53,7 @@ use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
-use sigint_core::{event::EventBus, Error};
+use sigint_core::{event::EventBus, ApprovalRegistry, Error};
 use sigint_llm::provider::LlmProvider;
 use sigint_memory::MemoryService;
 
@@ -108,6 +108,18 @@ pub struct Orchestrator {
     db: Option<Arc<sigint_store::Database>>,
     /// Session ID for scan record attribution. Ignored when `db` is `None`.
     session_id: Uuid,
+    /// Optional approval registry for gating risky tool executions.
+    ///
+    /// When `Some`, tool risk is checked against `auto_approve` threshold
+    /// before execution. When `None` (the default), all tools run immediately
+    /// regardless of risk level.
+    approval_registry: Option<Arc<ApprovalRegistry>>,
+    /// Auto-approval threshold: `"all"`, `"medium"`, `"low"`, or `"none"`.
+    ///
+    /// Controls which risk levels skip the approval gate. Defaults to `"all"`
+    /// (every tool auto-approved). Web-initiated scans should use `"low"` so
+    /// Medium/High risk tools require explicit operator approval via WebSocket.
+    auto_approve: String,
 }
 
 impl Orchestrator {
@@ -137,6 +149,8 @@ impl Orchestrator {
             ports: None,
             db: None,
             session_id: Uuid::nil(),
+            approval_registry: None,
+            auto_approve: "all".to_string(),
         }
     }
 
@@ -184,6 +198,33 @@ impl Orchestrator {
     /// Defaults to `Uuid::nil()`.
     pub fn with_session_id(mut self, session_id: Uuid) -> Self {
         self.session_id = session_id;
+        self
+    }
+
+    /// Attach an `ApprovalRegistry` to gate risky tool executions.
+    ///
+    /// When set, any tool whose risk level exceeds `auto_approve` will block
+    /// for human approval before executing. The registry routes approval
+    /// requests and responses between the tool loop and the operator UI
+    /// (WebSocket, TUI).
+    ///
+    /// Typically combined with `with_auto_approve("low")` for web-initiated
+    /// scans so only Low-risk (info-gathering) tools run unattended.
+    pub fn with_approval_registry(mut self, registry: Arc<ApprovalRegistry>) -> Self {
+        self.approval_registry = Some(registry);
+        self
+    }
+
+    /// Set the auto-approval threshold for tool risk gating.
+    ///
+    /// - `"all"`    — every tool runs without approval (default)
+    /// - `"medium"` — Low and Medium auto-approve; High requires approval
+    /// - `"low"`    — only Low-risk tools auto-approve
+    /// - `"none"`   — every tool requires explicit approval
+    ///
+    /// Has no effect when no `ApprovalRegistry` is configured.
+    pub fn with_auto_approve(mut self, threshold: impl Into<String>) -> Self {
+        self.auto_approve = threshold.into();
         self
     }
 
@@ -285,10 +326,10 @@ impl Orchestrator {
                 max_iterations: self.max_iterations,
                 model: &self.model,
                 event_bus: &self.event_bus,
-                approval_registry: None,
-                auto_approve: "all",
                 db: self.db.as_ref().map(|d| d.as_ref()),
                 session_id: self.session_id,
+                approval_registry: self.approval_registry.as_deref(),
+                auto_approve: &self.auto_approve,
             },
         )
         .await
@@ -488,6 +529,21 @@ mod tests {
         // verify the observable invariant: target and report structure are intact.
         let provider = Arc::new(MockProvider::uniform("done", 5));
         let orch = make_orchestrator(provider).with_ports(Some("80,443".into()));
+        let report = orch.run_scan("test.local").await.unwrap();
+        assert_eq!(report.target, "test.local");
+    }
+
+    #[tokio::test]
+    async fn with_approval_registry_sets_field() {
+        use std::time::Duration;
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let registry = Arc::new(sigint_core::ApprovalRegistry::new(Duration::from_secs(30)));
+        let orch = make_orchestrator(provider)
+            .with_approval_registry(registry)
+            .with_auto_approve("low");
+        // Pipeline should complete (no High-risk tools in mock registry — all
+        // agents use the MockProvider which never calls tools, so the approval
+        // gate is never triggered and the pipeline runs end-to-end).
         let report = orch.run_scan("test.local").await.unwrap();
         assert_eq!(report.target, "test.local");
     }
