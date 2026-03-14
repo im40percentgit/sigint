@@ -37,10 +37,21 @@
 //! `Option<MemoryService>` keeps the constructor signature stable and lets
 //! callers opt in via `with_memory(svc)`. Context injection in `run_agent`
 //! is a no-op when `memory` is `None`, so no existing test breaks.
+//!
+//! @decision DEC-AGENT-016
+//! @title Orchestrator holds `Option<Arc<Database>>` + `session_id` for per-tool persistence
+//! @status accepted
+//! @rationale The database is optional because not all callers (tests, web scan
+//! service) have a database at construction time. `Arc<Database>` matches the
+//! ownership model used elsewhere in the CLI: a single `Database` handle is
+//! opened once and shared. `session_id` is a `Uuid` defaulting to `Uuid::nil()`
+//! when no database is provided — `nil` is harmless since the DB path is never
+//! taken. Builder methods (`with_db`, `with_session_id`) keep `new()` stable.
 
 use std::sync::Arc;
 
 use tracing::info;
+use uuid::Uuid;
 
 use sigint_core::{event::EventBus, Error};
 use sigint_llm::provider::LlmProvider;
@@ -89,6 +100,14 @@ pub struct Orchestrator {
     /// When `Some`, the value is threaded into `TaskContext` and surfaced in
     /// the Executor's initial prompt so the LLM passes it to `nmap_scan`.
     ports: Option<String>,
+    /// Optional database for per-tool scan record persistence.
+    ///
+    /// When `Some`, each tool invocation inside `run_agent` creates and updates
+    /// a `ScanRecord`. Operations are best-effort — failures are logged, not
+    /// propagated. When `None` (the default), no persistence occurs.
+    db: Option<Arc<sigint_store::Database>>,
+    /// Session ID for scan record attribution. Ignored when `db` is `None`.
+    session_id: Uuid,
 }
 
 impl Orchestrator {
@@ -116,6 +135,8 @@ impl Orchestrator {
             max_iterations: DEFAULT_MAX_ITERATIONS,
             memory: None,
             ports: None,
+            db: None,
+            session_id: Uuid::nil(),
         }
     }
 
@@ -144,6 +165,25 @@ impl Orchestrator {
     /// initial prompt explicitly instructs the LLM to pass it to `nmap_scan`.
     pub fn with_ports(mut self, ports: Option<String>) -> Self {
         self.ports = ports;
+        self
+    }
+
+    /// Attach a database for per-tool scan record persistence.
+    ///
+    /// When set, each tool invocation inside any agent turn will create a
+    /// `ScanRecord` before execution and update it after. Operations are
+    /// best-effort — a DB error will not abort the scan.
+    pub fn with_db(mut self, db: Arc<sigint_store::Database>) -> Self {
+        self.db = Some(db);
+        self
+    }
+
+    /// Set the session ID used to attribute scan records to a parent session.
+    ///
+    /// Only meaningful when a database has been attached via [`with_db`].
+    /// Defaults to `Uuid::nil()`.
+    pub fn with_session_id(mut self, session_id: Uuid) -> Self {
+        self.session_id = session_id;
         self
     }
 
@@ -247,6 +287,8 @@ impl Orchestrator {
                 event_bus: &self.event_bus,
                 approval_registry: None,
                 auto_approve: "all",
+                db: self.db.as_ref().map(|d| d.as_ref()),
+                session_id: self.session_id,
             },
         )
         .await

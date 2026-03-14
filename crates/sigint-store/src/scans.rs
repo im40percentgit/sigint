@@ -82,6 +82,28 @@ impl Database {
         })
     }
 
+    /// Update a scan record with output, exit code, and finished timestamp.
+    ///
+    /// Best-effort — returns `Ok(())` even if the record doesn't exist (zero rows
+    /// updated is not treated as an error). Callers in the tool loop should log
+    /// warnings on `Err` and continue rather than failing the scan.
+    pub fn update_scan_record(
+        &self,
+        id: Uuid,
+        output: Option<&str>,
+        exit_code: i32,
+        finished_at: &str,
+    ) -> Result<(), Error> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE scan_history SET output = ?1, exit_code = ?2, finished_at = ?3 WHERE id = ?4",
+                params![output, exit_code, finished_at, id.to_string()],
+            )
+            .map_err(|e| Error::Database(format!("update_scan_record failed: {}", e)))?;
+            Ok(())
+        })
+    }
+
     /// Return all scan_history records for a session, ordered by started_at ascending.
     pub fn get_scan_records(&self, session_id: Uuid) -> Result<Vec<ScanRecord>, Error> {
         self.with_conn(|conn| {
@@ -245,5 +267,43 @@ mod tests {
         assert!(records[0].output.is_none());
         assert!(records[0].exit_code.is_none());
         assert!(records[0].finished_at.is_none());
+    }
+
+    #[test]
+    fn update_scan_record_roundtrip() {
+        let db = db();
+        let session_id = make_session(&db);
+
+        // Insert a bare record — no output, exit_code, or finished_at.
+        let record = ScanRecord::new(session_id, "nmap_scan", r#"{"target":"10.0.0.1"}"#);
+        let record_id = record.id;
+        db.create_scan_record(&record).unwrap();
+
+        // Update it with output and completion metadata.
+        db.update_scan_record(
+            record_id,
+            Some("scan output here"),
+            0,
+            "2026-03-13T00:00:00Z",
+        )
+        .unwrap();
+
+        // Verify the update was persisted.
+        let records = db.get_scan_records(session_id).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].output.as_deref(), Some("scan output here"));
+        assert_eq!(records[0].exit_code, Some(0));
+        assert_eq!(
+            records[0].finished_at.as_deref(),
+            Some("2026-03-13T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn update_scan_record_nonexistent_is_noop() {
+        let db = db();
+        // Updating a non-existent UUID should succeed (zero rows updated, not an error).
+        db.update_scan_record(Uuid::new_v4(), Some("output"), 0, "2026-03-13T00:00:00Z")
+            .unwrap();
     }
 }

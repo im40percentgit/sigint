@@ -148,6 +148,12 @@ pub async fn run(
     // ── LLM provider ──────────────────────────────────────────────────────────
     let provider = Arc::new(OllamaProvider::from_config(&core.config.llm));
 
+    // ── Session ID — shared between orchestrator and post-scan persistence ────
+    // Generate upfront so per-tool ScanRecords and the pipeline summary record
+    // both reference the same session. The session row itself is created by
+    // persist_scan after the pipeline completes.
+    let scan_session_id = uuid::Uuid::new_v4();
+
     // ── Orchestrator ──────────────────────────────────────────────────────────
     let mut orchestrator = Orchestrator::new(
         provider,
@@ -157,10 +163,17 @@ pub async fn run(
         model,
     )
     .with_max_iterations(max_iterations)
-    .with_ports(ports);
+    .with_ports(ports)
+    .with_session_id(scan_session_id);
 
     if let Some(memory) = memory_service {
         orchestrator = orchestrator.with_memory(memory);
+    }
+
+    // Attach the database so per-tool ScanRecords are written during the scan.
+    // Best-effort: if the DB can't be opened, the scan still runs without persistence.
+    if let Ok(scan_db) = Database::open(&db_path) {
+        orchestrator = orchestrator.with_db(Arc::new(scan_db));
     }
 
     // ── Run the pipeline ──────────────────────────────────────────────────────
@@ -181,7 +194,9 @@ pub async fn run(
     println!("{}", report);
 
     // ── Persist to database + episodic memory (best-effort) ──────────────────
-    let session_id = persist_scan(&core, &target, &report).await;
+    // Pass the pre-generated session_id so the session row matches the per-tool
+    // ScanRecords already written during the pipeline.
+    let session_id = persist_scan(&core, &target, &report, scan_session_id).await;
 
     // Store episode summary so future scans of the same target recall this session.
     if let Some(session_id) = session_id {
@@ -234,15 +249,14 @@ fn spawn_stdout_printer(mut event_rx: tokio::sync::broadcast::Receiver<Event>) {
 
 /// Persist the scan session and one summary record to SQLite.
 ///
-/// The current `ToolResult` type carries stdout/stderr/exit_code but not the
-/// tool name or arguments — those are resolved at call time by the loop engine
-/// and are not re-attached to the result struct. Rather than inventing a lossy
-/// workaround, we persist:
-///   1. A `sessions` row keyed to this target.
+/// Uses the pre-generated `session_id` so the session row matches the per-tool
+/// `ScanRecord`s already written by the orchestrator during the pipeline run.
+///
+/// Persists:
+///   1. A `sessions` row keyed to this target, using the supplied `session_id`.
 ///   2. One `scan_history` row whose `tool` is "pipeline" and `output` is the
-///      Reporter's final summary. This gives a queryable audit trail while the
-///      per-invocation records remain a future enhancement (tracked in the
-///      TaskContext refactor work item).
+///      Reporter's final summary — an aggregate audit record alongside the
+///      per-tool records written during execution.
 ///
 /// All errors are logged as warnings; the scan result is never discarded
 /// because persistence fails.
@@ -252,6 +266,7 @@ async fn persist_scan(
     core: &AppCore,
     target: &str,
     report: &sigint_agents::ScanReport,
+    session_id: uuid::Uuid,
 ) -> Option<uuid::Uuid> {
     let db_path = core.config.resolved_db_path();
     let db = match Database::open(&db_path) {
@@ -262,13 +277,16 @@ async fn persist_scan(
         }
     };
 
-    // Create a session record scoped to this scan.
+    // Create a session record scoped to this scan, using the pre-generated ID.
     let session_name = format!(
         "scan-{}-{}",
         target.replace(['.', '/'], "-"),
         chrono::Utc::now().format("%Y%m%d-%H%M%S"),
     );
-    let session = sigint_core::types::Session::new(&session_name).with_target(target);
+    let mut session = sigint_core::types::Session::new(&session_name).with_target(target);
+    // Override the auto-generated UUID with the pre-generated one so this
+    // session row matches the per-tool ScanRecords written during the pipeline.
+    session.id = session_id;
 
     if let Err(e) = db.create_session(&session) {
         warn!("scan: cannot persist session: {}", e);
