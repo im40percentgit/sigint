@@ -30,6 +30,7 @@
 pub mod agent;
 pub mod agents;
 pub mod context;
+pub mod interactive;
 pub mod loop_engine;
 pub mod orchestrator;
 pub mod registry;
@@ -42,6 +43,7 @@ pub mod state;
 pub use agent::Agent;
 pub use agents::{AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, StrategistAgent};
 pub use context::TaskContext;
+pub use interactive::{parse_command, Command, InteractiveSession};
 pub use loop_engine::run_tool_loop;
 pub use orchestrator::Orchestrator;
 pub use registry::ToolRegistry;

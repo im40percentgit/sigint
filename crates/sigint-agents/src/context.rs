@@ -312,14 +312,11 @@ mod tests {
 
     #[test]
     fn executor_prompt_includes_ports_when_set() {
-        let ctx = TaskContext::new("example.com")
-            .with_ports(Some("80,443".to_string()));
+        let ctx = TaskContext::new("example.com").with_ports(Some("80,443".to_string()));
         // Provide strategist output so the executor prompt is fully populated.
         let mut ctx = ctx;
-        ctx.agent_outputs.insert(
-            AgentRole::Strategist,
-            "Run nmap scan".to_string(),
-        );
+        ctx.agent_outputs
+            .insert(AgentRole::Strategist, "Run nmap scan".to_string());
         let agent = ExecutorAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
         assert!(
@@ -335,10 +332,8 @@ mod tests {
     #[test]
     fn executor_prompt_omits_ports_when_none() {
         let mut ctx = TaskContext::new("example.com");
-        ctx.agent_outputs.insert(
-            AgentRole::Strategist,
-            "Run nmap scan".to_string(),
-        );
+        ctx.agent_outputs
+            .insert(AgentRole::Strategist, "Run nmap scan".to_string());
         let agent = ExecutorAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
         assert!(
