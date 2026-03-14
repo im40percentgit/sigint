@@ -105,6 +105,13 @@ pub struct AppState {
     pub messages: Vec<DisplayMessage>,
     /// Accumulator for in-progress LLM streaming output.
     pub streaming_buffer: String,
+    /// Accumulator for in-progress agent reasoning (streamed between tool calls).
+    ///
+    /// Populated by `AgentThinking` events; flushed to `messages` as a
+    /// `role="thinking"` entry by `AgentThinkingDone`.
+    pub reasoning_buffer: String,
+    /// Which agent is currently thinking (for display label in the Chat panel).
+    pub thinking_agent: Option<String>,
     /// Tool invocation log (append-only; entries are updated in place).
     pub tool_log: Vec<ToolEntry>,
     /// Security findings discovered during the scan.
@@ -153,6 +160,8 @@ impl AppState {
             iteration: 0,
             messages: Vec::new(),
             streaming_buffer: String::new(),
+            reasoning_buffer: String::new(),
+            thinking_agent: None,
             tool_log: Vec::new(),
             findings: Vec::new(),
             assets: Vec::new(),
@@ -276,6 +285,20 @@ impl AppState {
             // (via app.rs) and consumed by the approval registry in sigint-core.
             // The TUI does not need to react to its own responses.
             Event::ToolApprovalGranted { .. } | Event::ToolApprovalDenied { .. } => {}
+            // ── Streaming reasoning events ─────────────────────────────────
+            Event::AgentThinking { agent_role, token } => {
+                self.thinking_agent = Some(agent_role);
+                self.reasoning_buffer.push_str(&token);
+            }
+            Event::AgentThinkingDone { agent_role: _ } => {
+                if !self.reasoning_buffer.is_empty() {
+                    self.messages.push(DisplayMessage {
+                        role: "thinking".to_string(),
+                        content: std::mem::take(&mut self.reasoning_buffer),
+                    });
+                }
+                self.thinking_agent = None;
+            }
             // SessionCreated, TaskUpdated — no TUI state change needed yet.
             _ => {}
         }
@@ -643,5 +666,48 @@ mod tests {
             "second request should replace first"
         );
         assert_eq!(approval.tool_name, "second_tool");
+    }
+
+    #[test]
+    fn agent_thinking_accumulates_in_buffer() {
+        let mut state = AppState::new();
+        state.apply(Event::AgentThinking {
+            agent_role: "Researcher".into(),
+            token: "Let me ".into(),
+        });
+        state.apply(Event::AgentThinking {
+            agent_role: "Researcher".into(),
+            token: "analyze this.".into(),
+        });
+        assert_eq!(state.reasoning_buffer, "Let me analyze this.");
+        assert_eq!(state.thinking_agent.as_deref(), Some("Researcher"));
+    }
+
+    #[test]
+    fn agent_thinking_done_flushes_to_messages() {
+        let mut state = AppState::new();
+        state.apply(Event::AgentThinking {
+            agent_role: "Executor".into(),
+            token: "Running nmap...".into(),
+        });
+        state.apply(Event::AgentThinkingDone {
+            agent_role: "Executor".into(),
+        });
+        assert!(state.reasoning_buffer.is_empty());
+        assert!(state.thinking_agent.is_none());
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].role, "thinking");
+        assert_eq!(state.messages[0].content, "Running nmap...");
+    }
+
+    #[test]
+    fn agent_thinking_done_with_empty_buffer_does_not_push_message() {
+        let mut state = AppState::new();
+        // No AgentThinking events first — buffer is empty.
+        state.apply(Event::AgentThinkingDone {
+            agent_role: "Reporter".into(),
+        });
+        assert_eq!(state.messages.len(), 0);
+        assert!(state.thinking_agent.is_none());
     }
 }
