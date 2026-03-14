@@ -1,21 +1,24 @@
 //! Tool-call loop engine — drives the LLM ↔ tool execution cycle.
 //!
-//! The loop sends a `ChatRequest` to the provider. If the model responds with
-//! tool calls, the engine executes them, appends results to the conversation
-//! state, and repeats. The loop terminates when the model produces a plain-text
-//! response or `max_iterations` is exceeded.
+//! The loop sends a `ChatRequest` to the provider via `chat_stream()`. If the
+//! model responds with tool calls (present on the `done=true` chunk), the engine
+//! executes them, appends results to the conversation state, and repeats. The
+//! loop terminates when the model produces a plain-text response or
+//! `max_iterations` is exceeded.
 //!
-//! @decision DEC-AGENT-007
-//! @title Non-streaming (`chat()`) for all tool-loop iterations
+//! Streaming is used for every iteration so incremental tokens can be emitted
+//! as `AgentThinking` events, giving users real-time visibility into reasoning.
+//! Tool calls still arrive atomically on the `done=true` chunk (DEC-LLM-003).
+//!
+//! @decision DEC-AGENT-007-REV
+//! @title Streaming (`chat_stream()`) for all tool-loop iterations (Phase 8A)
 //! @status accepted
-//! @rationale Tool calls require complete, structured JSON in the response
-//! (`tool_calls` array). Streaming delivers tokens incrementally, which means
-//! the tool-calls field is only available on the final chunk — adding latency
-//! and complexity for no user-visible benefit during intermediate iterations.
-//! The final text-only response CAN be streamed (handled by the caller via
-//! `chat_stream`); but while the model is in tool-calling mode every call uses
-//! `chat()`. This matches Ollama's behaviour: streaming tool calls are supported
-//! but require reassembling the final chunk anyway.
+//! @rationale Originally non-streaming (`chat()`) was used because tool calls
+//! require complete, structured JSON that only arrives on the final chunk.
+//! Phase 8A switches to `chat_stream()` for ALL iterations so incremental
+//! tokens can be emitted as `AgentThinking` events, giving users real-time
+//! visibility into the model's reasoning between tool calls. Tool calls still
+//! arrive only on `done=true` (DEC-LLM-003), so execution order is unchanged.
 //!
 //! @decision DEC-AGENT-008
 //! @title Event emission is best-effort; errors are silently discarded
@@ -59,6 +62,7 @@
 
 use std::time::Instant;
 
+use futures_util::StreamExt;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -68,7 +72,7 @@ use sigint_core::{
     ApprovalRegistry, Error,
 };
 use sigint_llm::{
-    provider::LlmProvider,
+    provider::{ChunkStream, LlmProvider},
     types::{ChatMessage, ChatRequest, ToolDefinition},
 };
 use sigint_tools::tool::Tool;
@@ -109,6 +113,12 @@ pub struct ToolLoopOptions<'a> {
     pub db: Option<&'a sigint_store::Database>,
     /// Session ID for scan record attribution. Only used when `db` is `Some`.
     pub session_id: uuid::Uuid,
+    /// Agent role label for `AgentThinking` events (e.g. `"researcher"`).
+    ///
+    /// Passed through to every `AgentThinking` / `AgentThinkingDone` event
+    /// emitted during this loop run so the TUI can display which agent is
+    /// currently reasoning.
+    pub agent_role: &'a str,
 }
 
 /// Returns `true` if `risk` is within the auto-approval threshold.
@@ -171,6 +181,7 @@ pub async fn run_tool_loop(
         auto_approve,
         db,
         session_id,
+        agent_role,
     } = opts;
 
     let mut last_text = String::new();
@@ -182,36 +193,65 @@ pub async fn run_tool_loop(
         let request = ChatRequest::new(model, state.to_chat_messages().to_vec())
             .with_tools(tool_defs.to_vec());
 
-        let response = provider.chat(request).await?;
+        // Stream the response, emitting AgentThinking events as tokens arrive.
+        // Tool calls arrive atomically on the done=true chunk (DEC-LLM-003).
+        let mut stream: ChunkStream = provider.chat_stream(request).await?;
+        let mut accumulated_text = String::new();
+        let mut final_tool_calls: Vec<sigint_llm::types::ToolCall> = Vec::new();
 
-        // Update our last-seen text content (may be empty during tool rounds).
-        if !response.content.is_empty() {
-            last_text = response.content.clone();
+        while let Some(chunk_result) = StreamExt::next(&mut stream).await {
+            let chunk = chunk_result?;
+
+            if !chunk.delta.is_empty() {
+                accumulated_text.push_str(&chunk.delta);
+                event_bus.emit(Event::AgentThinking {
+                    agent_role: agent_role.to_string(),
+                    token: chunk.delta.clone(),
+                });
+            }
+
+            if chunk.done {
+                final_tool_calls = chunk.tool_calls;
+                break;
+            }
         }
 
-        if !response.has_tool_calls() {
+        // Update our last-seen text content.
+        if !accumulated_text.is_empty() {
+            last_text = accumulated_text.clone();
+        }
+
+        if final_tool_calls.is_empty() {
             // Model produced a plain-text response — loop is done.
             debug!(iteration, "tool loop: text response received, exiting");
+            event_bus.emit(Event::AgentThinkingDone {
+                agent_role: agent_role.to_string(),
+            });
             return Ok(last_text);
         }
+
+        // Emit AgentThinkingDone before the tool execution phase begins.
+        event_bus.emit(Event::AgentThinkingDone {
+            agent_role: agent_role.to_string(),
+        });
 
         // ── Tool-call round ──────────────────────────────────────────────────
         debug!(
             iteration,
-            tool_call_count = response.tool_calls.len(),
+            tool_call_count = final_tool_calls.len(),
             "tool loop: processing tool calls"
         );
 
         // Append the assistant turn (with tool_calls) to state.
         let assistant_msg = ChatMessage {
             role: "assistant".into(),
-            content: response.content.clone(),
-            tool_calls: Some(response.tool_calls.clone()),
+            content: accumulated_text,
+            tool_calls: Some(final_tool_calls.clone()),
         };
         state.add_message(assistant_msg);
 
         // Execute each requested tool and append a tool-role result message.
-        for tool_call in &response.tool_calls {
+        for tool_call in &final_tool_calls {
             let name = &tool_call.function.name;
             let args = &tool_call.function.arguments;
 
@@ -394,7 +434,6 @@ pub async fn run_tool_loop(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use futures_util::stream;
     use serde_json::{json, Value};
     use std::sync::Mutex;
     use std::time::Duration;
@@ -410,12 +449,14 @@ mod tests {
 
     // ── Mock LLM Provider ────────────────────────────────────────────────────
 
-    /// A mock LLM provider that returns pre-configured responses in sequence.
+    /// A mock LLM provider that serves pre-configured responses via
+    /// `chat_stream()`. Each queued `ChatResponse` is split into a text delta
+    /// chunk followed by a `done=true` chunk carrying tool_calls (if any),
+    /// mirroring real provider behaviour per DEC-LLM-003.
     ///
-    /// When the response queue is exhausted, returns a default text response
-    /// to avoid panics in tests that might call more times than expected.
+    /// `chat()` delegates to `chat_stream()` so both call paths share the queue.
     struct MockProvider {
-        /// Responses returned in order; each `chat()` call pops the front.
+        /// Responses returned in order; each `chat_stream()` call pops the front.
         responses: Mutex<Vec<ChatResponse>>,
     }
 
@@ -450,6 +491,27 @@ mod tests {
                 }],
             }
         }
+
+        /// Convert a `ChatResponse` into the `StreamChunk` sequence a real
+        /// provider emits: an optional text chunk then the `done=true` chunk.
+        fn response_to_chunks(response: ChatResponse) -> Vec<StreamChunk> {
+            let mut chunks = Vec::new();
+            if !response.content.is_empty() {
+                chunks.push(StreamChunk {
+                    delta: response.content.clone(),
+                    done: false,
+                    usage: None,
+                    tool_calls: vec![],
+                });
+            }
+            chunks.push(StreamChunk {
+                delta: String::new(),
+                done: true,
+                usage: response.usage,
+                tool_calls: response.tool_calls,
+            });
+            chunks
+        }
     }
 
     #[async_trait]
@@ -458,20 +520,38 @@ mod tests {
             "mock"
         }
 
-        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, Error> {
-            let mut queue = self.responses.lock().unwrap();
-            if queue.is_empty() {
-                // Fallback — prevents test panics on unexpected extra calls.
-                Ok(MockProvider::text_response("[mock exhausted]"))
-            } else {
-                Ok(queue.remove(0))
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
+            // Delegate to chat_stream so the same response queue serves both paths.
+            use futures_util::StreamExt as FutStreamExt;
+            let mut stream = self.chat_stream(request).await?;
+            let mut content = String::new();
+            let mut tool_calls = vec![];
+            while let Some(chunk_result) = FutStreamExt::next(&mut stream).await {
+                let chunk = chunk_result?;
+                content.push_str(&chunk.delta);
+                if chunk.done {
+                    tool_calls = chunk.tool_calls;
+                }
             }
+            Ok(ChatResponse {
+                content,
+                usage: None,
+                model: "mock".into(),
+                tool_calls,
+            })
         }
 
         async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
-            // Not used by the tool loop, but required by the trait.
-            let s = stream::empty::<Result<StreamChunk, Error>>();
-            Ok(Box::pin(s))
+            let mut queue = self.responses.lock().unwrap();
+            let response = if queue.is_empty() {
+                MockProvider::text_response("[mock exhausted]")
+            } else {
+                queue.remove(0)
+            };
+            let chunks = MockProvider::response_to_chunks(response);
+            Ok(Box::pin(futures_util::stream::iter(
+                chunks.into_iter().map(Ok),
+            )))
         }
     }
 
@@ -562,6 +642,7 @@ mod tests {
             auto_approve,
             db: None,
             session_id: Uuid::nil(),
+            agent_role: "test",
         }
     }
 
@@ -1049,6 +1130,91 @@ mod tests {
             !tool_msg.content.contains("executed"),
             "tool should not have executed: {}",
             tool_msg.content
+        );
+    }
+
+    // ── AgentThinking event tests ─────────────────────────────────────────────
+
+    /// Verifies that the streaming path emits `AgentThinking` and/or
+    /// `AgentThinkingDone` events for any response (text or tool-call).
+    #[tokio::test]
+    async fn streaming_emits_agent_thinking_events() {
+        let tool = MockTool::success("scanner", "scan output");
+        let tool_def = tool.definition();
+        let tool_ref: &dyn Tool = &tool;
+
+        let provider = MockProvider::new(vec![
+            MockProvider::tool_response("scanner", json!({"target": "10.0.0.1"})),
+            MockProvider::text_response("Scan complete."),
+        ]);
+
+        let mut state = make_state();
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &[tool_ref],
+            &[tool_def],
+            make_opts(5, &bus, None, "all"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, "Scan complete.");
+
+        let mut events = vec![];
+        while let Ok(e) = rx.try_recv() {
+            events.push(e);
+        }
+        let has_thinking = events.iter().any(|e| matches!(e, Event::AgentThinking { .. }));
+        let has_done = events
+            .iter()
+            .any(|e| matches!(e, Event::AgentThinkingDone { .. }));
+        assert!(
+            has_thinking || has_done,
+            "should emit AgentThinking or AgentThinkingDone events"
+        );
+    }
+
+    /// Verifies that `AgentThinkingDone` carries the correct agent role label.
+    #[tokio::test]
+    async fn thinking_done_carries_agent_role() {
+        let provider = MockProvider::new(vec![MockProvider::text_response("done")]);
+        let mut state = make_state();
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        let _ = run_tool_loop(
+            &provider,
+            &mut state,
+            &[],
+            &no_tools(),
+            ToolLoopOptions {
+                max_iterations: 5,
+                model: "mock",
+                event_bus: &bus,
+                approval_registry: None,
+                auto_approve: "all",
+                db: None,
+                session_id: Uuid::nil(),
+                agent_role: "researcher",
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut events = vec![];
+        while let Ok(e) = rx.try_recv() {
+            events.push(e);
+        }
+        let done_event = events.iter().find(|e| {
+            matches!(e, Event::AgentThinkingDone { agent_role } if agent_role == "researcher")
+        });
+        assert!(
+            done_event.is_some(),
+            "expected AgentThinkingDone with role 'researcher'"
         );
     }
 }

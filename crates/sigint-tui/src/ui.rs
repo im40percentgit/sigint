@@ -126,22 +126,37 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
+    let thinking_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
+
     let mut lines: Vec<Line> = Vec::new();
     for msg in &state.messages {
-        let (prefix, color) = match msg.role.as_str() {
-            "user" => ("[User] ", Color::Blue),
-            "assistant" => ("[Agent] ", Color::Green),
-            "system" => ("[System] ", Color::DarkGray),
-            "tool" => ("[Tool] ", Color::Yellow),
-            _ => ("", Color::White),
-        };
-        lines.push(Line::from(vec![
-            Span::styled(
-                prefix,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(msg.content.clone()),
-        ]));
+        match msg.role.as_str() {
+            "thinking" => {
+                // Agent reasoning segments — rendered dimmed and italic.
+                lines.push(Line::from(vec![
+                    Span::styled("[Thinking] ", thinking_style.add_modifier(Modifier::BOLD)),
+                    Span::styled(msg.content.clone(), thinking_style),
+                ]));
+            }
+            role => {
+                let (prefix, color) = match role {
+                    "user" => ("[User] ", Color::Blue),
+                    "assistant" => ("[Agent] ", Color::Green),
+                    "system" => ("[System] ", Color::DarkGray),
+                    "tool" => ("[Tool] ", Color::Yellow),
+                    _ => ("", Color::White),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        prefix,
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(msg.content.clone()),
+                ]));
+            }
+        }
     }
 
     // Show streaming buffer with cursor indicator when non-empty.
@@ -155,6 +170,19 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
             ),
             Span::raw(state.streaming_buffer.clone()),
             Span::styled("\u{2588}", Style::default().fg(Color::Green)),
+        ]));
+    }
+
+    // Show live reasoning buffer if an agent is currently thinking.
+    if !state.reasoning_buffer.is_empty() {
+        let label = match &state.thinking_agent {
+            Some(name) => format!("[{name}] "),
+            None => "[Thinking] ".to_string(),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(label, thinking_style.add_modifier(Modifier::BOLD)),
+            Span::styled(state.reasoning_buffer.clone(), thinking_style),
+            Span::styled("\u{2588}", thinking_style),
         ]));
     }
 
@@ -616,6 +644,34 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let state = AppState::new();
         assert!(state.pending_approval.is_none());
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+    }
+
+    #[test]
+    fn render_with_thinking_messages_does_not_panic() {
+        use crate::state::DisplayMessage;
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        // A completed thinking segment (flushed to messages).
+        state.messages.push(DisplayMessage {
+            role: "thinking".into(),
+            content: "Analyzing open ports...".into(),
+        });
+        // A live reasoning buffer (in-progress).
+        state.reasoning_buffer = "Running nmap scan now".into();
+        state.thinking_agent = Some("executor".into());
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+    }
+
+    #[test]
+    fn render_thinking_without_agent_label_does_not_panic() {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        // Live reasoning buffer with no agent label set.
+        state.reasoning_buffer = "thinking...".into();
+        state.thinking_agent = None;
         terminal.draw(|frame| render(frame, &state)).unwrap();
     }
 }

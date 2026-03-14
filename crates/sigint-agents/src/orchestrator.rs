@@ -330,6 +330,7 @@ impl Orchestrator {
                 session_id: self.session_id,
                 approval_registry: self.approval_registry.as_deref(),
                 auto_approve: &self.auto_approve,
+                agent_role: &agent.role().to_string(),
             },
         )
         .await
@@ -380,13 +381,14 @@ mod tests {
             "mock"
         }
 
-        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, Error> {
-            let mut queue = self.responses.lock().unwrap();
-            let content = if queue.is_empty() {
-                "[mock exhausted]".to_string()
-            } else {
-                queue.remove(0)
-            };
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
+            // Delegate to chat_stream so the same response queue serves both paths.
+            use futures_util::StreamExt as FutStreamExt;
+            let mut s = self.chat_stream(request).await?;
+            let mut content = String::new();
+            while let Some(chunk) = FutStreamExt::next(&mut s).await {
+                content.push_str(&chunk?.delta);
+            }
             Ok(ChatResponse {
                 content,
                 usage: None,
@@ -396,8 +398,29 @@ mod tests {
         }
 
         async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
-            let s = stream::empty::<Result<StreamChunk, Error>>();
-            Ok(Box::pin(s))
+            let mut queue = self.responses.lock().unwrap();
+            let content = if queue.is_empty() {
+                "[mock exhausted]".to_string()
+            } else {
+                queue.remove(0)
+            };
+            // Emit a text delta then a done=true chunk (no tool calls — orchestrator
+            // tests only exercise text responses).
+            let chunks: Vec<Result<StreamChunk, Error>> = vec![
+                Ok(StreamChunk {
+                    delta: content,
+                    done: false,
+                    usage: None,
+                    tool_calls: vec![],
+                }),
+                Ok(StreamChunk {
+                    delta: String::new(),
+                    done: true,
+                    usage: None,
+                    tool_calls: vec![],
+                }),
+            ];
+            Ok(Box::pin(stream::iter(chunks)))
         }
     }
 

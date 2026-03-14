@@ -74,6 +74,24 @@ pub enum Event {
         session_id: Uuid,
         assets_found: usize,
     },
+    // ── Streaming reasoning events ────────────────────────────────────────────
+    /// Streaming reasoning token from an agent between tool calls.
+    ///
+    /// Emitted for each incremental token produced by `chat_stream()` while
+    /// the model is reasoning before or between tool invocations. The TUI
+    /// accumulates these into a live "thinking" buffer for real-time display.
+    AgentThinking {
+        agent_role: String,
+        token: String,
+    },
+    /// Agent finished a reasoning segment (stream iteration complete).
+    ///
+    /// Emitted after the final `done=true` chunk arrives from `chat_stream()`.
+    /// The TUI flushes `reasoning_buffer` into the message list as a "thinking"
+    /// role message and clears the live indicator.
+    AgentThinkingDone {
+        agent_role: String,
+    },
     // ── Approval Gate events ─────────────────────────────────────────────────
     /// A tool call is awaiting human approval before execution.
     ToolApprovalRequested {
@@ -204,6 +222,31 @@ mod tests {
         let json = serde_json::to_string(&denied).unwrap();
         assert!(json.contains("ToolApprovalDenied"));
         assert!(json.contains("too risky"));
+    }
+
+    #[test]
+    fn agent_thinking_serializes() {
+        let ev = Event::AgentThinking {
+            agent_role: "Researcher".into(),
+            token: "analyzing".into(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("AgentThinking"));
+        assert!(json.contains("analyzing"));
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Event::AgentThinking { token, .. } if token == "analyzing"));
+    }
+
+    #[test]
+    fn agent_thinking_done_serializes() {
+        let ev = Event::AgentThinkingDone {
+            agent_role: "Executor".into(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("AgentThinkingDone"));
+        assert!(json.contains("Executor"));
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Event::AgentThinkingDone { agent_role } if agent_role == "Executor"));
     }
 
     #[test]
