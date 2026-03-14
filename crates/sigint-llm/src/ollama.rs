@@ -116,8 +116,6 @@ fn wire_tool_calls_to_domain(wire: Vec<OllamaToolCall>) -> Vec<ToolCall> {
 pub struct OllamaProvider {
     base_url: String,
     /// Default model name — used when no per-request model is specified.
-    /// Phase 2 will expose this for model listing and validation.
-    #[allow(dead_code)]
     model: String,
     temperature: f32,
     client: reqwest::Client,
@@ -163,6 +161,14 @@ impl OllamaProvider {
                 None
             },
         })
+    }
+
+    /// Returns the default model name configured at construction time.
+    ///
+    /// This is the model used when callers don't specify a per-request model.
+    /// Useful for diagnostics (`sigint doctor`) and logging.
+    pub fn default_model(&self) -> &str {
+        &self.model
     }
 }
 
@@ -365,9 +371,15 @@ mod tests {
             api_key: None,
         };
         let provider = OllamaProvider::from_config(&cfg);
-        assert_eq!(provider.model, "llama3.2");
+        assert_eq!(provider.default_model(), "llama3.2");
         assert_eq!(provider.base_url, "http://localhost:11434");
         assert!((provider.temperature - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn default_model_returns_configured_value() {
+        let p = OllamaProvider::new("http://localhost:11434", "llama3.2", 0.7);
+        assert_eq!(p.default_model(), "llama3.2");
     }
 
     #[test]

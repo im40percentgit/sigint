@@ -166,10 +166,8 @@ pub struct OpenAiProvider {
     /// Base URL without trailing slash (e.g. "https://api.openai.com").
     base_url: String,
     api_key: String,
-    /// Provider-level default temperature, retained for introspection and future
-    /// use. Per-request temperature (`ChatRequest::temperature`) takes precedence
-    /// in all actual API calls.
-    #[allow(dead_code)]
+    /// Provider-level default temperature. Per-request temperature
+    /// (`ChatRequest::temperature`) takes precedence in all actual API calls.
     temperature: f32,
     client: reqwest::Client,
 }
@@ -223,6 +221,15 @@ impl OpenAiProvider {
             _ => format!("OpenAI API returned HTTP {}: {}", status, body),
         };
         Error::Llm(msg)
+    }
+
+    /// Returns the provider-level default temperature configured at construction time.
+    ///
+    /// Per-request temperature (`ChatRequest::temperature`) takes precedence in
+    /// actual API calls. This accessor is useful for diagnostics and configuration
+    /// introspection (e.g. `sigint doctor`).
+    pub fn default_temperature(&self) -> f32 {
+        self.temperature
     }
 }
 
@@ -642,6 +649,12 @@ mod tests {
             p2.completions_url(),
             "http://localhost:8080/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn default_temperature_returns_configured_value() {
+        let provider = OpenAiProvider::new("https://api.openai.com", "sk-test", 0.42);
+        assert!((provider.default_temperature() - 0.42).abs() < f32::EPSILON);
     }
 
     // ── from_config / API key resolution tests ────────────────────────────────
