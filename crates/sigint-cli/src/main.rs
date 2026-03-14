@@ -20,7 +20,7 @@ mod serve;
 mod sessions;
 
 use clap::{Parser, Subcommand};
-use sigint_core::AppCore;
+use sigint_core::{event::Event, AppCore};
 use tracing_subscriber::EnvFilter;
 
 /// SIGINT — AI-powered penetration testing, locally.
@@ -119,6 +119,20 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // ── Graceful shutdown handler ──────────────────────────────────────────
+    // Spawn a background task that listens for Ctrl-C and emits
+    // Event::Shutdown so all subscribers (TUI, web) can clean up before the
+    // process exits.  The `serve` subcommand additionally wires this signal
+    // into axum's graceful shutdown via serve_with_shutdown.
+    {
+        let events = core.events.clone();
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                events.emit(Event::Shutdown);
+            }
+        });
+    }
 
     let result = match cli.command {
         Commands::Chat(args) => chat::run(core, args).await,

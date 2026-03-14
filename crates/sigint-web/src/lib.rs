@@ -5,6 +5,8 @@
 //! - [`create_router`] assembles the full Axum `Router` with CORS middleware and
 //!   all REST + WebSocket routes mounted. Useful for testing with `oneshot`.
 //! - [`serve`] binds a TCP listener and runs the server until shutdown.
+//! - [`serve_with_shutdown`] is the same but accepts a caller-supplied shutdown
+//!   future for graceful termination (used by the `serve` CLI subcommand).
 //!
 //! # Route map
 //!
@@ -90,12 +92,49 @@ pub fn create_router(state: AppState) -> Router {
 ///
 /// This function runs until the process is killed or an unrecoverable error
 /// occurs. The event bus is subscribed to by WebSocket clients on demand.
+///
+/// For graceful shutdown support, use [`serve_with_shutdown`] instead.
 pub async fn serve(
     db: Database,
     event_bus: EventBus,
     config: Arc<Config>,
     approval_registry: Arc<ApprovalRegistry>,
     addr: std::net::SocketAddr,
+) -> Result<(), sigint_core::Error> {
+    serve_with_shutdown(
+        db,
+        event_bus,
+        config,
+        approval_registry,
+        addr,
+        std::future::pending::<()>(),
+    )
+    .await
+}
+
+/// Bind a TCP listener and run the SIGINT web server with a custom shutdown signal.
+///
+/// The `shutdown` future is awaited concurrently with the server; when it
+/// resolves the server stops accepting new connections and drains in-flight
+/// requests before returning.  Pass `std::future::pending()` (or call
+/// [`serve`]) for a server that only exits on process termination.
+///
+/// @decision DEC-WEB-007
+/// @title serve_with_shutdown accepts generic Future<Output=()> for axum graceful shutdown
+/// @status accepted
+/// @rationale Axum's `.with_graceful_shutdown` is the idiomatic path for clean
+/// server teardown. Wrapping it in a separate exported function keeps the
+/// existing `serve` signature stable (no breaking change for existing callers)
+/// while giving `sigint-cli`'s serve subcommand clean Ctrl-C support.
+/// `serve` delegates here with `std::future::pending()` so its behaviour is
+/// unchanged for callers that do not need shutdown control.
+pub async fn serve_with_shutdown(
+    db: Database,
+    event_bus: EventBus,
+    config: Arc<Config>,
+    approval_registry: Arc<ApprovalRegistry>,
+    addr: std::net::SocketAddr,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), sigint_core::Error> {
     let scan_service = Arc::new(ScanService::new(
         config.clone(),
@@ -115,6 +154,7 @@ pub async fn serve(
         .map_err(|e| sigint_core::Error::Other(format!("Cannot bind to {}: {}", addr, e)))?;
     tracing::info!("SIGINT web server listening on {}", addr);
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
         .await
         .map_err(|e| sigint_core::Error::Other(format!("Web server error: {}", e)))?;
     Ok(())
