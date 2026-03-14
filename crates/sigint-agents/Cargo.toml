@@ -18,3 +18,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+# async-stream is used in loop_engine tests to build mock stalling streams.
+async-stream = "0.3"
+# tokio test-util enables pause/advance for time-based tests without real sleeps.
+tokio = { version = "1", features = ["test-util"] }
