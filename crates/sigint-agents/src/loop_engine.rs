@@ -46,6 +46,16 @@
 //! is `None` the gate is completely bypassed — no performance overhead for
 //! callers that don't need it. `auto_approve` controls which risk levels skip
 //! the gate: "all"/"medium"/"low"/"none".
+//!
+//! @decision DEC-AGENT-015
+//! @title Per-tool scan record persistence is opt-in via `Option<&Database>`
+//! @status accepted
+//! @rationale Tool loop tests and non-CLI callers don't always have a database.
+//! Making `db` an `Option` in `ToolLoopOptions` keeps the loop backward-compatible
+//! — `None` disables persistence with zero overhead. All DB operations are
+//! best-effort (warn on `Err`, never propagate), so a transient SQLite error
+//! cannot abort a live scan. Records are created before execution (so a record
+//! exists even if the process dies mid-run) and updated after (output + exit code).
 
 use std::time::Instant;
 
@@ -67,6 +77,17 @@ use sigint_tools::tool::Tool;
 ///
 /// Bundles the execution-policy parameters to keep the function signature
 /// within clippy's `too_many_arguments` limit (≤7).
+///
+/// @decision DEC-AGENT-015
+/// @title Per-tool scan record persistence is opt-in via `Option<&Database>`
+/// @status accepted
+/// @rationale Tool loop tests and non-CLI callers (e.g. the web scan service)
+/// don't always have a database. Making `db` an `Option` keeps the loop
+/// backward-compatible — `None` disables persistence with zero overhead.
+/// All DB operations are best-effort (warn on `Err`, never propagate), so a
+/// transient SQLite error cannot abort a live scan. The `session_id` field is
+/// ignored when `db` is `None`, so callers that don't supply a database don't
+/// need to generate a meaningful UUID.
 pub struct ToolLoopOptions<'a> {
     /// Hard cap on tool-call rounds before the loop gives up.
     pub max_iterations: usize,
@@ -79,6 +100,15 @@ pub struct ToolLoopOptions<'a> {
     pub approval_registry: Option<&'a ApprovalRegistry>,
     /// Auto-approval threshold: `"all"`, `"medium"`, `"low"`, or `"none"`.
     pub auto_approve: &'a str,
+    /// Optional database for persisting per-tool scan records.
+    ///
+    /// When `Some`, each tool invocation creates a `ScanRecord` before
+    /// execution and updates it with output and exit code after completion.
+    /// Operations are best-effort — failures are logged as warnings, not
+    /// propagated. When `None`, no persistence occurs.
+    pub db: Option<&'a sigint_store::Database>,
+    /// Session ID for scan record attribution. Only used when `db` is `Some`.
+    pub session_id: uuid::Uuid,
 }
 
 /// Returns `true` if `risk` is within the auto-approval threshold.
@@ -139,6 +169,8 @@ pub async fn run_tool_loop(
         event_bus,
         approval_registry,
         auto_approve,
+        db,
+        session_id,
     } = opts;
 
     let mut last_text = String::new();
@@ -248,6 +280,24 @@ pub async fn run_tool_loop(
                         }
                     }
 
+                    // ── Scan record persistence (best-effort) ─────────────────
+                    // Create a ScanRecord before execution so the record exists
+                    // even if the tool panics or the process dies mid-run.
+                    let record_id: Option<Uuid> = if let Some(db) = db {
+                        let record = sigint_store::ScanRecord::new(
+                            session_id,
+                            name.as_str(),
+                            args.to_string(),
+                        );
+                        let rid = record.id;
+                        if let Err(e) = db.create_scan_record(&record) {
+                            warn!(tool_name = %name, error = %e, "scan record create failed");
+                        }
+                        Some(rid)
+                    } else {
+                        None
+                    };
+
                     // Emit ToolStarted before execution.
                     event_bus.emit(Event::ToolStarted {
                         name: name.clone(),
@@ -282,6 +332,19 @@ pub async fn run_tool_loop(
                                 "tool loop: tool completed"
                             );
 
+                            // Update the scan record with output and exit code.
+                            if let (Some(db), Some(rid)) = (db, record_id) {
+                                let finished = chrono::Utc::now().to_rfc3339();
+                                if let Err(e) = db.update_scan_record(
+                                    rid,
+                                    Some(result.stdout.as_str()),
+                                    exit_code,
+                                    &finished,
+                                ) {
+                                    warn!(tool_name = %name, error = %e, "scan record update failed");
+                                }
+                            }
+
                             // Feed full result (with Display formatting) back to model.
                             state.add_message(ChatMessage::tool(result.to_string()));
                         }
@@ -291,6 +354,21 @@ pub async fn run_tool_loop(
                                 name: name.clone(),
                                 exit_code: -1,
                             });
+
+                            // Update the scan record with the error as output.
+                            if let (Some(db), Some(rid)) = (db, record_id) {
+                                let finished = chrono::Utc::now().to_rfc3339();
+                                let err_str = e.to_string();
+                                if let Err(ue) = db.update_scan_record(
+                                    rid,
+                                    Some(err_str.as_str()),
+                                    -1,
+                                    &finished,
+                                ) {
+                                    warn!(tool_name = %name, error = %ue, "scan record update failed");
+                                }
+                            }
+
                             let error_msg = format!("Tool '{name}' failed: {e}");
                             state.add_message(ChatMessage::tool(error_msg));
                         }
@@ -467,6 +545,9 @@ mod tests {
     }
 
     /// Build a [`ToolLoopOptions`] with common test defaults.
+    ///
+    /// `db` defaults to `None` and `session_id` to `Uuid::nil()` so existing
+    /// tests don't need a database — the persistence path is a no-op.
     fn make_opts<'a>(
         max_iterations: usize,
         bus: &'a EventBus,
@@ -479,6 +560,8 @@ mod tests {
             event_bus: bus,
             approval_registry,
             auto_approve,
+            db: None,
+            session_id: Uuid::nil(),
         }
     }
 
