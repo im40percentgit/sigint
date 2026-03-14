@@ -146,7 +146,10 @@ pub async fn run(
     }
 
     // ── LLM provider ──────────────────────────────────────────────────────────
-    let provider = Arc::new(OllamaProvider::from_config(&core.config.llm));
+    // Wrapped in Arc so it can be cheaply shared with the interactive session
+    // orchestrator (DEC-AGENT-014: Arc avoids lifetime parameters and enables
+    // cheap fan-out to concurrent orchestrators).
+    let provider: Arc<OllamaProvider> = Arc::new(OllamaProvider::from_config(&core.config.llm));
 
     // ── Session — create upfront so per-tool ScanRecords can reference it ─────
     // The session row MUST exist before the orchestrator runs because per-tool
@@ -159,8 +162,7 @@ pub async fn run(
             target.replace(['.', '/'], "-"),
             chrono::Utc::now().format("%Y%m%d-%H%M%S"),
         );
-        let mut session =
-            sigint_core::types::Session::new(&session_name).with_target(&target);
+        let mut session = sigint_core::types::Session::new(&session_name).with_target(&target);
         session.id = scan_session_id;
         if let Err(e) = session_db.create_session(&session) {
             warn!("scan: cannot create session upfront: {e}");
@@ -169,7 +171,7 @@ pub async fn run(
 
     // ── Orchestrator ──────────────────────────────────────────────────────────
     let mut orchestrator = Orchestrator::new(
-        provider,
+        provider.clone(),
         registry,
         core.events.clone(),
         context_window,
@@ -187,6 +189,42 @@ pub async fn run(
     // Best-effort: if the DB can't be opened, the scan still runs without persistence.
     if let Ok(scan_db) = Database::open(&db_path) {
         orchestrator = orchestrator.with_db(Arc::new(scan_db));
+    }
+
+    // ── Interactive session (TUI mode only) ───────────────────────────────────
+    // When the TUI is active, spawn an InteractiveSession alongside the scan
+    // pipeline so users can issue follow-up commands (e.g. `scan <target>`)
+    // via the Chat input panel while the initial scan is running.
+    //
+    // A second Orchestrator is built for the interactive session because
+    // Orchestrator is not Clone and `run_scan` takes `&self` — both can run
+    // concurrently on the same Arc<dyn LlmProvider>. The provider Arc clone is
+    // O(1); the tool registry is rebuilt cheaply from the same source.
+    if use_tui {
+        let interactive_provider: Arc<dyn sigint_llm::provider::LlmProvider> = provider.clone();
+        let mut interactive_registry = ToolRegistry::new();
+        for tool in sigint_tools::all_executor_tools() {
+            interactive_registry.register(tool);
+        }
+        let interactive_orch = Orchestrator::new(
+            interactive_provider,
+            interactive_registry,
+            core.events.clone(),
+            context_window,
+            core.config.llm.model.clone(),
+        )
+        .with_max_iterations(max_iterations);
+
+        let session = sigint_agents::InteractiveSession::new(
+            interactive_orch,
+            core.events.subscribe(),
+            core.events.clone(),
+        );
+        tokio::spawn(async move {
+            if let Err(e) = session.run().await {
+                tracing::error!("interactive session error: {e}");
+            }
+        });
     }
 
     // ── Run the pipeline ──────────────────────────────────────────────────────

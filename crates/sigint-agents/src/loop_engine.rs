@@ -1168,7 +1168,9 @@ mod tests {
         while let Ok(e) = rx.try_recv() {
             events.push(e);
         }
-        let has_thinking = events.iter().any(|e| matches!(e, Event::AgentThinking { .. }));
+        let has_thinking = events
+            .iter()
+            .any(|e| matches!(e, Event::AgentThinking { .. }));
         let has_done = events
             .iter()
             .any(|e| matches!(e, Event::AgentThinkingDone { .. }));
@@ -1209,9 +1211,9 @@ mod tests {
         while let Ok(e) = rx.try_recv() {
             events.push(e);
         }
-        let done_event = events.iter().find(|e| {
-            matches!(e, Event::AgentThinkingDone { agent_role } if agent_role == "researcher")
-        });
+        let done_event = events.iter().find(
+            |e| matches!(e, Event::AgentThinkingDone { agent_role } if agent_role == "researcher"),
+        );
         assert!(
             done_event.is_some(),
             "expected AgentThinkingDone with role 'researcher'"
