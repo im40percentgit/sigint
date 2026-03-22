@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 5-role agent system with Orchestrator dispatch.
 
-**Current Phase:** Phase 9 proposed — Session Intelligence & Campaign Mode (design complete, awaiting implementation)
+**Current Phase:** Phase 9 completed — Session Intelligence & Campaign Mode
 
 ### Architecture
 
@@ -45,6 +45,7 @@ sigint/
 - Phase 6 completed (commits b17839e–333a002) — nmap/nuclei parsers, approval gates, bidirectional WebSocket, web scan orchestrator with ScanService
 - Phase 7 completed — scan diff engine (7A), E2E integration tests (7B), graceful shutdown (7C)
 - Phase 8 completed — streaming reasoning (8A), interactive TUI sessions (8B), per-chunk streaming timeout
+- Phase 9 completed — session resume with auto-diff (9A), multi-target campaign mode (9B), report polish with executive summary + SVG chart (9C)
 
 ---
 
@@ -602,7 +603,7 @@ Depends on: P2-5
 - [x] Sub-Phase 8B: Interactive TUI sessions — InteractiveSession struct, parse_command, UserInput routing to Orchestrator
 
 ### Phase 9: Session Intelligence & Campaign Mode
-**Status:** proposed
+**Status:** completed
 **Decision IDs:** DEC-RESUME-001, DEC-RESUME-002, DEC-CAMPAIGN-001, DEC-CAMPAIGN-002, DEC-DIFF-UI-001, DEC-REPORT-003
 **Requirements:** REQ-P0-001 through REQ-P0-007 (see design doc)
 **Design:** `docs/plans/2026-03-21-phase9-design.md`
@@ -621,9 +622,9 @@ Depends on: P2-5
 - DEC-REPORT-003: Campaign report reuses ReportData with cross-target aggregation wrapper — Addresses: REQ-P1-001
 
 Sub-phases:
-- [ ] Sub-Phase 9A: Session Resume + Diff UI — resume CLI, UUID prefix match, parent_session_id, TUI diff colors, ScanDiffCompleted event
-- [ ] Sub-Phase 9B: Multi-Target Campaign Mode — campaign CLI, JSON file parsing, profile templates, sequential execution, campaign DB table
-- [ ] Sub-Phase 9C: Report Polish + Risk Scoring — executive summary, cvss_score field, campaign aggregated reports, HTML SVG pie chart
+- [x] Sub-Phase 9A: Session Resume + Diff UI — resume CLI, UUID prefix match, parent_session_id, TUI diff colors, ScanDiffCompleted event
+- [x] Sub-Phase 9B: Multi-Target Campaign Mode — campaign CLI, JSON file parsing, profile templates, sequential execution, campaign DB table
+- [x] Sub-Phase 9C: Report Polish + Risk Scoring — executive summary, cvss_score field, campaign aggregated reports, HTML SVG pie chart
 
 ### Decision Log
 <!-- Guardian appends here after phase completion -->
