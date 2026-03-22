@@ -120,6 +120,14 @@ pub struct Orchestrator {
     /// (every tool auto-approved). Web-initiated scans should use `"low"` so
     /// Medium/High risk tools require explicit operator approval via WebSocket.
     auto_approve: String,
+    /// Optional scan profile for campaign-driven tool/prompt customization.
+    ///
+    /// When `Some`, the profile's `focus` hint is appended to each agent's
+    /// system prompt and its `tools` list filters the registry output so only
+    /// allowed tools reach the LLM. Profile filtering is applied *after* the
+    /// role ACL — profiles can only restrict, never expand tool access.
+    /// `max_iterations` and `ports` overrides are applied at builder time.
+    profile: Option<sigint_core::campaign::ScanProfile>,
 }
 
 impl Orchestrator {
@@ -151,6 +159,7 @@ impl Orchestrator {
             session_id: Uuid::nil(),
             approval_registry: None,
             auto_approve: "all".to_string(),
+            profile: None,
         }
     }
 
@@ -228,6 +237,23 @@ impl Orchestrator {
         self
     }
 
+    /// Apply a [`ScanProfile`](sigint_core::campaign::ScanProfile) from a campaign file.
+    ///
+    /// Profile-level overrides are applied eagerly (`max_iterations`, `ports`),
+    /// while runtime effects (`focus` prompt injection, `tools` filtering) are
+    /// evaluated lazily inside `run_agent`. Profiles can only *restrict* tool
+    /// access beyond the role ACL — they never expand it.
+    pub fn with_profile(mut self, profile: sigint_core::campaign::ScanProfile) -> Self {
+        if let Some(max) = profile.max_iterations {
+            self.max_iterations = max;
+        }
+        if let Some(ref ports) = profile.ports {
+            self.ports = Some(ports.clone());
+        }
+        self.profile = Some(profile);
+        self
+    }
+
     /// Run the full five-agent scan pipeline against `target`.
     ///
     /// Pipeline order: Researcher → Strategist → Executor → Analyst → Reporter.
@@ -295,8 +321,19 @@ impl Orchestrator {
         let mut state = ConversationState::new(self.context_window);
 
         // System prompt defines the agent's identity and behavioral constraints.
+        // When a campaign profile specifies a focus area, append it so the agent
+        // prioritises analysis and tool usage relevant to that engagement focus.
+        let mut system_prompt = agent.system_prompt().to_string();
+        if let Some(ref profile) = self.profile {
+            if !profile.focus.is_empty() {
+                system_prompt.push_str(&format!(
+                    "\n\nENGAGEMENT FOCUS: {}\nPrioritize analysis and tool usage relevant to this focus area.",
+                    profile.focus
+                ));
+            }
+        }
         state.add_message(sigint_llm::types::ChatMessage::system(
-            agent.system_prompt(),
+            &system_prompt,
         ));
 
         // Inject memory context as a second system message, immediately after
@@ -315,7 +352,19 @@ impl Orchestrator {
         state.add_message(sigint_llm::types::ChatMessage::user(&user_prompt));
 
         // ACL-filtered tools for this agent.
-        let (tool_refs, tool_defs) = self.registry.for_agent(agent);
+        let (mut tool_refs, mut tool_defs) = self.registry.for_agent(agent);
+
+        // Profile tool restriction: only keep tools whose names appear in the
+        // profile's `tools` list. This runs *after* the role ACL filter so a
+        // profile can only restrict, never expand beyond what the role allows.
+        if let Some(ref profile) = self.profile {
+            if !profile.tools.is_empty() {
+                let allowed: std::collections::HashSet<&str> =
+                    profile.tools.iter().map(|s| s.as_str()).collect();
+                tool_refs.retain(|t| allowed.contains(t.name()));
+                tool_defs.retain(|d| allowed.contains(d.function.name.as_str()));
+            }
+        }
 
         run_tool_loop(
             self.provider.as_ref(),
@@ -569,6 +618,300 @@ mod tests {
         // gate is never triggered and the pipeline runs end-to-end).
         let report = orch.run_scan("test.local").await.unwrap();
         assert_eq!(report.target, "test.local");
+    }
+
+    // ── Profile tests ────────────────────────────────────────────────────
+
+    /// A recording provider that captures the ChatRequest for inspection.
+    struct RecordingProvider {
+        requests: Mutex<Vec<sigint_llm::types::ChatRequest>>,
+    }
+
+    impl RecordingProvider {
+        fn new() -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn captured(&self) -> Vec<sigint_llm::types::ChatRequest> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for RecordingProvider {
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
+            self.requests.lock().unwrap().push(request);
+            Ok(ChatResponse {
+                content: "recorded".into(),
+                usage: None,
+                model: "recording".into(),
+                tool_calls: vec![],
+            })
+        }
+
+        async fn chat_stream(&self, request: ChatRequest) -> Result<ChunkStream, Error> {
+            self.requests.lock().unwrap().push(request);
+            let chunks: Vec<Result<StreamChunk, Error>> = vec![
+                Ok(StreamChunk {
+                    delta: "recorded".into(),
+                    done: false,
+                    usage: None,
+                    tool_calls: vec![],
+                }),
+                Ok(StreamChunk {
+                    delta: String::new(),
+                    done: true,
+                    usage: None,
+                    tool_calls: vec![],
+                }),
+            ];
+            Ok(Box::pin(stream::iter(chunks)))
+        }
+    }
+
+    fn make_profile(
+        focus: &str,
+        tools: Vec<&str>,
+        max_iterations: Option<usize>,
+        ports: Option<&str>,
+    ) -> sigint_core::campaign::ScanProfile {
+        sigint_core::campaign::ScanProfile {
+            focus: focus.into(),
+            tools: tools.into_iter().map(|s| s.to_string()).collect(),
+            max_iterations,
+            ports: ports.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn with_profile_stores_profile_and_applies_overrides() {
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let orch = make_orchestrator(provider).with_profile(make_profile(
+            "web app",
+            vec!["nmap_scan"],
+            Some(25),
+            Some("80,443"),
+        ));
+
+        assert!(orch.profile.is_some());
+        assert_eq!(orch.max_iterations, 25);
+        assert_eq!(orch.ports.as_deref(), Some("80,443"));
+    }
+
+    #[test]
+    fn with_profile_no_overrides_preserves_defaults() {
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let orch = make_orchestrator(provider).with_profile(make_profile(
+            "",
+            vec![],
+            None,
+            None,
+        ));
+
+        assert!(orch.profile.is_some());
+        assert_eq!(orch.max_iterations, DEFAULT_MAX_ITERATIONS);
+        assert!(orch.ports.is_none());
+    }
+
+    #[tokio::test]
+    async fn profile_focus_injected_into_system_prompt() {
+        let provider = Arc::new(RecordingProvider::new());
+        let provider_ref = provider.clone();
+        let orch = make_orchestrator(provider).with_profile(make_profile(
+            "web application security",
+            vec![],
+            None,
+            None,
+        ));
+
+        let agent = ResearcherAgent::new();
+        let mut ctx = TaskContext::new("example.com");
+        let _ = orch.run_agent(&agent, &mut ctx).await.unwrap();
+
+        let captured = provider_ref.captured();
+        assert!(!captured.is_empty(), "should have captured at least one request");
+
+        // First message should be system prompt with focus appended.
+        let system_msg = &captured[0].messages[0];
+        assert_eq!(system_msg.role, "system");
+        assert!(
+            system_msg.content.contains("ENGAGEMENT FOCUS: web application security"),
+            "system prompt should contain focus: {}",
+            system_msg.content
+        );
+        assert!(
+            system_msg.content.contains("Prioritize analysis and tool usage"),
+            "system prompt should contain prioritization instruction"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_focus_not_injected_into_system_prompt() {
+        let provider = Arc::new(RecordingProvider::new());
+        let provider_ref = provider.clone();
+        let orch = make_orchestrator(provider).with_profile(make_profile(
+            "",
+            vec![],
+            None,
+            None,
+        ));
+
+        let agent = ResearcherAgent::new();
+        let mut ctx = TaskContext::new("example.com");
+        let _ = orch.run_agent(&agent, &mut ctx).await.unwrap();
+
+        let captured = provider_ref.captured();
+        let system_msg = &captured[0].messages[0];
+        assert!(
+            !system_msg.content.contains("ENGAGEMENT FOCUS"),
+            "empty focus should not be injected: {}",
+            system_msg.content
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_tools_filter_restricts_tool_defs() {
+        // Register two tools, profile only allows one.
+        use sigint_llm::ToolDefinition;
+        use serde_json::json;
+
+        struct FakeTool { tool_name: String }
+        impl FakeTool {
+            fn new(name: &str) -> Self { Self { tool_name: name.into() } }
+        }
+        #[async_trait]
+        impl sigint_tools::tool::Tool for FakeTool {
+            fn name(&self) -> &str { &self.tool_name }
+            fn description(&self) -> &str { "fake" }
+            fn definition(&self) -> ToolDefinition {
+                ToolDefinition::function(self.tool_name.clone(), "fake", json!({"type": "object", "properties": {}}))
+            }
+            async fn execute(&self, _args: serde_json::Value) -> sigint_tools::error::Result<sigint_tools::result::ToolResult> {
+                Ok(sigint_tools::result::ToolResult {
+                    stdout: "ok".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    duration: std::time::Duration::from_millis(1),
+                    structured_data: None,
+                })
+            }
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(FakeTool::new("nmap_scan")));
+        registry.register(Box::new(FakeTool::new("shell")));
+
+        let provider = Arc::new(RecordingProvider::new());
+        let provider_ref = provider.clone();
+
+        let orch = Orchestrator::new(
+            provider,
+            registry,
+            EventBus::new(),
+            8192,
+            "mock-model".into(),
+        )
+        .with_profile(make_profile("", vec!["nmap_scan"], None, None));
+
+        // Use ExecutorAgent which has both nmap_scan and shell in its ACL.
+        let agent = crate::agents::ExecutorAgent::new();
+        let mut ctx = TaskContext::new("example.com");
+        let _ = orch.run_agent(&agent, &mut ctx).await.unwrap();
+
+        let captured = provider_ref.captured();
+        assert!(!captured.is_empty());
+
+        // The tool definitions sent to the LLM should only contain nmap_scan.
+        let tool_names: Vec<&str> = captured[0]
+            .tools
+            .iter()
+            .map(|d| d.function.name.as_str())
+            .collect();
+        assert!(
+            tool_names.contains(&"nmap_scan"),
+            "nmap_scan should be in filtered tools: {tool_names:?}"
+        );
+        assert!(
+            !tool_names.contains(&"shell"),
+            "shell should be filtered out by profile: {tool_names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_empty_tools_allows_all() {
+        // Empty tools list means no restriction — all ACL-allowed tools pass through.
+        use sigint_llm::ToolDefinition;
+        use serde_json::json;
+
+        struct FakeTool2 { tool_name: String }
+        impl FakeTool2 {
+            fn new(name: &str) -> Self { Self { tool_name: name.into() } }
+        }
+        #[async_trait]
+        impl sigint_tools::tool::Tool for FakeTool2 {
+            fn name(&self) -> &str { &self.tool_name }
+            fn description(&self) -> &str { "fake" }
+            fn definition(&self) -> ToolDefinition {
+                ToolDefinition::function(self.tool_name.clone(), "fake", json!({"type": "object", "properties": {}}))
+            }
+            async fn execute(&self, _args: serde_json::Value) -> sigint_tools::error::Result<sigint_tools::result::ToolResult> {
+                Ok(sigint_tools::result::ToolResult {
+                    stdout: "ok".into(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    duration: std::time::Duration::from_millis(1),
+                    structured_data: None,
+                })
+            }
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(FakeTool2::new("nmap_scan")));
+        registry.register(Box::new(FakeTool2::new("shell")));
+
+        let provider = Arc::new(RecordingProvider::new());
+        let provider_ref = provider.clone();
+
+        let orch = Orchestrator::new(
+            provider,
+            registry,
+            EventBus::new(),
+            8192,
+            "mock-model".into(),
+        )
+        .with_profile(make_profile("", vec![], None, None));
+
+        let agent = crate::agents::ExecutorAgent::new();
+        let mut ctx = TaskContext::new("example.com");
+        let _ = orch.run_agent(&agent, &mut ctx).await.unwrap();
+
+        let captured = provider_ref.captured();
+        let tool_names: Vec<&str> = captured[0]
+            .tools
+            .iter()
+            .map(|d| d.function.name.as_str())
+            .collect();
+        assert_eq!(tool_names.len(), 2, "empty tools list should allow all ACL tools: {tool_names:?}");
+    }
+
+    #[tokio::test]
+    async fn with_profile_full_pipeline_runs() {
+        // End-to-end: a profile with focus + tool restriction completes the pipeline.
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let orch = make_orchestrator(provider).with_profile(make_profile(
+            "network infrastructure",
+            vec!["nmap_scan"],
+            Some(20),
+            Some("22,80,443"),
+        ));
+        let report = orch.run_scan("infra.local").await.unwrap();
+        assert_eq!(report.target, "infra.local");
     }
 
     #[tokio::test]
