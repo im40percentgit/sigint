@@ -27,6 +27,8 @@ pub struct Session {
     /// When set, this session resumes a previous one. Forms a linked chain
     /// for session resume tracking (Phase 9A).
     pub parent_session_id: Option<Uuid>,
+    /// When set, this session belongs to a multi-target campaign (DEC-CAMPAIGN-002).
+    pub campaign_id: Option<Uuid>,
 }
 
 impl Session {
@@ -39,12 +41,46 @@ impl Session {
             created_at: now,
             updated_at: now,
             parent_session_id: None,
+            campaign_id: None,
         }
     }
 
     pub fn with_target(mut self, target: impl Into<String>) -> Self {
         self.target = Some(target.into());
         self
+    }
+
+    pub fn with_campaign_id(mut self, id: Uuid) -> Self {
+        self.campaign_id = Some(id);
+        self
+    }
+}
+
+// ── Campaign ──────────────────────────────────────────────────────────────────
+
+/// A multi-target scanning campaign (DEC-CAMPAIGN-002).
+///
+/// Groups multiple sessions under a named campaign, optionally backed by
+/// a file (e.g. a target list). Completed campaigns record a timestamp
+/// so reports can be scoped to the full campaign duration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Campaign {
+    pub id: Uuid,
+    pub name: String,
+    pub file_path: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl Campaign {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            file_path: None,
+            created_at: Utc::now(),
+            completed_at: None,
+        }
     }
 }
 
