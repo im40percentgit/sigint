@@ -23,8 +23,8 @@ impl Database {
     pub fn create_finding(&self, finding: &Finding) -> Result<(), Error> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO findings (id, session_id, title, description, severity, asset, evidence, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO findings (id, session_id, title, description, severity, asset, evidence, created_at, cvss_score)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     finding.id.to_string(),
                     finding.session_id.to_string(),
@@ -34,6 +34,7 @@ impl Database {
                     finding.asset,
                     finding.evidence,
                     finding.created_at.to_rfc3339(),
+                    finding.cvss_score,
                 ],
             )
             .map_err(|e| Error::Database(format!("create_finding failed: {e}")))?;
@@ -46,7 +47,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, session_id, title, description, severity, asset, evidence, created_at
+                    "SELECT id, session_id, title, description, severity, asset, evidence, created_at, cvss_score
                      FROM findings WHERE session_id = ?1
                      ORDER BY created_at ASC",
                 )
@@ -85,6 +86,7 @@ pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> 
     let asset: Option<String> = row.get(5).map_err(|e| Error::Database(e.to_string()))?;
     let evidence: Option<String> = row.get(6).map_err(|e| Error::Database(e.to_string()))?;
     let created_at_str: String = row.get(7).map_err(|e| Error::Database(e.to_string()))?;
+    let cvss_score: Option<f32> = row.get(8).map_err(|e| Error::Database(e.to_string()))?;
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid UUID '{id_str}': {e}")))?;
@@ -103,6 +105,7 @@ pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> 
         asset,
         evidence,
         created_at,
+        cvss_score,
     })
 }
 
@@ -163,5 +166,31 @@ mod tests {
         db.delete_session(sid).unwrap();
         let findings = db.get_findings(sid).unwrap();
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn finding_with_cvss_score_roundtrips() {
+        let db = db();
+        let sid = make_session(&db);
+        let mut f = Finding::new(sid, "RCE", "Remote code execution via log4j", Severity::Critical);
+        f.cvss_score = Some(7.5);
+        db.create_finding(&f).unwrap();
+
+        let findings = db.get_findings(sid).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].cvss_score, Some(7.5));
+    }
+
+    #[test]
+    fn finding_without_score_defaults_to_none() {
+        let db = db();
+        let sid = make_session(&db);
+        let f = Finding::new(sid, "Info Leak", "Banner disclosure", Severity::Low);
+        // cvss_score not set — should remain None after roundtrip.
+        db.create_finding(&f).unwrap();
+
+        let findings = db.get_findings(sid).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].cvss_score.is_none());
     }
 }

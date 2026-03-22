@@ -95,7 +95,7 @@ impl<'a> FindingQuery<'a> {
 
         self.db.with_conn(|conn| {
             let mut sql = String::from(
-                "SELECT id, session_id, title, description, severity, asset, evidence, created_at \
+                "SELECT id, session_id, title, description, severity, asset, evidence, created_at, cvss_score \
                  FROM findings",
             );
 
