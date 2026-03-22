@@ -18,11 +18,16 @@
 //! as a pure free function makes the command parsing logic unit-testable
 //! without requiring a live Orchestrator or LLM provider.
 
+use std::sync::Arc;
+
 use tokio::sync::broadcast;
 use tracing::warn;
 
+use sigint_core::diff::diff_findings;
 use sigint_core::event::{Event, EventBus};
+use sigint_core::types::Session;
 use sigint_core::Error;
+use sigint_store::Database;
 
 use crate::Orchestrator;
 
@@ -101,6 +106,7 @@ pub struct InteractiveSession {
     orchestrator: Orchestrator,
     event_rx: broadcast::Receiver<Event>,
     event_bus: EventBus,
+    db: Option<Arc<Database>>,
 }
 
 impl InteractiveSession {
@@ -113,15 +119,20 @@ impl InteractiveSession {
     ///   writes `UserInput` events onto.
     /// * `event_bus`    — Bus handle for emitting Status and result events back
     ///   to the TUI.
+    /// * `db`           — Optional database handle for session resume operations.
+    ///   When `None`, resume commands emit a fallback message directing the user
+    ///   to the CLI.
     pub fn new(
         orchestrator: Orchestrator,
         event_rx: broadcast::Receiver<Event>,
         event_bus: EventBus,
+        db: Option<Arc<Database>>,
     ) -> Self {
         Self {
             orchestrator,
             event_rx,
             event_bus,
+            db,
         }
     }
 
@@ -173,14 +184,98 @@ impl InteractiveSession {
                 }
             }
             Command::ResumeList => {
-                let _ = self.event_bus.emit(Event::Status(
-                    "Use 'resume <session-prefix>' to resume a prior scan. Use CLI 'sigint sessions list' to see sessions.".into()
-                ));
+                if let Some(ref db) = self.db {
+                    match db.list_sessions() {
+                        Ok(sessions) if sessions.is_empty() => {
+                            self.event_bus
+                                .emit(Event::Status("No prior sessions found.".into()));
+                        }
+                        Ok(sessions) => {
+                            let mut msg =
+                                String::from("Recent sessions (use 'resume <prefix>'):\n");
+                            for s in sessions.iter().take(10) {
+                                msg.push_str(&format!(
+                                    "  {} — {} ({})\n",
+                                    &s.id.to_string()[..8],
+                                    s.target.as_deref().unwrap_or("-"),
+                                    s.name
+                                ));
+                            }
+                            self.event_bus.emit(Event::Status(msg));
+                        }
+                        Err(e) => {
+                            self.event_bus
+                                .emit(Event::Status(format!("Error listing sessions: {e}")));
+                        }
+                    }
+                } else {
+                    self.event_bus.emit(Event::Status(
+                        "Database not available. Use CLI: sigint sessions list".into(),
+                    ));
+                }
             }
             Command::Resume(prefix) => {
-                let _ = self.event_bus.emit(Event::Status(
-                    format!("Resume not yet wired in TUI. Use CLI: sigint resume {prefix}")
-                ));
+                if let Some(ref db) = self.db {
+                    match db.get_session_by_prefix(&prefix) {
+                        Ok(prior) => {
+                            if let Some(ref target) = prior.target {
+                                let target = target.clone();
+                                // Create child session
+                                let mut child = Session::new(&format!("Resume of {}", prior.name));
+                                child.target = Some(target.clone());
+                                child.parent_session_id = Some(prior.id);
+                                let child_id = child.id;
+                                let _ = db.create_session(&child);
+
+                                self.event_bus.emit(Event::Status(format!(
+                                    "Resuming scan of {} (prior: {})...",
+                                    target,
+                                    &prior.id.to_string()[..8]
+                                )));
+
+                                match self.orchestrator.run_scan(&target).await {
+                                    Ok(report) => {
+                                        // Auto-diff prior findings vs new findings
+                                        if let (Ok(prior_findings), Ok(new_findings)) = (
+                                            db.get_findings(prior.id),
+                                            db.get_findings(child_id),
+                                        ) {
+                                            let diff = diff_findings(
+                                                prior.id,
+                                                &prior_findings,
+                                                child_id,
+                                                &new_findings,
+                                            );
+                                            self.event_bus
+                                                .emit(Event::ScanDiffCompleted { diff });
+                                        }
+                                        self.event_bus.emit(Event::Status(format!(
+                                            "Resume scan complete. {}",
+                                            report.summary
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        self.event_bus.emit(Event::Status(format!(
+                                            "Resume failed: {e}"
+                                        )));
+                                    }
+                                }
+                            } else {
+                                self.event_bus.emit(Event::Status(format!(
+                                    "Session {} has no target.",
+                                    &prior.id.to_string()[..8]
+                                )));
+                            }
+                        }
+                        Err(e) => {
+                            self.event_bus.emit(Event::Status(format!("{e}")));
+                        }
+                    }
+                } else {
+                    self.event_bus.emit(Event::Status(format!(
+                        "Database not available. Use CLI: sigint resume {prefix}"
+                    )));
+                }
             }
             Command::Help => {
                 self.event_bus.emit(Event::Status(
@@ -343,7 +438,7 @@ mod tests {
             8192,
             "noop-model".into(),
         );
-        let session = InteractiveSession::new(orch, rx, bus.clone());
+        let session = InteractiveSession::new(orch, rx, bus.clone(), None);
 
         // Send Shutdown before running — the session should exit immediately.
         bus.emit(Event::Shutdown);
@@ -421,7 +516,7 @@ mod tests {
             8192,
             "noop".into(),
         );
-        let session = InteractiveSession::new(orch, cmd_rx, bus.clone());
+        let session = InteractiveSession::new(orch, cmd_rx, bus.clone(), None);
 
         // Send help then Shutdown
         bus.emit(Event::UserInput {
