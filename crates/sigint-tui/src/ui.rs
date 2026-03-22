@@ -286,7 +286,7 @@ fn render_findings(frame: &mut Frame, state: &AppState, area: Rect) {
                     .add_modifier(Modifier::BOLD),
                 DiffStatus::Fixed => Style::default()
                     .fg(Color::DarkGray)
-                    .add_modifier(Modifier::CROSSED_OUT),
+                    .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
                 DiffStatus::Unchanged | DiffStatus::NoDiff => Style::default(),
             };
             Row::new(vec![

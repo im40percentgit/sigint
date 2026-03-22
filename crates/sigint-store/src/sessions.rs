@@ -284,35 +284,17 @@ mod tests {
     #[test]
     fn get_session_by_prefix_ambiguous() {
         let db = Database::open_in_memory().unwrap();
-        // Insert many sessions and scan for a 4-char prefix that matches 2+
-        let mut sessions = Vec::new();
-        for i in 0..30 {
-            let s = Session::new(&format!("session-{}", i));
-            db.create_session(&s).unwrap();
-            sessions.push(s);
-        }
-        // Find a 4-char prefix shared by at least 2 sessions
-        let prefix_found = sessions.iter().find_map(|s| {
-            let p = &s.id.to_string()[..4];
-            let count = sessions.iter().filter(|s2| s2.id.to_string().starts_with(p)).count();
-            if count >= 2 {
-                Some(p.to_string())
-            } else {
-                None
-            }
-        });
-        if let Some(prefix) = prefix_found {
-            let result = db.get_session_by_prefix(&prefix);
-            assert!(result.is_err());
-            let msg = result.unwrap_err().to_string();
-            assert!(msg.contains("matches"));
-        } else {
-            // No collision found in 30 random UUIDs — exercise no-match path instead
-            // (This branch is extremely rare; the ambiguity logic is still covered by
-            //  direct inspection of the implementation path above.)
-            let result = db.get_session_by_prefix("0000");
-            // May or may not match — just ensure no panic
-            let _ = result;
-        }
+        // Use deterministic UUIDs that share a prefix to guarantee collision
+        let mut s1 = Session::new("session-a");
+        s1.id = uuid::Uuid::parse_str("00000000-0001-0000-0000-000000000000").unwrap();
+        let mut s2 = Session::new("session-b");
+        s2.id = uuid::Uuid::parse_str("00000000-0002-0000-0000-000000000000").unwrap();
+        db.create_session(&s1).unwrap();
+        db.create_session(&s2).unwrap();
+
+        let result = db.get_session_by_prefix("00000000");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("matches"), "Error should list matches, got: {msg}");
     }
 }
