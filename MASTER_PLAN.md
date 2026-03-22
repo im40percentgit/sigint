@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 5-role agent system with Orchestrator dispatch.
 
-**Current Phase:** Phase 8 completed — all phases through streaming reasoning + interactive TUI sessions done
+**Current Phase:** Phase 9 proposed — Session Intelligence & Campaign Mode (design complete, awaiting implementation)
 
 ### Architecture
 
@@ -601,6 +601,33 @@ Depends on: P2-5
 - [x] Sub-Phase 8A: Streaming reasoning — AgentThinking/AgentThinkingDone events, chat_stream in tool loop, TUI live reasoning buffer
 - [x] Sub-Phase 8B: Interactive TUI sessions — InteractiveSession struct, parse_command, UserInput routing to Orchestrator
 
+### Phase 9: Session Intelligence & Campaign Mode
+**Status:** proposed
+**Decision IDs:** DEC-RESUME-001, DEC-RESUME-002, DEC-CAMPAIGN-001, DEC-CAMPAIGN-002, DEC-DIFF-UI-001, DEC-REPORT-003
+**Requirements:** REQ-P0-001 through REQ-P0-007 (see design doc)
+**Design:** `docs/plans/2026-03-21-phase9-design.md`
+**Definition of Done:**
+- REQ-P0-001 satisfied: `sigint resume <prefix>` re-scans target and prints diff summary
+- REQ-P0-004 satisfied: TUI Findings panel shows green/dim+strikethrough/default diff colors
+- REQ-P0-005 satisfied: `sigint campaign run --file targets.json` scans all targets sequentially with aggregated output
+- REQ-P0-007 satisfied: Profile templates adjust tools and agent prompts without code changes
+
+### Planned Decisions
+- DEC-RESUME-001: Resume creates new session with parent_session_id FK, auto-diffs after scan — Addresses: REQ-P0-001, REQ-P0-002
+- DEC-RESUME-002: UUID prefix matching via client-side filter on list_sessions() — Addresses: REQ-P0-002
+- DEC-CAMPAIGN-001: Campaign file is flat JSON with named profiles and target references — Addresses: REQ-P0-005, REQ-P0-006, REQ-P0-007
+- DEC-CAMPAIGN-002: Campaign state stored via campaigns table with campaign_id FK on sessions — Addresses: REQ-P0-005, REQ-P1-001
+- DEC-DIFF-UI-001: Diff results emitted as Event::ScanDiffCompleted for TUI/Web rendering — Addresses: REQ-P0-004
+- DEC-REPORT-003: Campaign report reuses ReportData with cross-target aggregation wrapper — Addresses: REQ-P1-001
+
+Sub-phases:
+- [ ] Sub-Phase 9A: Session Resume + Diff UI — resume CLI, UUID prefix match, parent_session_id, TUI diff colors, ScanDiffCompleted event
+- [ ] Sub-Phase 9B: Multi-Target Campaign Mode — campaign CLI, JSON file parsing, profile templates, sequential execution, campaign DB table
+- [ ] Sub-Phase 9C: Report Polish + Risk Scoring — executive summary, cvss_score field, campaign aggregated reports, HTML SVG pie chart
+
+### Decision Log
+<!-- Guardian appends here after phase completion -->
+
 ## Architectural Decisions
 
 | ID | Decision | Status | Rationale |
@@ -691,6 +718,12 @@ Depends on: P2-5
 | DEC-REPORT-001 | Report builder is pure Rust with no template engine dependency | accepted | Plain Rust string formatting avoids pulling in Tera/Handlebars which would add compile time and contributor friction; output quality is equal for structured reports |
 | DEC-WEB-001 | REST handlers are thin wrappers over store CRUD with no business logic | accepted | Web layer is a presentation concern only; all persistence and domain logic lives in sigint-store and sigint-core; keeps handlers testable via tower oneshot |
 | DEC-AGENT-018 | InteractiveSession as EventBus consumer for TUI input routing | accepted | Orchestrator stays unchanged — run_scan() still takes a target string; InteractiveSession bridges the event-driven TUI world to the Orchestrator's imperative API; parse_command extracted as pure function for unit testing without a live provider |
+| DEC-RESUME-001 | Resume creates new session with parent_session_id FK, auto-diffs | proposed | New session preserves temporal record; parent link enables chain-of-scans visualization; diff engine reused from Phase 7A |
+| DEC-RESUME-002 | UUID prefix matching via client-side filter on list_sessions() | proposed | Reuses existing list_sessions(); session count is small enough for client-side filter; matches pattern from DEC-CLI-005 |
+| DEC-CAMPAIGN-001 | Campaign file is flat JSON with named profiles and target references | proposed | Self-contained JSON is easy to version-control and validate; profiles extensible via serde(default) without code changes |
+| DEC-CAMPAIGN-002 | Campaign state stored via campaigns table with campaign_id FK | proposed | Enables aggregated reporting and status queries; nullable FK preserves non-campaign sessions |
+| DEC-DIFF-UI-001 | Diff results emitted as Event::ScanDiffCompleted variant | proposed | Consistent with event-driven architecture; ScanDiff already derives Serialize; TUI and Web both receive via EventBus |
+| DEC-REPORT-003 | Campaign report reuses ReportData with cross-target aggregation wrapper | proposed | Reuses all existing report infrastructure; overview section aggregates severity counts; per-target detail rendered by existing builder |
 
 ## References
 
