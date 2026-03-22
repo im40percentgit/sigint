@@ -300,6 +300,27 @@ fn render_technical(data: &ReportData) -> String {
     out
 }
 
+// ── Campaign types ────────────────────────────────────────────────────────────
+
+/// Aggregated report data for a multi-target campaign.
+pub struct CampaignReportData {
+    /// Name of the campaign.
+    pub campaign_name: String,
+    /// Per-target data: (target_name, per-target ReportData).
+    pub targets: Vec<(String, ReportData)>,
+}
+
+// ── Campaign severity helper ──────────────────────────────────────────────────
+
+/// Count critical / high / medium / low findings (case-insensitive).
+fn count_severities(findings: &[FindingSummary]) -> (usize, usize, usize, usize) {
+    let c = findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("critical")).count();
+    let h = findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("high")).count();
+    let m = findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("medium")).count();
+    let l = findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("low")).count();
+    (c, h, m, l)
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Render the report as a Markdown string.
@@ -309,6 +330,47 @@ pub fn build_markdown(data: &ReportData, template: ReportTemplate) -> String {
         ReportTemplate::Detailed => render_detailed(data),
         ReportTemplate::Technical => render_technical(data),
     }
+}
+
+/// Render an aggregated Markdown report covering every target in a campaign.
+///
+/// The output contains:
+/// 1. A campaign-level overview with total finding counts.
+/// 2. A per-target severity table.
+/// 3. Inline per-target detail sections produced by [`build_markdown`].
+pub fn build_campaign_markdown(data: &CampaignReportData, template: ReportTemplate) -> String {
+    let mut out = format!("# SIGINT Campaign Report — {}\n\n", data.campaign_name);
+    out.push_str("## Campaign Overview\n\n");
+    out.push_str(&format!("- **Targets scanned:** {}\n", data.targets.len()));
+
+    // Total findings across all targets
+    let total: usize = data.targets.iter().map(|(_, rd)| rd.findings.len()).sum();
+    out.push_str(&format!("- **Total findings:** {}\n\n", total));
+
+    // Severity aggregation table
+    out.push_str("| Target | Findings | Critical | High | Medium | Low |\n");
+    out.push_str("|--------|----------|----------|------|--------|-----|\n");
+    for (name, rd) in &data.targets {
+        let (c, h, m, l) = count_severities(&rd.findings);
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} |\n",
+            name,
+            rd.findings.len(),
+            c,
+            h,
+            m,
+            l,
+        ));
+    }
+
+    // Per-target details
+    out.push_str("\n## Per-Target Details\n\n");
+    for (i, (name, rd)) in data.targets.iter().enumerate() {
+        out.push_str(&format!("### {}. {}\n\n", i + 1, name));
+        out.push_str(&build_markdown(rd, template));
+        out.push('\n');
+    }
+    out
 }
 
 /// Render the report and return raw bytes in the requested format.
@@ -660,6 +722,125 @@ mod tests {
             // All templates must produce non-empty output without panicking.
             assert!(!md.is_empty(), "template {:?}: output must not be empty", template);
         }
+    }
+
+    // ── Campaign report helpers ───────────────────────────────────────────────
+
+    /// Build a minimal ReportData with `n` findings all at severity "high".
+    fn make_report_data(name: &str, n: usize) -> ReportData {
+        ReportData {
+            session_name: name.into(),
+            target: Some(name.into()),
+            created_at: Utc::now(),
+            findings: (0..n)
+                .map(|i| FindingSummary {
+                    title: format!("Finding {i}"),
+                    severity: "high".into(),
+                    description: format!("Description {i}"),
+                    asset: None,
+                    evidence: None,
+                })
+                .collect(),
+            assets: vec![],
+            scan_count: 1,
+        }
+    }
+
+    // ── Campaign report tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn campaign_report_includes_all_targets() {
+        let data = CampaignReportData {
+            campaign_name: "Test Campaign".into(),
+            targets: vec![
+                ("web.example.com".into(), make_report_data("web", 3)),
+                ("api.example.com".into(), make_report_data("api", 2)),
+            ],
+        };
+        let md = build_campaign_markdown(&data, ReportTemplate::Executive);
+        assert!(md.contains("web.example.com"), "missing web target");
+        assert!(md.contains("api.example.com"), "missing api target");
+        assert!(md.contains("Campaign Overview"), "missing overview section");
+        assert!(md.contains("Targets scanned:** 2"), "wrong target count");
+    }
+
+    #[test]
+    fn campaign_report_total_findings() {
+        let data = CampaignReportData {
+            campaign_name: "Count Campaign".into(),
+            targets: vec![
+                ("host-a".into(), make_report_data("a", 3)),
+                ("host-b".into(), make_report_data("b", 2)),
+            ],
+        };
+        let md = build_campaign_markdown(&data, ReportTemplate::Executive);
+        // 3 + 2 = 5 total findings
+        assert!(md.contains("Total findings:** 5"), "wrong total findings count");
+    }
+
+    #[test]
+    fn campaign_report_severity_table() {
+        let mut target_data = make_report_data("mixed", 0);
+        target_data.findings = vec![
+            FindingSummary {
+                title: "Crit".into(),
+                severity: "critical".into(),
+                description: "desc".into(),
+                asset: None,
+                evidence: None,
+            },
+            FindingSummary {
+                title: "High".into(),
+                severity: "high".into(),
+                description: "desc".into(),
+                asset: None,
+                evidence: None,
+            },
+            FindingSummary {
+                title: "Medium".into(),
+                severity: "medium".into(),
+                description: "desc".into(),
+                asset: None,
+                evidence: None,
+            },
+        ];
+
+        let data = CampaignReportData {
+            campaign_name: "Severity Campaign".into(),
+            targets: vec![("mixed-host".into(), target_data)],
+        };
+        let md = build_campaign_markdown(&data, ReportTemplate::Detailed);
+
+        // The severity table must exist
+        assert!(md.contains("| Target | Findings |"), "missing severity table header");
+        // mixed-host row: 3 findings, 1 critical, 1 high, 1 medium, 0 low
+        assert!(md.contains("| mixed-host | 3 | 1 | 1 | 1 | 0 |"), "wrong severity row");
+    }
+
+    #[test]
+    fn campaign_report_empty_targets() {
+        let data = CampaignReportData {
+            campaign_name: "Empty Campaign".into(),
+            targets: vec![],
+        };
+        let md = build_campaign_markdown(&data, ReportTemplate::Executive);
+        assert!(md.contains("Targets scanned:** 0"), "zero targets");
+        assert!(md.contains("Total findings:** 0"), "zero findings");
+    }
+
+    #[test]
+    fn campaign_report_per_target_details() {
+        let data = CampaignReportData {
+            campaign_name: "Detail Campaign".into(),
+            targets: vec![
+                ("first.host".into(), make_report_data("first", 1)),
+                ("second.host".into(), make_report_data("second", 1)),
+            ],
+        };
+        let md = build_campaign_markdown(&data, ReportTemplate::Detailed);
+        assert!(md.contains("## Per-Target Details"), "missing per-target section");
+        assert!(md.contains("### 1. first.host"), "missing first target heading");
+        assert!(md.contains("### 2. second.host"), "missing second target heading");
     }
 
     /// `target: None` must not panic and must produce a valid header without
