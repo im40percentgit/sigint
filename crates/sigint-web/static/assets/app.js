@@ -3,7 +3,7 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
     <div>
       <div class="page-header">
         <div>
-          <div class="page-title">Dashboard</div>
+          <h1 class="page-title">Dashboard</h1>
           <div class="page-subtitle">SIGINT pentest intelligence platform</div>
         </div>
       </div>
@@ -14,15 +14,15 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
           <div class="stat-label">Total Sessions</div>
         </div>
         <div class="card">
-          <div class="stat-value text-green">${c}</div>
+          <div class=${"stat-value"+(c>0?" text-green":"")}>${c}</div>
           <div class="stat-label">Active Scans</div>
         </div>
         <div class="card">
-          <div class="stat-value text-accent">--</div>
-          <div class="stat-label">Findings Today</div>
+          <div class="stat-value">${t.reduce((g,E)=>(E.findings_count||0)+g,0)}</div>
+          <div class="stat-label">Total Findings</div>
         </div>
         <div class="card">
-          <div class="stat-value text-blue">--</div>
+          <div class="stat-value">${t.reduce((g,E)=>(E.assets_count||0)+g,0)}</div>
           <div class="stat-label">Assets Discovered</div>
         </div>
       </div>
@@ -32,7 +32,7 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
           <span class="card-title">Recent Sessions</span>
           <a href="#/sessions" class="btn btn-sm">View All</a>
         </div>
-        ${s.length===0?H`<div class="empty-state">No sessions yet.<br/><br/>Start a scan from the CLI to see data here.</div>`:H`
+        ${s.length===0?H`<div class="empty-state"><div class="empty-icon">\u{1F50D}</div>No sessions yet.<br/>Run <code>sigint run &lt;task&gt;</code> from the CLI to start your first scan.</div>`:H`
             <table>
               <thead>
                 <tr>
@@ -60,7 +60,7 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
     <div>
       <div class="page-header">
         <div>
-          <div class="page-title">Sessions</div>
+          <h1 class="page-title">Sessions</h1>
           <div class="page-subtitle">${t?t.length:"\u2026"} total sessions</div>
         </div>
         <button class="btn" onClick=${_}>Refresh</button>
@@ -122,7 +122,7 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
     <div>
       <div class="page-header">
         <div>
-          <div class="page-title">${n.name}</div>
+          <h1 class="page-title">${n.name}</h1>
           <div class="page-subtitle">Target: ${n.target||"\u2014"}</div>
         </div>
         <div style="display:flex;gap:0.5rem;">
@@ -168,7 +168,7 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
         <div class="card-header">
           <span class="card-title">Findings (${a.length})</span>
         </div>
-        ${a.length===0?C`<div class="empty-state">No findings yet.</div>`:C`
+        ${a.length===0?C`<div class="empty-state">No findings yet. Findings will appear here as the scan discovers vulnerabilities.</div>`:C`
             <table>
               <thead><tr><th>Severity</th><th>Title</th><th>Asset</th></tr></thead>
               <tbody>
@@ -208,7 +208,7 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
     <div>
       <div class="page-header">
         <div>
-          <div class="page-title">Assets</div>
+          <h1 class="page-title">Assets</h1>
           <div class="page-subtitle">${t.length} total across all sessions</div>
         </div>
         <input
@@ -255,7 +255,7 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
     <div>
       <div class="page-header">
         <div>
-          <div class="page-title">Reports</div>
+          <h1 class="page-title">Reports</h1>
           <div class="page-subtitle">Generate markdown or HTML reports for any session</div>
         </div>
       </div>
@@ -334,7 +334,7 @@ var Q,b,bt,ie,P,vt,yt,$t,wt,ot,st,it,re,K={},X=[],oe=/acit|ex(?:s|g|n|p|$)|rph|g
       <span class=${"ws-dot "+(e==="connected"?"connected":e==="connecting"?"":"error")}></span>
       <span class="text-dim">${i}</span>
     </div>
-  `}function Ee({page:t,ws:e}){let n=(i,o,s)=>T`<a href=${i} class=${t===s?"active":""}>${o}</a>`;return T`
+  `}function Ee({page:t,ws:e}){let n=(i,o,s)=>T`<a href=${i} class=${t===s||(s==="sessions"&&t==="scan"||(s==="reports"&&t==="reports"))?"active":""}>${o}</a>`;return T`
     <nav class="nav">
       <span class="nav-brand">SIGINT</span>
       ${n("#/","Dashboard","dashboard")}
