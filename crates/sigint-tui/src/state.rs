@@ -36,8 +36,26 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use sigint_core::diff::ScanDiff;
 use sigint_core::event::Event;
 use sigint_core::types::{Asset, Finding};
+
+/// Diff classification for a finding relative to the previous scan.
+///
+/// Computed by `AppState::diff_status` from the stored `ScanDiff`.
+/// `NoDiff` is returned when no diff has been loaded (i.e. `scan_diff` is
+/// `None`), allowing callers to render findings without diff decorations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffStatus {
+    /// Finding is present in the newer scan but not the baseline — newly introduced.
+    New,
+    /// Finding is present in the baseline but not the newer scan — remediated.
+    Fixed,
+    /// Finding is present in both scans — still open.
+    Unchanged,
+    /// No diff has been computed yet; status is unknown.
+    NoDiff,
+}
 
 /// Which panel currently has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -137,6 +155,11 @@ pub struct AppState {
     /// When `Some`, the UI renders an approval bar and keypresses 'y'/'n'
     /// are intercepted by `app.rs` to emit the grant/deny events.
     pub pending_approval: Option<PendingApproval>,
+    /// The most recent scan diff, populated when `Event::ScanDiffCompleted` arrives.
+    ///
+    /// Used by `diff_status()` to classify each finding as New, Fixed, or Unchanged
+    /// for diff-aware rendering in the Findings panel.
+    pub scan_diff: Option<ScanDiff>,
 }
 
 impl AppState {
@@ -173,6 +196,7 @@ impl AppState {
             should_quit: false,
             show_help: false,
             pending_approval: None,
+            scan_diff: None,
         }
     }
 
@@ -299,8 +323,37 @@ impl AppState {
                 }
                 self.thinking_agent = None;
             }
+            Event::ScanDiffCompleted { diff } => {
+                self.scan_diff = Some(diff);
+            }
             // SessionCreated, TaskUpdated — no TUI state change needed yet.
             _ => {}
+        }
+    }
+
+    /// Classify a finding relative to the stored scan diff.
+    ///
+    /// Returns `DiffStatus::NoDiff` when no diff has been loaded.
+    /// Matching uses the same `(title.to_lowercase(), asset)` key as the diff
+    /// engine in `sigint-core` — see @decision DEC-DIFF-001.
+    pub fn diff_status(&self, finding: &Finding) -> DiffStatus {
+        let Some(ref diff) = self.scan_diff else {
+            return DiffStatus::NoDiff;
+        };
+        let key = (
+            finding.title.to_lowercase(),
+            finding.asset.clone().unwrap_or_default(),
+        );
+        if diff.new.iter().any(|f| {
+            (f.title.to_lowercase(), f.asset.clone().unwrap_or_default()) == key
+        }) {
+            DiffStatus::New
+        } else if diff.fixed.iter().any(|f| {
+            (f.title.to_lowercase(), f.asset.clone().unwrap_or_default()) == key
+        }) {
+            DiffStatus::Fixed
+        } else {
+            DiffStatus::Unchanged
         }
     }
 
@@ -346,9 +399,84 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sigint_core::diff::{DiffSummary, ScanDiff};
     use sigint_core::event::Event;
     use sigint_core::types::{Asset, AssetKind, Finding, Severity};
     use uuid::Uuid;
+
+    fn make_finding(title: &str, asset: Option<&str>) -> Finding {
+        let mut f = Finding::new(Uuid::new_v4(), title, "", Severity::Medium);
+        f.asset = asset.map(|s| s.to_string());
+        f
+    }
+
+    #[test]
+    fn scan_diff_completed_stores_diff() {
+        let mut state = AppState::default();
+        assert!(state.scan_diff.is_none());
+        let diff = ScanDiff {
+            scan_a: Uuid::new_v4(),
+            scan_b: Uuid::new_v4(),
+            summary: DiffSummary {
+                new: 1,
+                fixed: 1,
+                unchanged: 0,
+            },
+            new: vec![make_finding("New Vuln", Some("host1"))],
+            fixed: vec![make_finding("Old Vuln", Some("host1"))],
+            unchanged: vec![],
+        };
+        state.apply(Event::ScanDiffCompleted { diff: diff.clone() });
+        assert!(state.scan_diff.is_some());
+        assert_eq!(state.scan_diff.as_ref().unwrap().summary.new, 1);
+    }
+
+    #[test]
+    fn diff_status_new_finding_detected() {
+        let mut state = AppState::default();
+        let finding = make_finding("New Vuln", Some("host1"));
+        let diff = ScanDiff {
+            scan_a: Uuid::new_v4(),
+            scan_b: Uuid::new_v4(),
+            summary: DiffSummary {
+                new: 1,
+                fixed: 0,
+                unchanged: 0,
+            },
+            new: vec![finding.clone()],
+            fixed: vec![],
+            unchanged: vec![],
+        };
+        state.apply(Event::ScanDiffCompleted { diff });
+        assert_eq!(state.diff_status(&finding), DiffStatus::New);
+    }
+
+    #[test]
+    fn diff_status_fixed_finding_detected() {
+        let mut state = AppState::default();
+        let finding = make_finding("Old Vuln", Some("host1"));
+        let diff = ScanDiff {
+            scan_a: Uuid::new_v4(),
+            scan_b: Uuid::new_v4(),
+            summary: DiffSummary {
+                new: 0,
+                fixed: 1,
+                unchanged: 0,
+            },
+            new: vec![],
+            fixed: vec![finding.clone()],
+            unchanged: vec![],
+        };
+        state.apply(Event::ScanDiffCompleted { diff });
+        assert_eq!(state.diff_status(&finding), DiffStatus::Fixed);
+    }
+
+    #[test]
+    fn diff_status_no_diff_returns_nodiff() {
+        let state = AppState::default();
+        let finding = make_finding("Test", None);
+        assert_eq!(state.diff_status(&finding), DiffStatus::NoDiff);
+    }
 
     #[test]
     fn tool_started_pushes_to_log() {
