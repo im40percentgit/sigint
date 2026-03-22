@@ -8,6 +8,7 @@
 //! system libsqlite3 dependency. WAL mode enables concurrent reads.
 
 pub mod assets;
+pub mod campaigns;
 pub mod db;
 pub mod embeddings;
 pub mod findings;
