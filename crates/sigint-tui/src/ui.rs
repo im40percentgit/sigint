@@ -43,7 +43,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
 
-use crate::state::{AppState, Mode, Panel};
+use crate::state::{AppState, DiffStatus, Mode, Panel};
 use sigint_core::types::ToolRisk;
 
 /// Render the full TUI into `frame` from `state`.
@@ -278,11 +278,23 @@ fn render_findings(frame: &mut Frame, state: &AppState, area: Rect) {
                 sigint_core::types::Severity::Low => Color::Blue,
                 sigint_core::types::Severity::Info => Color::Gray,
             };
+            // Diff-aware row style: new findings are green+bold; fixed findings
+            // are dimmed+strikethrough; unchanged/no-diff use default style.
+            let diff_style = match state.diff_status(f) {
+                DiffStatus::New => Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+                DiffStatus::Fixed => Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+                DiffStatus::Unchanged | DiffStatus::NoDiff => Style::default(),
+            };
             Row::new(vec![
                 Cell::from(f.severity.to_string()).style(Style::default().fg(sev_color)),
                 Cell::from(f.title.clone()),
                 Cell::from(f.asset.clone().unwrap_or_default()),
             ])
+            .style(diff_style)
         })
         .collect();
 
@@ -672,6 +684,43 @@ mod tests {
         // Live reasoning buffer with no agent label set.
         state.reasoning_buffer = "thinking...".into();
         state.thinking_agent = None;
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+    }
+
+    #[test]
+    fn render_findings_with_diff_status_does_not_panic() {
+        use crate::state::AppState;
+        use sigint_core::diff::{DiffSummary, ScanDiff};
+        use sigint_core::event::Event;
+        use sigint_core::types::{Finding, Severity};
+        use uuid::Uuid;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        let sid = Uuid::new_v4();
+
+        // Three findings: one new, one fixed, one unchanged.
+        let new_finding = Finding::new(sid, "SQL Injection", "unparameterised query", Severity::High);
+        let fixed_finding = Finding::new(sid, "Open Redirect", "was fixed", Severity::Medium);
+        let unchanged_finding = Finding::new(sid, "XSS", "still open", Severity::Low);
+
+        state.findings.push(new_finding.clone());
+        state.findings.push(fixed_finding.clone());
+        state.findings.push(unchanged_finding.clone());
+
+        // Load a diff that classifies new_finding as New and fixed_finding as Fixed.
+        let diff = ScanDiff {
+            scan_a: Uuid::new_v4(),
+            scan_b: Uuid::new_v4(),
+            summary: DiffSummary { new: 1, fixed: 1, unchanged: 1 },
+            new: vec![new_finding],
+            fixed: vec![fixed_finding],
+            unchanged: vec![unchanged_finding],
+        };
+        state.apply(Event::ScanDiffCompleted { diff });
+
+        // Must render all three diff-status branches without panicking.
         terminal.draw(|frame| render(frame, &state)).unwrap();
     }
 }

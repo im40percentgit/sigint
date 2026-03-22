@@ -18,11 +18,16 @@
 //! as a pure free function makes the command parsing logic unit-testable
 //! without requiring a live Orchestrator or LLM provider.
 
+use std::sync::Arc;
+
 use tokio::sync::broadcast;
 use tracing::warn;
 
+use sigint_core::diff::diff_findings;
 use sigint_core::event::{Event, EventBus};
+use sigint_core::types::Session;
 use sigint_core::Error;
+use sigint_store::Database;
 
 use crate::Orchestrator;
 
@@ -36,6 +41,10 @@ use crate::Orchestrator;
 pub enum Command {
     /// Run a full scan pipeline against the given target.
     Scan(String),
+    /// Resume a prior session by session-ID prefix.
+    Resume(String),
+    /// List resumable sessions (bare "resume" with no argument).
+    ResumeList,
     /// Display available commands.
     Help,
     /// Input was not a recognised command.
@@ -65,6 +74,15 @@ pub fn parse_command(input: &str) -> Command {
         } else {
             Command::Scan(target.to_string())
         }
+    } else if input == "resume" {
+        Command::ResumeList
+    } else if let Some(prefix) = input.strip_prefix("resume ") {
+        let prefix = prefix.trim();
+        if prefix.is_empty() {
+            Command::ResumeList
+        } else {
+            Command::Resume(prefix.to_string())
+        }
     } else if input == "help" {
         Command::Help
     } else {
@@ -88,6 +106,7 @@ pub struct InteractiveSession {
     orchestrator: Orchestrator,
     event_rx: broadcast::Receiver<Event>,
     event_bus: EventBus,
+    db: Option<Arc<Database>>,
 }
 
 impl InteractiveSession {
@@ -100,15 +119,20 @@ impl InteractiveSession {
     ///   writes `UserInput` events onto.
     /// * `event_bus`    — Bus handle for emitting Status and result events back
     ///   to the TUI.
+    /// * `db`           — Optional database handle for session resume operations.
+    ///   When `None`, resume commands emit a fallback message directing the user
+    ///   to the CLI.
     pub fn new(
         orchestrator: Orchestrator,
         event_rx: broadcast::Receiver<Event>,
         event_bus: EventBus,
+        db: Option<Arc<Database>>,
     ) -> Self {
         Self {
             orchestrator,
             event_rx,
             event_bus,
+            db,
         }
     }
 
@@ -159,9 +183,103 @@ impl InteractiveSession {
                     }
                 }
             }
+            Command::ResumeList => {
+                if let Some(ref db) = self.db {
+                    match db.list_sessions() {
+                        Ok(sessions) if sessions.is_empty() => {
+                            self.event_bus
+                                .emit(Event::Status("No prior sessions found.".into()));
+                        }
+                        Ok(sessions) => {
+                            let mut msg =
+                                String::from("Recent sessions (use 'resume <prefix>'):\n");
+                            for s in sessions.iter().take(10) {
+                                msg.push_str(&format!(
+                                    "  {} — {} ({})\n",
+                                    &s.id.to_string()[..8],
+                                    s.target.as_deref().unwrap_or("-"),
+                                    s.name
+                                ));
+                            }
+                            self.event_bus.emit(Event::Status(msg));
+                        }
+                        Err(e) => {
+                            self.event_bus
+                                .emit(Event::Status(format!("Error listing sessions: {e}")));
+                        }
+                    }
+                } else {
+                    self.event_bus.emit(Event::Status(
+                        "Database not available. Use CLI: sigint sessions list".into(),
+                    ));
+                }
+            }
+            Command::Resume(prefix) => {
+                if let Some(ref db) = self.db {
+                    match db.get_session_by_prefix(&prefix) {
+                        Ok(prior) => {
+                            if let Some(ref target) = prior.target {
+                                let target = target.clone();
+                                // Create child session
+                                let mut child = Session::new(&format!("Resume of {}", prior.name));
+                                child.target = Some(target.clone());
+                                child.parent_session_id = Some(prior.id);
+                                let child_id = child.id;
+                                let _ = db.create_session(&child);
+
+                                self.event_bus.emit(Event::Status(format!(
+                                    "Resuming scan of {} (prior: {})...",
+                                    target,
+                                    &prior.id.to_string()[..8]
+                                )));
+
+                                match self.orchestrator.run_scan(&target).await {
+                                    Ok(report) => {
+                                        // Auto-diff prior findings vs new findings
+                                        if let (Ok(prior_findings), Ok(new_findings)) = (
+                                            db.get_findings(prior.id),
+                                            db.get_findings(child_id),
+                                        ) {
+                                            let diff = diff_findings(
+                                                prior.id,
+                                                &prior_findings,
+                                                child_id,
+                                                &new_findings,
+                                            );
+                                            self.event_bus
+                                                .emit(Event::ScanDiffCompleted { diff });
+                                        }
+                                        self.event_bus.emit(Event::Status(format!(
+                                            "Resume scan complete. {}",
+                                            report.summary
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        self.event_bus.emit(Event::Status(format!(
+                                            "Resume failed: {e}"
+                                        )));
+                                    }
+                                }
+                            } else {
+                                self.event_bus.emit(Event::Status(format!(
+                                    "Session {} has no target.",
+                                    &prior.id.to_string()[..8]
+                                )));
+                            }
+                        }
+                        Err(e) => {
+                            self.event_bus.emit(Event::Status(format!("{e}")));
+                        }
+                    }
+                } else {
+                    self.event_bus.emit(Event::Status(format!(
+                        "Database not available. Use CLI: sigint resume {prefix}"
+                    )));
+                }
+            }
             Command::Help => {
                 self.event_bus.emit(Event::Status(
-                    "Available commands: scan <target>, help".to_string(),
+                    "Available commands: scan <target>, resume [prefix], help".to_string(),
                 ));
             }
             Command::Unknown(ref raw) if raw.is_empty() => {
@@ -320,7 +438,7 @@ mod tests {
             8192,
             "noop-model".into(),
         );
-        let session = InteractiveSession::new(orch, rx, bus.clone());
+        let session = InteractiveSession::new(orch, rx, bus.clone(), None);
 
         // Send Shutdown before running — the session should exit immediately.
         bus.emit(Event::Shutdown);
@@ -329,6 +447,24 @@ mod tests {
             .await
             .expect("session.run() should exit on Shutdown within 200ms")
             .expect("run() should return Ok(())");
+    }
+
+    #[test]
+    fn parse_resume_command_with_prefix() {
+        let cmd = parse_command("resume a1b2c3d4");
+        assert!(matches!(cmd, Command::Resume(ref p) if p == "a1b2c3d4"));
+    }
+
+    #[test]
+    fn parse_resume_without_args_is_list() {
+        let cmd = parse_command("resume");
+        assert!(matches!(cmd, Command::ResumeList));
+    }
+
+    #[test]
+    fn parse_resume_with_whitespace() {
+        let cmd = parse_command("  resume   abcd1234  ");
+        assert!(matches!(cmd, Command::Resume(ref p) if p == "abcd1234"));
     }
 
     /// Verify that help command emits a Status event with the command list.
@@ -380,7 +516,7 @@ mod tests {
             8192,
             "noop".into(),
         );
-        let session = InteractiveSession::new(orch, cmd_rx, bus.clone());
+        let session = InteractiveSession::new(orch, cmd_rx, bus.clone(), None);
 
         // Send help then Shutdown
         bus.emit(Event::UserInput {

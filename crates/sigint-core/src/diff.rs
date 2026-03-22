@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::types::Finding;
@@ -35,7 +35,7 @@ fn match_key(f: &Finding) -> MatchKey {
 // ── Public types ─────────────────────────────────────────────────────────────
 
 /// Counts of findings in each diff category.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffSummary {
     /// Findings present in scan_b but not scan_a (newly introduced).
     pub new: usize,
@@ -50,7 +50,7 @@ pub struct DiffSummary {
 /// `scan_a` is the baseline (older) scan; `scan_b` is the newer scan.
 /// Fields `new`, `fixed`, and `unchanged` contain the actual `Finding`
 /// objects — callers can inspect them or relay them to the UI layer.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanDiff {
     /// UUID of the baseline scan session.
     pub scan_a: Uuid,

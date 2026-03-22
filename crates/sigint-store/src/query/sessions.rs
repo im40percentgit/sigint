@@ -62,7 +62,7 @@ impl<'a> SessionQuery<'a> {
     pub fn list(self) -> Result<Vec<Session>, Error> {
         self.db.with_conn(|conn| {
             let mut sql =
-                String::from("SELECT id, name, target, created_at, updated_at FROM sessions");
+                String::from("SELECT id, name, target, created_at, updated_at, parent_session_id FROM sessions");
             let mut params: Vec<rusqlite::types::Value> = Vec::new();
             let mut conditions = Vec::new();
 

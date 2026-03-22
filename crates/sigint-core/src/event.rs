@@ -108,6 +108,14 @@ pub enum Event {
         request_id: Uuid,
         reason: Option<String>,
     },
+    // ── Session resume diff events ────────────────────────────────────────────
+    /// Diff results from a resume scan comparing findings against a prior session.
+    ///
+    /// Emitted after a resumed scan completes its diff pass. The TUI and Web
+    /// interfaces use this to colour-code findings as new / fixed / unchanged.
+    ScanDiffCompleted {
+        diff: crate::diff::ScanDiff,
+    },
 }
 
 /// Handle to the broadcast event bus.
@@ -261,5 +269,50 @@ mod tests {
         // Roundtrip
         let back: Event = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, Event::UserInput { text, .. } if text == "hello"));
+    }
+
+    #[test]
+    fn scan_diff_completed_event_clone() {
+        use crate::diff::{DiffSummary, ScanDiff};
+        let diff = ScanDiff {
+            scan_a: Uuid::new_v4(),
+            scan_b: Uuid::new_v4(),
+            summary: DiffSummary {
+                new: 1,
+                fixed: 0,
+                unchanged: 2,
+            },
+            new: vec![],
+            fixed: vec![],
+            unchanged: vec![],
+        };
+        let event = Event::ScanDiffCompleted { diff: diff.clone() };
+        let cloned = event.clone();
+        drop(cloned);
+    }
+
+    #[test]
+    fn scan_diff_completed_event_serializes() {
+        use crate::diff::{DiffSummary, ScanDiff};
+        let diff = ScanDiff {
+            scan_a: Uuid::new_v4(),
+            scan_b: Uuid::new_v4(),
+            summary: DiffSummary {
+                new: 2,
+                fixed: 1,
+                unchanged: 3,
+            },
+            new: vec![],
+            fixed: vec![],
+            unchanged: vec![],
+        };
+        let ev = Event::ScanDiffCompleted { diff };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("ScanDiffCompleted"));
+        assert!(json.contains("scan_a"));
+        assert!(json.contains("scan_b"));
+        // Roundtrip
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Event::ScanDiffCompleted { .. }));
     }
 }

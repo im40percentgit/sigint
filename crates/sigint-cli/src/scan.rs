@@ -215,10 +215,12 @@ pub async fn run(
         )
         .with_max_iterations(max_iterations);
 
+        let interactive_db = Database::open(&db_path).ok().map(Arc::new);
         let session = sigint_agents::InteractiveSession::new(
             interactive_orch,
             core.events.subscribe(),
             core.events.clone(),
+            interactive_db,
         );
         tokio::spawn(async move {
             if let Err(e) = session.run().await {

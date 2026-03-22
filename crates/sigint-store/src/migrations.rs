@@ -183,6 +183,11 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         END;
         ",
     ),
+    (
+        3,
+        "session resume: parent_session_id",
+        "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT REFERENCES sessions(id)",
+    ),
 ];
 
 /// Run all pending migrations against the given connection.
@@ -345,5 +350,61 @@ mod tests {
                 trigger
             );
         }
+    }
+
+    #[test]
+    fn parent_session_id_column_exists_and_defaults_to_null() {
+        use crate::Database;
+
+        let db = Database::open_in_memory().expect("in-memory db should open");
+        db.with_conn(|conn| {
+            // Insert a session without specifying parent_session_id — it should default to NULL.
+            conn.execute(
+                "INSERT INTO sessions (id, name, target, created_at, updated_at)
+                 VALUES ('sess-1', 'Test Session', 'example.com', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+
+            // Verify parent_session_id is NULL.
+            let parent_id: Option<String> = conn
+                .query_row(
+                    "SELECT parent_session_id FROM sessions WHERE id = 'sess-1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+
+            assert!(
+                parent_id.is_none(),
+                "parent_session_id should default to NULL, got: {:?}",
+                parent_id
+            );
+
+            // Also verify we can insert a child session pointing to the parent.
+            conn.execute(
+                "INSERT INTO sessions (id, name, target, created_at, updated_at, parent_session_id)
+                 VALUES ('sess-2', 'Resume Session', 'example.com', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z', 'sess-1')",
+                [],
+            )
+            .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+
+            let child_parent: Option<String> = conn
+                .query_row(
+                    "SELECT parent_session_id FROM sessions WHERE id = 'sess-2'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+
+            assert_eq!(
+                child_parent.as_deref(),
+                Some("sess-1"),
+                "child session's parent_session_id should be 'sess-1'"
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 }

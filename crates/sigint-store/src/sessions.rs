@@ -17,14 +17,15 @@ impl Database {
     pub fn create_session(&self, session: &Session) -> Result<(), Error> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO sessions (id, name, target, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO sessions (id, name, target, created_at, updated_at, parent_session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     session.id.to_string(),
                     session.name,
                     session.target,
                     session.created_at.to_rfc3339(),
                     session.updated_at.to_rfc3339(),
+                    session.parent_session_id.map(|u| u.to_string()),
                 ],
             )
             .map_err(|e| Error::Database(format!("create_session failed: {}", e)))?;
@@ -37,7 +38,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id
                      FROM sessions WHERE id = ?1",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -59,7 +60,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id
                      FROM sessions ORDER BY created_at DESC",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -92,6 +93,46 @@ impl Database {
         })
     }
 
+    /// Look up a session by UUID prefix.
+    ///
+    /// The prefix must be at least 4 characters. Returns an error if 0 or
+    /// more than 1 session matches.
+    pub fn get_session_by_prefix(&self, prefix: &str) -> Result<Session, Error> {
+        if prefix.len() < 4 {
+            return Err(Error::Other(
+                "UUID prefix must be at least 4 characters".into(),
+            ));
+        }
+        let sessions = self.list_sessions()?;
+        let matches: Vec<Session> = sessions
+            .into_iter()
+            .filter(|s| s.id.to_string().starts_with(prefix))
+            .collect();
+        match matches.len() {
+            0 => Err(Error::Other(format!(
+                "No session found matching prefix '{prefix}'"
+            ))),
+            1 => Ok(matches.into_iter().next().unwrap()),
+            n => {
+                let listing: Vec<String> = matches
+                    .iter()
+                    .map(|s| {
+                        format!(
+                            "  {} — {} ({})",
+                            &s.id.to_string()[..8],
+                            s.target.as_deref().unwrap_or("-"),
+                            s.name
+                        )
+                    })
+                    .collect();
+                Err(Error::Other(format!(
+                    "Prefix '{prefix}' matches {n} sessions:\n{}",
+                    listing.join("\n")
+                )))
+            }
+        }
+    }
+
     /// Delete a session and all its messages (CASCADE).
     pub fn delete_session(&self, id: Uuid) -> Result<(), Error> {
         self.with_conn(|conn| {
@@ -111,6 +152,8 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
     let target: Option<String> = row.get(2).map_err(|e| Error::Database(e.to_string()))?;
     let created_at_str: String = row.get(3).map_err(|e| Error::Database(e.to_string()))?;
     let updated_at_str: String = row.get(4).map_err(|e| Error::Database(e.to_string()))?;
+    let parent_session_id: Option<String> =
+        row.get("parent_session_id").map_err(|e| Error::Database(e.to_string()))?;
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid UUID '{}': {}", id_str, e)))?;
@@ -127,6 +170,8 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
         target,
         created_at,
         updated_at,
+        parent_session_id: parent_session_id
+            .and_then(|s| Uuid::parse_str(&s).ok()),
     })
 }
 
@@ -192,5 +237,64 @@ mod tests {
 
         let fetched = db.get_session(s.id).unwrap().unwrap();
         assert_eq!(fetched.target.as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn session_with_parent_id_roundtrips() {
+        let db = Database::open_in_memory().unwrap();
+        let parent = Session::new("parent-session");
+        db.create_session(&parent).unwrap();
+
+        let mut child = Session::new("child-session");
+        child.parent_session_id = Some(parent.id);
+        db.create_session(&child).unwrap();
+
+        let fetched = db.get_session(child.id).unwrap().unwrap();
+        assert_eq!(fetched.parent_session_id, Some(parent.id));
+    }
+
+    #[test]
+    fn get_session_by_prefix_unique_match() {
+        let db = Database::open_in_memory().unwrap();
+        let s = Session::new("test");
+        db.create_session(&s).unwrap();
+        let prefix = &s.id.to_string()[..8];
+        let found = db.get_session_by_prefix(prefix).unwrap();
+        assert_eq!(found.id, s.id);
+    }
+
+    #[test]
+    fn get_session_by_prefix_no_match() {
+        let db = Database::open_in_memory().unwrap();
+        let result = db.get_session_by_prefix("zzzzzzzz");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("No session found"));
+    }
+
+    #[test]
+    fn get_session_by_prefix_too_short() {
+        let db = Database::open_in_memory().unwrap();
+        let result = db.get_session_by_prefix("ab");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("4 characters"));
+    }
+
+    #[test]
+    fn get_session_by_prefix_ambiguous() {
+        let db = Database::open_in_memory().unwrap();
+        // Use deterministic UUIDs that share a prefix to guarantee collision
+        let mut s1 = Session::new("session-a");
+        s1.id = uuid::Uuid::parse_str("00000000-0001-0000-0000-000000000000").unwrap();
+        let mut s2 = Session::new("session-b");
+        s2.id = uuid::Uuid::parse_str("00000000-0002-0000-0000-000000000000").unwrap();
+        db.create_session(&s1).unwrap();
+        db.create_session(&s2).unwrap();
+
+        let result = db.get_session_by_prefix("00000000");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("matches"), "Error should list matches, got: {msg}");
     }
 }
