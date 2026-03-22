@@ -10,6 +10,7 @@
 //! auto-generated help text. All subcommands live in separate modules
 //! so the main.rs stays minimal and each command can be tested in isolation.
 
+mod campaign;
 mod chat;
 mod diff;
 mod doctor;
@@ -80,6 +81,11 @@ enum Commands {
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: String,
     },
+    /// Multi-target campaign scanning.
+    Campaign {
+        #[command(subcommand)]
+        action: CampaignAction,
+    },
     /// Run attack surface reconnaissance against a target (Phase 4 ASM).
     Recon {
         /// Target domain, hostname, or IP address.
@@ -91,6 +97,27 @@ enum Commands {
         /// Continuous mode — re-scan every 5 minutes and show changes.
         #[arg(long)]
         watch: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CampaignAction {
+    /// Run a campaign from a target file.
+    Run {
+        /// Path to campaign JSON file.
+        #[arg(short, long)]
+        file: String,
+        /// LLM model override (uses config default if omitted).
+        #[arg(short, long)]
+        model: Option<String>,
+        /// Force TUI mode off — print events to stdout.
+        #[arg(long)]
+        no_tui: bool,
+    },
+    /// Show campaign status.
+    Status {
+        /// Campaign UUID prefix (at least 4 characters).
+        campaign: String,
     },
 }
 
@@ -146,6 +173,14 @@ async fn main() {
             tui,
             no_tui,
         } => scan::run(core, target, ports, model, max_iterations, tui, no_tui).await,
+        Commands::Campaign { action } => match action {
+            CampaignAction::Run { file, model, no_tui } => {
+                campaign::run(core, file, model, no_tui).await
+            }
+            CampaignAction::Status { campaign: prefix } => {
+                campaign::status(core, prefix).await
+            }
+        },
         Commands::Diff(args) => diff::run(core, args).await,
         Commands::Report(args) => report::run(core, args).await,
         Commands::Serve { bind } => serve::run(core, &bind).await,

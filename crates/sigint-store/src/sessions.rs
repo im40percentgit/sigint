@@ -17,8 +17,8 @@ impl Database {
     pub fn create_session(&self, session: &Session) -> Result<(), Error> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO sessions (id, name, target, created_at, updated_at, parent_session_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO sessions (id, name, target, created_at, updated_at, parent_session_id, campaign_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     session.id.to_string(),
                     session.name,
@@ -26,6 +26,7 @@ impl Database {
                     session.created_at.to_rfc3339(),
                     session.updated_at.to_rfc3339(),
                     session.parent_session_id.map(|u| u.to_string()),
+                    session.campaign_id.map(|u| u.to_string()),
                 ],
             )
             .map_err(|e| Error::Database(format!("create_session failed: {}", e)))?;
@@ -38,7 +39,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at, parent_session_id
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id
                      FROM sessions WHERE id = ?1",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -60,7 +61,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at, parent_session_id
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id
                      FROM sessions ORDER BY created_at DESC",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -154,6 +155,8 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
     let updated_at_str: String = row.get(4).map_err(|e| Error::Database(e.to_string()))?;
     let parent_session_id: Option<String> =
         row.get("parent_session_id").map_err(|e| Error::Database(e.to_string()))?;
+    let campaign_id: Option<String> =
+        row.get("campaign_id").map_err(|e| Error::Database(e.to_string()))?;
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid UUID '{}': {}", id_str, e)))?;
@@ -170,8 +173,8 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
         target,
         created_at,
         updated_at,
-        parent_session_id: parent_session_id
-            .and_then(|s| Uuid::parse_str(&s).ok()),
+        parent_session_id: parent_session_id.and_then(|s| Uuid::parse_str(&s).ok()),
+        campaign_id: campaign_id.and_then(|s| Uuid::parse_str(&s).ok()),
     })
 }
 
@@ -279,6 +282,32 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("4 characters"));
+    }
+
+    #[test]
+    fn session_with_campaign_id_roundtrips() {
+        let db = Database::open_in_memory().unwrap();
+        // Insert a campaign row first to satisfy the FK constraint.
+        let campaign_id = Uuid::new_v4();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO campaigns (id, name, created_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    campaign_id.to_string(),
+                    "test-campaign",
+                    "2026-01-01T00:00:00Z",
+                ],
+            )
+            .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+
+        let mut s = Session::new("campaign-target");
+        s.campaign_id = Some(campaign_id);
+        db.create_session(&s).unwrap();
+        let fetched = db.get_session(s.id).unwrap().unwrap();
+        assert_eq!(fetched.campaign_id, s.campaign_id);
     }
 
     #[test]
