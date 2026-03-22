@@ -24,6 +24,9 @@ pub struct Session {
     pub target: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When set, this session resumes a previous one. Forms a linked chain
+    /// for session resume tracking (Phase 9A).
+    pub parent_session_id: Option<Uuid>,
 }
 
 impl Session {
@@ -35,6 +38,7 @@ impl Session {
             target: None,
             created_at: now,
             updated_at: now,
+            parent_session_id: None,
         }
     }
 

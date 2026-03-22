@@ -17,14 +17,15 @@ impl Database {
     pub fn create_session(&self, session: &Session) -> Result<(), Error> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO sessions (id, name, target, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO sessions (id, name, target, created_at, updated_at, parent_session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     session.id.to_string(),
                     session.name,
                     session.target,
                     session.created_at.to_rfc3339(),
                     session.updated_at.to_rfc3339(),
+                    session.parent_session_id.map(|u| u.to_string()),
                 ],
             )
             .map_err(|e| Error::Database(format!("create_session failed: {}", e)))?;
@@ -37,7 +38,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id
                      FROM sessions WHERE id = ?1",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -59,7 +60,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id
                      FROM sessions ORDER BY created_at DESC",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -111,6 +112,8 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
     let target: Option<String> = row.get(2).map_err(|e| Error::Database(e.to_string()))?;
     let created_at_str: String = row.get(3).map_err(|e| Error::Database(e.to_string()))?;
     let updated_at_str: String = row.get(4).map_err(|e| Error::Database(e.to_string()))?;
+    let parent_session_id: Option<String> =
+        row.get("parent_session_id").map_err(|e| Error::Database(e.to_string()))?;
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid UUID '{}': {}", id_str, e)))?;
@@ -127,6 +130,8 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
         target,
         created_at,
         updated_at,
+        parent_session_id: parent_session_id
+            .and_then(|s| Uuid::parse_str(&s).ok()),
     })
 }
 
@@ -192,5 +197,19 @@ mod tests {
 
         let fetched = db.get_session(s.id).unwrap().unwrap();
         assert_eq!(fetched.target.as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn session_with_parent_id_roundtrips() {
+        let db = Database::open_in_memory().unwrap();
+        let parent = Session::new("parent-session");
+        db.create_session(&parent).unwrap();
+
+        let mut child = Session::new("child-session");
+        child.parent_session_id = Some(parent.id);
+        db.create_session(&child).unwrap();
+
+        let fetched = db.get_session(child.id).unwrap().unwrap();
+        assert_eq!(fetched.parent_session_id, Some(parent.id));
     }
 }
