@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 5-role agent system with Orchestrator dispatch.
 
-**Current Phase:** Phase 6 completed — parsers, approval gates, web scan orchestrator
+**Current Phase:** Phase 8 completed — all phases through streaming reasoning + interactive TUI sessions done
 
 ### Architecture
 
@@ -43,6 +43,8 @@ sigint/
 - Phase 4 completed (commits 65588ba–a1b59d2) — ASM store, discovery, tools, TUI+CLI
 - Phase 5 completed (commits 654eaa2–ec9ccf0) — Doctor, OpenAI provider, reports, REST API, SPA frontend
 - Phase 6 completed (commits b17839e–333a002) — nmap/nuclei parsers, approval gates, bidirectional WebSocket, web scan orchestrator with ScanService
+- Phase 7 completed — scan diff engine (7A), E2E integration tests (7B), graceful shutdown (7C)
+- Phase 8 completed — streaming reasoning (8A), interactive TUI sessions (8B), per-chunk streaming timeout
 
 ---
 
@@ -218,6 +220,25 @@ Phase 2 transforms SIGINT from a passive chat interface into an autonomous multi
 | DEC-P3-TUI-002 | 2026-02-25 | render() is a pure function of AppState with no side effects | Pure render function enables full layout testing via ratatui TestBackend without a real terminal. No mutable global state, no I/O in ui.rs. |
 | DEC-P3-TUI-003 | 2026-02-25 | TuiApp separates terminal I/O from state; state lives in AppState | Terminal setup/teardown and event loop are inherently impure; isolating them in app.rs lets state.rs and ui.rs remain pure and fully unit-testable. |
 | DEC-CLI-003 | 2026-02-25 | sessions subcommand uses best-effort database access, same as scan | Consistency with scan command's error handling; database errors reported with clear message and non-zero exit without panicking. --confirm flag on delete guards against accidental data loss. |
+| DEC-WEB-002 | 2026-03-01 | Bidirectional WebSocket using tokio::select! over broadcast::Receiver and StreamExt | Replace send-only WS loop with select! so client messages (approval, scan requests) flow back to the event bus. Phase 6C. |
+| DEC-WEB-003 | 2026-03-01 | AppState carries config, approval_registry, and scan_service for web-initiated scans | Web layer needs all three for browser-initiated scans; config for model/timeouts, approval_registry for y/n routing, scan_service for lifecycle management. Phase 6C. |
+| DEC-WEB-005 | 2026-03-01 | start_scan delegates fully to ScanService::start() | Centralised scan lifecycle in ScanService eliminates duplicated session/event logic between web and CLI paths. Phase 6 Web Scan Orchestrator. |
+| DEC-WEB-010 | 2026-03-01 | rust-embed for compile-time asset embedding with mime_guess content-types | Single binary with no external file dependencies; mime_guess maps extension to Content-Type. Phase 5E. |
+| DEC-APPROVE-001 | 2026-03-01 | std::sync::Mutex + tokio::sync::oneshot for the approval registry | oneshot channels are the Tokio primitive for single-response request/reply; Mutex<HashMap> is sufficient for infrequent approval lookups. Phase 6B. |
+| DEC-AGENT-015 | 2026-03-01 | Per-tool scan record persistence opt-in via Option<&Database> in ToolLoopOptions | Tool loop tests and non-CLI callers don't always have a DB; Option keeps the loop backward-compatible. Phase 6 Web Scan Orchestrator. |
+| DEC-AGENT-016 | 2026-03-01 | Orchestrator holds Option<Arc<Database>> + session_id for per-tool persistence | Optional DB avoids lifetime parameters and keeps web scan path (no DB session yet) working. Phase 6 Web Scan Orchestrator. |
+| DEC-P6-APPROVAL-002 | 2026-03-01 | Approval bar occupies a conditional 1-row slot at the bottom of the TUI layout | Must be unmissable; disappears when no approval pending to avoid wasted space. Phase 6D. |
+| DEC-LLM-004 | 2026-03-01 | OpenAI-compatible provider with manual SSE parsing | /v1/chat/completions is the de-facto standard for hosted LLMs; manual SSE avoids adding an eventsource crate. Phase 5B. |
+| DEC-LLM-006 | 2026-03-01 | Centralised provider factory maps Config to LLM backend | Single create_provider eliminates duplicate construction logic; callers pass &Config and get Arc<dyn LlmProvider>. Phase 5B. |
+| DEC-ASM-001 | 2026-03-01 | Asset store uses SELECT-then-INSERT for upsert | No UNIQUE constraint on (session_id, kind, value); INSERT OR REPLACE risks silent duplicates on schema drift. Phase 4A. |
+| DEC-DIFF-001 | 2026-03-02 | Match findings by (title.to_lowercase(), asset) as cross-session key | Finding IDs are per-session UUIDs; (title, asset) is the stable logical identity for change tracking. Phase 7A. |
+| DEC-CLI-DIFF-001 | 2026-03-02 | sigint diff uses direct DB access, not HTTP API | CLI has sigint-store as a dep; direct DB avoids requiring a running server and keeps diff offline-capable. Phase 7A. |
+| DEC-CLI-005 | 2026-03-01 | report command accepts UUID prefix for session_id | Full UUIDs are 36 chars; prefix matching (≥4 chars) is comfortable for interactive use. Phase 5C. |
+| DEC-WEB-007 | 2026-03-13 | serve_with_shutdown accepts generic Future<Output=()> for axum graceful shutdown | Axum's with_graceful_shutdown is the idiomatic path; separate function keeps serve signature stable. Phase 7C. |
+| DEC-CLI-006 | 2026-03-13 | serve subcommand uses serve_with_shutdown for clean Ctrl-C teardown | axum drain on Ctrl-C prevents dropped requests; Event::Shutdown emitted so WebSocket clients clean up. Phase 7C. |
+| DEC-4D-RECON-002 | 2026-03-14 | ReconEngine borrows &Database and &EventBus — both live for the scope of run() | Borrowed references avoid Arc overhead and make the lifetime constraint explicit at the call site (CLI holds both for the session). Phase 4D. |
+| DEC-P6-APPROVAL-001 | 2026-03-14 | PendingApproval held in AppState; approval responses emitted by app.rs | AppState remains a pure data structure (no channel handles). apply() records pending approvals; app.rs reads and emits responses, then clears pending_approval. Phase 6D. |
+| DEC-AGENT-007-REV | 2026-03-14 | Tool loop switched from chat() to chat_stream() for all iterations (Phase 8A) | Streaming every iteration enables AgentThinking event emission for real-time reasoning visibility. Tool calls still arrive on the done=true chunk per DEC-LLM-003. Phase 8A. |
 
 ### Implementation Issues (Inline — No GitHub Remote)
 
@@ -554,13 +575,31 @@ Depends on: P2-5
 **Sub-phases:** 6A (Parsers) → 6B (Approval) → 6C (Web Layer) → 6D (TUI + Frontend) → Web Scan Orchestrator
 **Design:** `docs/plans/2026-03-01-phase6-hybrid-design.md`
 **Plan:** `docs/plans/2026-03-01-phase6-implementation.md`
-**Decisions:** DEC-TOOL-004, DEC-TOOL-007, DEC-AGENT-012, DEC-WEB-004
+**Decisions:** DEC-TOOL-004, DEC-TOOL-007, DEC-AGENT-012, DEC-WEB-003, DEC-WEB-004, DEC-WEB-005, DEC-WEB-010, DEC-APPROVE-001, DEC-AGENT-015, DEC-AGENT-016, DEC-P6-APPROVAL-002, DEC-LLM-004, DEC-LLM-006
 
 - [x] Sub-Phase 6A: nmap XML parser (quick-xml), nuclei JSONL parser → structured_data
 - [x] Sub-Phase 6B: ToolRisk enum, ApprovalRegistry (oneshot channels), approval gate in loop engine
 - [x] Sub-Phase 6C: Expanded AppState, bidirectional WebSocket (select!), POST /api/scan
 - [x] Sub-Phase 6D: TUI approval prompt (y/n keys), Dashboard scan button, ScanView approval modal
 - [x] Web Scan Orchestrator: ScanService with start/status/cancel/list, wired into web endpoints
+
+### Phase 7: Scan Diff, Graceful Shutdown, E2E Testing
+**Status:** in progress
+**Sub-phases:** 7A (Scan Diff) → 7B (E2E Integration Tests) → 7C (Graceful Shutdown)
+**Design:** `docs/plans/2026-03-02-scan-diff-design.md`, `docs/plans/2026-03-02-e2e-integration-testing-design.md`
+**Plan:** `docs/plans/2026-03-02-scan-diff-implementation.md`, `docs/plans/2026-03-02-e2e-integration-testing-implementation.md`
+**Decisions:** DEC-DIFF-001, DEC-CLI-DIFF-001, DEC-WEB-002, DEC-CLI-005, DEC-WEB-007
+
+- [x] Sub-Phase 7A: Scan diff engine (DiffResult/DiffEntry), GET /api/diff/{a}/{b}, `sigint diff` CLI subcommand
+- [x] Sub-Phase 7B: E2E integration tests for diff endpoint, session lifecycle, health check
+- [x] Sub-Phase 7C: Graceful shutdown — Ctrl-C emits Event::Shutdown; axum serve_with_shutdown
+
+### Phase 8: Streaming Reasoning + Interactive TUI Sessions
+**Status:** completed
+**Decisions:** DEC-AGENT-007-REV, DEC-AGENT-018
+
+- [x] Sub-Phase 8A: Streaming reasoning — AgentThinking/AgentThinkingDone events, chat_stream in tool loop, TUI live reasoning buffer
+- [x] Sub-Phase 8B: Interactive TUI sessions — InteractiveSession struct, parse_command, UserInput routing to Orchestrator
 
 ## Architectural Decisions
 
@@ -616,6 +655,42 @@ Depends on: P2-5
 | DEC-P3-TUI-003 | TuiApp separates terminal I/O from state; state lives in AppState | accepted | Terminal setup/teardown and event loop are inherently impure (raw mode, alternate screen, panic hooks); isolating in app.rs lets state.rs and ui.rs remain pure and fully unit-testable |
 | DEC-P3-003 | TUI auto-detected via isatty(stdout); --tui/--no-tui override | accepted | When stdout is a TTY the user is interactive — show TUI; when piped or in CI fall back to stdout event printer; flags override heuristic for scripting and testing |
 | DEC-P3-001 | sigint-memory as separate crate | accepted | Memory subsystem (retrieval + prompt injection) is independently testable without LLM provider; avoids circular dependency agents → memory → store; sigint-agents gains soft dep at Orchestrator level only |
+| DEC-WEB-002 | Bidirectional WebSocket using tokio::select! | accepted | Original send-only loop replaced with select! over broadcast::Receiver and StreamExt; client messages (approval y/n, scan requests) flow back through event bus |
+| DEC-WEB-003 | AppState carries config, approval_registry, and scan_service | accepted | Web layer needs config for default model/timeouts, approval_registry to route y/n responses, and scan_service to start/cancel scans initiated from the browser |
+| DEC-WEB-005 | start_scan delegates fully to ScanService::start() | accepted | Previously start_scan created its own session and emitted events directly; centralised in ScanService to share logic with TUI and CLI paths |
+| DEC-WEB-010 | rust-embed for compile-time asset embedding with mime_guess | accepted | Embedding static assets at compile time produces a single binary with no external file dependencies; mime_guess maps extension to Content-Type without a lookup table |
+| DEC-APPROVE-001 | std::sync::Mutex + tokio::sync::oneshot for approval registry | accepted | oneshot channels are the idiomatic Tokio primitive for single-response request/reply; Mutex<HashMap> is sufficient since approval lookups are infrequent |
+| DEC-AGENT-015 | Per-tool scan record persistence is opt-in via Option<&Database> | accepted | Tool loop tests and non-CLI callers don't always have a database; Option keeps the loop backward-compatible without requiring a dummy DB |
+| DEC-AGENT-016 | Orchestrator holds Option<Arc<Database>> + session_id for per-tool persistence | accepted | Database is optional because not all callers (tests, web scan service) provide one; Arc avoids lifetime parameters on Orchestrator struct |
+| DEC-P6-APPROVAL-002 | Approval bar occupies a conditional 1-row slot at the very bottom of the TUI | accepted | Must be impossible to miss; placed below all content panels; disappears when no approval is pending to avoid wasted screen space |
+| DEC-LLM-004 | OpenAI-compatible provider with manual SSE parsing | accepted | OpenAI /v1/chat/completions is the de-facto standard for hosted LLMs; manual SSE parsing avoids adding an eventsource crate dependency |
+| DEC-LLM-006 | Centralised provider factory for all LLM backends | accepted | Single create_provider function maps Config fields to the correct provider; eliminates duplicate construction logic across CLI and web callers |
+| DEC-ASM-001 | Asset store uses SELECT-then-INSERT for upsert, no UPSERT SQL | accepted | assets table has no UNIQUE constraint; INSERT OR REPLACE would silently create duplicates on schema drift; explicit SELECT-then-INSERT is safe and auditable |
+| DEC-DIFF-001 | Match findings by (title.to_lowercase(), asset) as cross-session key | accepted | Finding IDs are per-session UUIDs and cannot be compared across sessions; (title, asset) is a stable logical identity; severity/description changes are tracked as mutations |
+| DEC-CLI-DIFF-001 | CLI diff uses direct DB access, not HTTP API | accepted | CLI binary already has sigint-store as a dependency; direct DB access avoids requiring a running server and keeps diff fast and offline-capable |
+| DEC-CLI-005 | report command accepts UUID prefix for session_id | accepted | Full UUIDs are 36 characters and hard to type; prefix matching (≥4 chars) makes interactive use comfortable without risk of collision in practice |
+| DEC-CLI-006 | serve subcommand uses serve_with_shutdown for clean Ctrl-C teardown | accepted | Without a shutdown signal axum keeps accepting connections until the OS kills the process; serve_with_shutdown + ctrl_c() lets axum drain open connections and emits Event::Shutdown to all bus subscribers |
+| DEC-WEB-007 | serve_with_shutdown accepts a generic Future<Output=()> for axum graceful shutdown | accepted | Axum's with_graceful_shutdown takes a caller-supplied future; wrapping in a separate function keeps the existing serve signature stable while enabling clean Ctrl-C support |
+| DEC-DOCTOR-001 | Synchronous checks for PATH/config, async HTTP for Ollama | accepted | Config, PATH, and DB checks are all local and synchronous; only Ollama reachability requires an HTTP call via reqwest |
+| DEC-RECON-002 | Port module uses nmap via SandboxProfile::nmap() (pasta networking) | accepted | nmap requires real network connectivity; SandboxProfile::Nmap provides isolated network namespace via pasta |
+| DEC-RECON-003 | Web module uses curl -sI (HEAD) via sandbox for HTTP fingerprinting | accepted | curl HEAD requests capture response headers without downloading body; sandboxed to prevent host filesystem access |
+| DEC-RECON-004 | Cert module uses reqwest to query crt.sh JSON API | accepted | crt.sh is a TLS-protected JSON API; reqwest avoids sandbox overhead for outbound HTTPS calls |
+| DEC-RECON-005 | OSINT module uses whois via SandboxProfile::recon() with key parsing | accepted | whois provides registrant info and nameservers; sandbox prevents abuse of the process |
+| DEC-RECON-006 | Correlator deduplicates by (kind, value) and enriches metadata with relationships | accepted | Multiple discovery modules may return the same asset; deduplication by (kind, value) is the minimal correct key |
+| DEC-RECON-007 | Change detector compares metadata JSON blobs as strings | accepted | Full JSON diffing would require recursive tree walking; string comparison is sufficient for change detection at this scale |
+| DEC-RECON-008 | ReconEngine orchestrates modules sequentially with best-effort error handling | accepted | Sequential execution simplifies backpressure and timeout tracking; individual module errors are logged but do not abort the run |
+| DEC-REPORT-002 | pulldown-cmark for Markdown-to-HTML rendering | accepted | de-facto Rust Markdown parser; CommonMark-compliant, handles tables and fenced code blocks needed for scan reports |
+| DEC-TOOL-006 | NiktoTool uses SandboxProfile::web_scanner() for pasta networking | accepted | nikto is a comprehensive web scanner requiring network access; web_scanner profile provides pasta networking with appropriate timeout |
+| DEC-TOOL-008 | FeroxbusterTool uses SandboxProfile::bruteforce() for pasta networking | accepted | feroxbuster is a Rust-native recursive content-discovery tool; bruteforce sandbox profile provides pasta networking |
+| DEC-TOOL-007 | NucleiTool uses SandboxProfile::web_scanner() for pasta networking | accepted | nuclei runs community-authored YAML templates against targets; web_scanner sandbox profile provides pasta networking with appropriate timeout |
+| DEC-4D-RECON-001 | recon command uses best-effort persistence matching scan.rs pattern | accepted | Consistent with DEC-CLI-001: recon run must not fail because DB is unavailable; all DB calls wrapped best-effort; output always shown |
+| DEC-4D-STATE-001 | Assets panel added as fifth panel in the TUI Tab cycle | accepted | Phase 4D ASM assets need a dedicated panel; placed between Findings and Input in Tab cycle to keep asset data visually separate from findings |
+| DEC-4D-UI-001 | Findings and Assets share the bottom row as a 50/50 horizontal split | accepted | Both panels have comparable data density at MVP scale; 50/50 split avoids privileging one over the other and can be adjusted later |
+| DEC-LLM-005 | OpenAI arguments field deserialized as String then re-parsed | accepted | OpenAI sends tool call arguments as a JSON-encoded string, not a nested object; deserialize as String then from_str to Value avoids double-nesting |
+| DEC-RECON-001 | DNS module uses dig via SandboxProfile::recon() with spawn_blocking | accepted | dig is a fast, reliable DNS resolver; recon sandbox profile provides pasta networking so dig reaches real DNS servers while remaining isolated |
+| DEC-REPORT-001 | Report builder is pure Rust with no template engine dependency | accepted | Plain Rust string formatting avoids pulling in Tera/Handlebars which would add compile time and contributor friction; output quality is equal for structured reports |
+| DEC-WEB-001 | REST handlers are thin wrappers over store CRUD with no business logic | accepted | Web layer is a presentation concern only; all persistence and domain logic lives in sigint-store and sigint-core; keeps handlers testable via tower oneshot |
+| DEC-AGENT-018 | InteractiveSession as EventBus consumer for TUI input routing | accepted | Orchestrator stays unchanged — run_scan() still takes a target string; InteractiveSession bridges the event-driven TUI world to the Orchestrator's imperative API; parse_command extracted as pure function for unit testing without a live provider |
 
 ## References
 
