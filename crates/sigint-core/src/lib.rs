@@ -12,6 +12,7 @@
 
 pub mod app;
 pub mod approval;
+pub mod campaign;
 pub mod config;
 pub mod diff;
 pub mod error;
