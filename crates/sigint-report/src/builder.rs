@@ -33,6 +33,8 @@ pub struct FindingSummary {
     pub asset: Option<String>,
     /// Optional raw evidence or proof-of-concept output.
     pub evidence: Option<String>,
+    /// Optional numeric risk score (0.0–10.0) for CVSS-style prioritisation.
+    pub risk_score: Option<f32>,
 }
 
 /// A single asset summarised for inclusion in a report.
@@ -113,6 +115,46 @@ fn severity_counts(findings: &[FindingSummary]) -> (usize, usize, usize, usize, 
     (critical, high, medium, low, info)
 }
 
+// ── Executive summary section ─────────────────────────────────────────────────
+
+fn render_executive_summary(data: &ReportData) -> String {
+    let total = data.findings.len();
+    let asset_count = data.assets.len();
+    let critical = data.findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("critical")).count();
+    let high = data.findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("high")).count();
+    let medium = data.findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("medium")).count();
+    let low = data.findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("low")).count();
+
+    let mut out = String::from("## Executive Summary\n\n");
+    out.push_str(&format!(
+        "This engagement identified **{}** findings across **{}** assets: \
+         **{}** critical, **{}** high, **{}** medium, **{}** low.\n\n",
+        total, asset_count, critical, high, medium, low
+    ));
+
+    // Highest-risk finding
+    if let Some(highest) = data.findings.iter()
+        .max_by(|a, b| {
+            let sa = a.risk_score.unwrap_or(0.0);
+            let sb = b.risk_score.unwrap_or(0.0);
+            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    {
+        out.push_str(&format!(
+            "The highest-risk finding is \"{}\" ({}) affecting {}.\n\n",
+            highest.title,
+            highest.severity,
+            highest.asset.as_deref().unwrap_or("unspecified assets")
+        ));
+    }
+
+    if critical > 0 || high > 0 {
+        out.push_str("Immediate remediation is recommended for all critical and high findings.\n\n");
+    }
+
+    out
+}
+
 // ── Report header ─────────────────────────────────────────────────────────────
 
 fn render_header(data: &ReportData, variant_label: &str) -> String {
@@ -136,6 +178,8 @@ fn render_header(data: &ReportData, variant_label: &str) -> String {
 
 fn render_executive(data: &ReportData) -> String {
     let mut out = render_header(data, "Executive Summary");
+
+    out.push_str(&render_executive_summary(data));
 
     let (critical, high, medium, low, info) = severity_counts(&data.findings);
     let total = data.findings.len();
@@ -188,6 +232,8 @@ fn render_executive(data: &ReportData) -> String {
 fn render_detailed(data: &ReportData) -> String {
     let mut out = render_header(data, "Detailed");
 
+    out.push_str(&render_executive_summary(data));
+
     // Findings section
     out.push_str("## Findings\n\n");
     if data.findings.is_empty() {
@@ -202,9 +248,14 @@ fn render_detailed(data: &ReportData) -> String {
                 .as_deref()
                 .map(|a| format!("**Asset:** {a}  \n"))
                 .unwrap_or_default();
+            let risk_line = f
+                .risk_score
+                .map(|s| format!("**Risk Score:** {:.1}/10.0  \n", s))
+                .unwrap_or_default();
             out.push_str(&format!(
                 "### {}. {} `[{}]`\n\n\
                  {asset_line}\
+                 {risk_line}\
                  {}\n\n",
                 i + 1,
                 f.title,
@@ -238,6 +289,8 @@ fn render_detailed(data: &ReportData) -> String {
 fn render_technical(data: &ReportData) -> String {
     let mut out = render_header(data, "Technical");
 
+    out.push_str(&render_executive_summary(data));
+
     // Findings with evidence
     out.push_str("## Technical Findings\n\n");
     if data.findings.is_empty() {
@@ -252,9 +305,14 @@ fn render_technical(data: &ReportData) -> String {
                 .as_deref()
                 .map(|a| format!("**Asset:** {a}  \n"))
                 .unwrap_or_default();
+            let risk_line = f
+                .risk_score
+                .map(|s| format!("**Risk Score:** {:.1}/10.0  \n", s))
+                .unwrap_or_default();
             out.push_str(&format!(
                 "### {}. {} `[{}]`\n\n\
                  {asset_line}\
+                 {risk_line}\
                  {}\n\n",
                 i + 1,
                 f.title,
@@ -405,6 +463,7 @@ mod tests {
                     description: "Unparameterized query in login endpoint.".into(),
                     asset: Some("example.com:443".into()),
                     evidence: Some("' OR 1=1 --".into()),
+                    risk_score: None,
                 },
                 FindingSummary {
                     title: "XSS".into(),
@@ -412,6 +471,7 @@ mod tests {
                     description: "Reflected XSS in search parameter.".into(),
                     asset: Some("example.com".into()),
                     evidence: None,
+                    risk_score: None,
                 },
             ],
             assets: vec![AssetSummary {
@@ -591,6 +651,7 @@ mod tests {
                 description: "Port 8080 open with no service banner.".into(),
                 asset: None,
                 evidence: None,
+                risk_score: None,
             }],
             assets: vec![],
             scan_count: 1,
@@ -618,6 +679,7 @@ mod tests {
                 description: "Server still accepts TLSv1.0.".into(),
                 asset: Some("10.0.0.1:443".into()),
                 evidence: None,
+                risk_score: None,
             }],
             assets: vec![],
             scan_count: 1,
@@ -646,6 +708,7 @@ mod tests {
                     description: "Minor issue.".into(),
                     asset: None,
                     evidence: None,
+                    risk_score: None,
                 },
                 FindingSummary {
                     title: "Critical Finding".into(),
@@ -653,6 +716,7 @@ mod tests {
                     description: "Very bad issue.".into(),
                     asset: None,
                     evidence: None,
+                    risk_score: None,
                 },
                 FindingSummary {
                     title: "Medium Finding".into(),
@@ -660,6 +724,7 @@ mod tests {
                     description: "Moderate issue.".into(),
                     asset: None,
                     evidence: None,
+                    risk_score: None,
                 },
             ],
             assets: vec![],
@@ -668,14 +733,18 @@ mod tests {
 
         let md = build_markdown(&data, ReportTemplate::Detailed);
 
-        // Find positions of each title in the Markdown.
+        // Find positions of each title in the findings section (look for
+        // the numbered heading markers to avoid matching a title that may
+        // also appear in the executive summary paragraph).
         let pos_critical = md
-            .find("Critical Finding")
-            .expect("Critical Finding must appear");
+            .find("Critical Finding `[critical]`")
+            .expect("Critical Finding heading must appear");
         let pos_medium = md
-            .find("Medium Finding")
-            .expect("Medium Finding must appear");
-        let pos_low = md.find("Low Finding").expect("Low Finding must appear");
+            .find("Medium Finding `[medium]`")
+            .expect("Medium Finding heading must appear");
+        let pos_low = md
+            .find("Low Finding `[low]`")
+            .expect("Low Finding heading must appear");
 
         assert!(
             pos_critical < pos_medium,
@@ -699,6 +768,7 @@ mod tests {
                 description: long_desc.clone(),
                 asset: None,
                 evidence: None,
+                risk_score: None,
             }],
             assets: vec![],
             scan_count: 1,
@@ -739,6 +809,7 @@ mod tests {
                     description: format!("Description {i}"),
                     asset: None,
                     evidence: None,
+                    risk_score: None,
                 })
                 .collect(),
             assets: vec![],
@@ -788,6 +859,7 @@ mod tests {
                 description: "desc".into(),
                 asset: None,
                 evidence: None,
+                risk_score: None,
             },
             FindingSummary {
                 title: "High".into(),
@@ -795,6 +867,7 @@ mod tests {
                 description: "desc".into(),
                 asset: None,
                 evidence: None,
+                risk_score: None,
             },
             FindingSummary {
                 title: "Medium".into(),
@@ -802,6 +875,7 @@ mod tests {
                 description: "desc".into(),
                 asset: None,
                 evidence: None,
+                risk_score: None,
             },
         ];
 
@@ -873,5 +947,70 @@ mod tests {
                 template
             );
         }
+    }
+
+    // ── Executive summary and risk score tests ────────────────────────────────
+
+    /// Build a ReportData whose findings are supplied as a slice of
+    /// (title, severity, asset, risk_score) tuples.
+    fn make_report_data_with_findings(
+        findings: Vec<(&str, &str, Option<&str>, Option<f32>)>,
+    ) -> ReportData {
+        ReportData {
+            session_name: "Summary Test Session".into(),
+            target: Some("test.example.com".into()),
+            created_at: Utc::now(),
+            findings: findings
+                .into_iter()
+                .map(|(title, severity, asset, risk_score)| FindingSummary {
+                    title: title.into(),
+                    severity: severity.into(),
+                    description: format!("Description for {title}"),
+                    asset: asset.map(|a| a.to_string()),
+                    evidence: None,
+                    risk_score,
+                })
+                .collect(),
+            assets: vec![
+                AssetSummary { kind: "host".into(), value: "api.example.com".into(), services_count: 2 },
+                AssetSummary { kind: "host".into(), value: "web.example.com".into(), services_count: 1 },
+            ],
+            scan_count: 3,
+        }
+    }
+
+    #[test]
+    fn executive_summary_in_executive_template() {
+        let data = make_report_data_with_findings(vec![
+            ("SQL Injection", "critical", Some("api.example.com"), Some(9.5)),
+            ("XSS", "medium", Some("web.example.com"), Some(5.5)),
+        ]);
+        let md = build_markdown(&data, ReportTemplate::Executive);
+        assert!(md.contains("Executive Summary"), "missing Executive Summary section");
+        assert!(md.contains("2** findings"), "wrong finding count");
+        assert!(md.contains("1** critical"), "wrong critical count");
+        assert!(md.contains("SQL Injection"), "missing highest-risk finding title");
+    }
+
+    #[test]
+    fn executive_summary_in_detailed_template() {
+        let data = make_report_data_with_findings(vec![("Test", "high", None, None)]);
+        let md = build_markdown(&data, ReportTemplate::Detailed);
+        assert!(md.contains("Executive Summary"), "Detailed template missing Executive Summary");
+    }
+
+    #[test]
+    fn executive_summary_empty_findings() {
+        let data = make_report_data_with_findings(vec![]);
+        let md = build_markdown(&data, ReportTemplate::Executive);
+        assert!(md.contains("Executive Summary"), "missing Executive Summary section");
+        assert!(md.contains("0** findings"), "wrong zero finding count");
+    }
+
+    #[test]
+    fn risk_score_displayed_in_detailed() {
+        let data = make_report_data_with_findings(vec![("Vuln", "high", None, Some(8.0))]);
+        let md = build_markdown(&data, ReportTemplate::Detailed);
+        assert!(md.contains("8.0"), "risk score 8.0 not rendered in Detailed template");
     }
 }
