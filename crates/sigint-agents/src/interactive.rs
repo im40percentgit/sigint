@@ -36,6 +36,10 @@ use crate::Orchestrator;
 pub enum Command {
     /// Run a full scan pipeline against the given target.
     Scan(String),
+    /// Resume a prior session by session-ID prefix.
+    Resume(String),
+    /// List resumable sessions (bare "resume" with no argument).
+    ResumeList,
     /// Display available commands.
     Help,
     /// Input was not a recognised command.
@@ -64,6 +68,15 @@ pub fn parse_command(input: &str) -> Command {
             Command::Unknown("scan requires a target".into())
         } else {
             Command::Scan(target.to_string())
+        }
+    } else if input == "resume" {
+        Command::ResumeList
+    } else if let Some(prefix) = input.strip_prefix("resume ") {
+        let prefix = prefix.trim();
+        if prefix.is_empty() {
+            Command::ResumeList
+        } else {
+            Command::Resume(prefix.to_string())
         }
     } else if input == "help" {
         Command::Help
@@ -159,9 +172,19 @@ impl InteractiveSession {
                     }
                 }
             }
+            Command::ResumeList => {
+                let _ = self.event_bus.emit(Event::Status(
+                    "Use 'resume <session-prefix>' to resume a prior scan. Use CLI 'sigint sessions list' to see sessions.".into()
+                ));
+            }
+            Command::Resume(prefix) => {
+                let _ = self.event_bus.emit(Event::Status(
+                    format!("Resume not yet wired in TUI. Use CLI: sigint resume {prefix}")
+                ));
+            }
             Command::Help => {
                 self.event_bus.emit(Event::Status(
-                    "Available commands: scan <target>, help".to_string(),
+                    "Available commands: scan <target>, resume [prefix], help".to_string(),
                 ));
             }
             Command::Unknown(ref raw) if raw.is_empty() => {
@@ -329,6 +352,24 @@ mod tests {
             .await
             .expect("session.run() should exit on Shutdown within 200ms")
             .expect("run() should return Ok(())");
+    }
+
+    #[test]
+    fn parse_resume_command_with_prefix() {
+        let cmd = parse_command("resume a1b2c3d4");
+        assert!(matches!(cmd, Command::Resume(ref p) if p == "a1b2c3d4"));
+    }
+
+    #[test]
+    fn parse_resume_without_args_is_list() {
+        let cmd = parse_command("resume");
+        assert!(matches!(cmd, Command::ResumeList));
+    }
+
+    #[test]
+    fn parse_resume_with_whitespace() {
+        let cmd = parse_command("  resume   abcd1234  ");
+        assert!(matches!(cmd, Command::Resume(ref p) if p == "abcd1234"));
     }
 
     /// Verify that help command emits a Status event with the command list.
