@@ -211,6 +211,22 @@ impl std::fmt::Display for Severity {
     }
 }
 
+impl Severity {
+    /// Default CVSS-style score for this severity level.
+    ///
+    /// These values align with the CVSS v3.1 severity rating scale:
+    /// Critical ≥9.0, High 7.0–8.9, Medium 4.0–6.9, Low 0.1–3.9, Info/None = 0.0.
+    pub fn default_score(&self) -> f32 {
+        match self {
+            Severity::Critical => 9.5,
+            Severity::High => 8.0,
+            Severity::Medium => 5.5,
+            Severity::Low => 2.0,
+            Severity::Info => 0.0,
+        }
+    }
+}
+
 /// A security finding discovered during a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
@@ -222,6 +238,9 @@ pub struct Finding {
     pub asset: Option<String>,
     pub evidence: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Optional CVSS-style numeric score (0.0–10.0). When `None`, callers
+    /// may fall back to `severity.default_score()` for reporting purposes.
+    pub cvss_score: Option<f32>,
 }
 
 impl Finding {
@@ -240,6 +259,7 @@ impl Finding {
             asset: None,
             evidence: None,
             created_at: Utc::now(),
+            cvss_score: None,
         }
     }
 }
@@ -465,6 +485,22 @@ mod tests {
         );
         assert_eq!(f.severity, Severity::Critical);
         assert_eq!(f.severity.to_string(), "critical");
+    }
+
+    #[test]
+    fn severity_default_scores() {
+        assert_eq!(Severity::Critical.default_score(), 9.5);
+        assert_eq!(Severity::High.default_score(), 8.0);
+        assert_eq!(Severity::Medium.default_score(), 5.5);
+        assert_eq!(Severity::Low.default_score(), 2.0);
+        assert_eq!(Severity::Info.default_score(), 0.0);
+    }
+
+    #[test]
+    fn finding_cvss_score_defaults_to_none() {
+        let sid = Uuid::new_v4();
+        let f = Finding::new(sid, "Test", "desc", Severity::High);
+        assert!(f.cvss_score.is_none());
     }
 
     #[test]

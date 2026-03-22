@@ -206,6 +206,11 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         "sessions: campaign_id foreign key",
         "ALTER TABLE sessions ADD COLUMN campaign_id TEXT REFERENCES campaigns(id)",
     ),
+    (
+        6,
+        "findings: cvss_score column",
+        "ALTER TABLE findings ADD COLUMN cvss_score REAL",
+    ),
 ];
 
 /// Run all pending migrations against the given connection.
@@ -444,6 +449,50 @@ mod tests {
                 "SELECT campaign_id FROM sessions WHERE id = 'sess-1'", [], |row| row.get(0)
             ).unwrap();
             assert_eq!(cid.as_deref(), Some("camp-1"));
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn migration_adds_cvss_score_column() {
+        use crate::Database;
+
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| {
+            // Insert a session first (FK requirement).
+            conn.execute(
+                "INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params!["sess-cvss", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+            ).unwrap();
+
+            // Insert a finding without specifying cvss_score — should default to NULL.
+            conn.execute(
+                "INSERT INTO findings (id, session_id, title, description, severity, created_at)
+                 VALUES ('find-1', 'sess-cvss', 'Test Finding', 'desc', 'high', '2026-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+
+            // Verify cvss_score defaults to NULL.
+            let score: Option<f64> = conn.query_row(
+                "SELECT cvss_score FROM findings WHERE id = 'find-1'",
+                [],
+                |row| row.get(0),
+            ).unwrap();
+            assert!(score.is_none(), "cvss_score should default to NULL, got: {score:?}");
+
+            // Also verify we can store a non-NULL value.
+            conn.execute(
+                "INSERT INTO findings (id, session_id, title, description, severity, cvss_score, created_at)
+                 VALUES ('find-2', 'sess-cvss', 'Critical Finding', 'desc', 'critical', 9.5, '2026-01-01T00:00:01Z')",
+                [],
+            ).unwrap();
+            let score2: Option<f64> = conn.query_row(
+                "SELECT cvss_score FROM findings WHERE id = 'find-2'",
+                [],
+                |row| row.get(0),
+            ).unwrap();
+            assert_eq!(score2, Some(9.5));
+
             Ok(())
         }).unwrap();
     }

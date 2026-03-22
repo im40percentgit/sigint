@@ -134,6 +134,7 @@ pub async fn run(core: AppCore, args: ReportArgs) -> Result<(), Error> {
             description: f.description,
             asset: f.asset,
             evidence: f.evidence,
+            risk_score: f.cvss_score,
         })
         .collect();
 
