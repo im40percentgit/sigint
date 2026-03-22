@@ -490,6 +490,10 @@ mod tests {
     use super::*;
     use sigint_core::config::LlmConfig;
 
+    // Serializes tests that read/write the SIGINT_API_KEY environment variable
+    // to prevent data races when `cargo test` runs them in parallel.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn test_config(api_key: Option<String>) -> LlmConfig {
         LlmConfig {
             provider: "openai".into(),
@@ -661,8 +665,9 @@ mod tests {
 
     #[test]
     fn from_config_rejects_missing_key() {
-        // Remove env var to ensure clean state for this test
-        std::env::remove_var("SIGINT_API_KEY");
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // SAFETY: ENV_MUTEX serializes all env-var tests
+        unsafe { std::env::remove_var("SIGINT_API_KEY") };
         let cfg = test_config(None);
         let result = OpenAiProvider::from_config(&cfg);
         assert!(
@@ -679,6 +684,7 @@ mod tests {
 
     #[test]
     fn from_config_uses_config_api_key() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let cfg = test_config(Some("sk-from-config".into()));
         let provider = OpenAiProvider::from_config(&cfg).expect("should succeed");
         assert_eq!(provider.api_key, "sk-from-config");
@@ -687,13 +693,14 @@ mod tests {
 
     #[test]
     fn api_key_from_env_fallback() {
-        // Set the env var, ensure config has no key
-        std::env::set_var("SIGINT_API_KEY", "sk-from-env");
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // SAFETY: ENV_MUTEX serializes all env-var tests
+        unsafe { std::env::set_var("SIGINT_API_KEY", "sk-from-env") };
         let cfg = test_config(None);
         let provider = OpenAiProvider::from_config(&cfg).expect("env var fallback should work");
         assert_eq!(provider.api_key, "sk-from-env");
-        // Clean up
-        std::env::remove_var("SIGINT_API_KEY");
+        // SAFETY: ENV_MUTEX serializes all env-var tests
+        unsafe { std::env::remove_var("SIGINT_API_KEY") };
     }
 
     // ── Per-request temperature tests ────────────────────────────────────────
