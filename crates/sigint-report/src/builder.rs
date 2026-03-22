@@ -115,6 +115,125 @@ fn severity_counts(findings: &[FindingSummary]) -> (usize, usize, usize, usize, 
     (critical, high, medium, low, info)
 }
 
+// ── Severity pie chart ───────────────────────────────────────────────────────
+
+/// Generate an inline SVG pie chart for severity distribution.
+///
+/// Returns an empty string if there are no findings.  The SVG is self-contained
+/// (no JavaScript, no external resources) and is emitted as raw HTML so that
+/// pulldown-cmark passes it through to the final HTML document unchanged.
+fn render_severity_chart(findings: &[FindingSummary]) -> String {
+    if findings.is_empty() {
+        return String::new();
+    }
+
+    let critical = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("critical"))
+        .count();
+    let high = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("high"))
+        .count();
+    let medium = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("medium"))
+        .count();
+    let low = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("low"))
+        .count();
+    let info = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("info"))
+        .count();
+    let total = findings.len() as f64;
+
+    let segments: Vec<(&str, usize, &str)> = vec![
+        ("Critical", critical, "#dc2626"),
+        ("High", high, "#ea580c"),
+        ("Medium", medium, "#ca8a04"),
+        ("Low", low, "#2563eb"),
+        ("Info", info, "#6b7280"),
+    ];
+
+    // Filter out zero-count segments.
+    let active: Vec<_> = segments.iter().filter(|(_, count, _)| *count > 0).collect();
+
+    if active.is_empty() {
+        return String::new();
+    }
+
+    // Pie geometry: circle centre (cx, cy) and radius.
+    let cx = 100.0_f64;
+    let cy = 100.0_f64;
+    let r = 80.0_f64;
+
+    // Single severity → full circle (no arcs needed).
+    if active.len() == 1 {
+        let (label, count, color) = active[0];
+        return format!(
+            "<svg width=\"320\" height=\"200\" viewBox=\"0 0 320 200\">\
+             <circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"{color}\"/>\
+             <text x=\"{cx}\" y=\"105\" text-anchor=\"middle\" fill=\"white\" \
+             font-size=\"14\" font-family=\"sans-serif\">{label}: {count}</text>\
+             <rect x=\"210\" y=\"91\" width=\"10\" height=\"10\" fill=\"{color}\"/>\
+             <text x=\"225\" y=\"100\" font-size=\"11\" fill=\"#333\" \
+             font-family=\"sans-serif\">{label}: {count}</text>\
+             </svg>\n\n"
+        );
+    }
+
+    // Multiple segments: draw pie wedge arcs with a legend to the right.
+    let mut svg = String::from(
+        "<svg width=\"320\" height=\"200\" viewBox=\"0 0 320 200\">\n",
+    );
+    let mut start_angle = -90.0_f64; // 12 o'clock
+
+    for (_label, count, color) in &segments {
+        if *count == 0 {
+            continue;
+        }
+        let sweep = (*count as f64 / total) * 360.0;
+        let end_angle = start_angle + sweep;
+
+        let start_rad = start_angle.to_radians();
+        let end_rad = end_angle.to_radians();
+
+        let x1 = cx + r * start_rad.cos();
+        let y1 = cy + r * start_rad.sin();
+        let x2 = cx + r * end_rad.cos();
+        let y2 = cy + r * end_rad.sin();
+
+        let large_arc = if sweep > 180.0 { 1 } else { 0 };
+
+        svg.push_str(&format!(
+            "<path d=\"M {cx} {cy} L {x1:.1} {y1:.1} A {r} {r} 0 {large_arc} 1 \
+             {x2:.1} {y2:.1} Z\" fill=\"{color}\"/>\n"
+        ));
+
+        start_angle = end_angle;
+    }
+
+    // Legend — positioned to the right of the pie.
+    let mut ly = 40.0_f64;
+    for (label, count, color) in &segments {
+        if *count == 0 {
+            continue;
+        }
+        let ty = ly + 9.0;
+        svg.push_str(&format!(
+            "<rect x=\"210\" y=\"{ly:.0}\" width=\"10\" height=\"10\" fill=\"{color}\"/>\
+             <text x=\"225\" y=\"{ty:.0}\" font-size=\"11\" fill=\"#333\" \
+             font-family=\"sans-serif\">{label}: {count}</text>\n"
+        ));
+        ly += 18.0;
+    }
+
+    svg.push_str("</svg>\n\n");
+    svg
+}
+
 // ── Executive summary section ─────────────────────────────────────────────────
 
 fn render_executive_summary(data: &ReportData) -> String {
@@ -151,6 +270,8 @@ fn render_executive_summary(data: &ReportData) -> String {
     if critical > 0 || high > 0 {
         out.push_str("Immediate remediation is recommended for all critical and high findings.\n\n");
     }
+
+    out.push_str(&render_severity_chart(&data.findings));
 
     out
 }
@@ -1012,5 +1133,85 @@ mod tests {
         let data = make_report_data_with_findings(vec![("Vuln", "high", None, Some(8.0))]);
         let md = build_markdown(&data, ReportTemplate::Detailed);
         assert!(md.contains("8.0"), "risk score 8.0 not rendered in Detailed template");
+    }
+
+    // ── SVG severity pie chart tests ─────────────────────────────────────────
+
+    /// Build a minimal FindingSummary for chart tests.
+    fn make_finding_summary(title: &str, severity: &str, risk_score: Option<f32>) -> FindingSummary {
+        FindingSummary {
+            title: title.into(),
+            severity: severity.into(),
+            description: format!("Description for {title}"),
+            asset: None,
+            evidence: None,
+            risk_score,
+        }
+    }
+
+    #[test]
+    fn severity_chart_contains_svg() {
+        let findings = vec![
+            make_finding_summary("Vuln1", "critical", Some(9.5)),
+            make_finding_summary("Vuln2", "high", Some(8.0)),
+            make_finding_summary("Vuln3", "medium", Some(5.5)),
+        ];
+        let svg = render_severity_chart(&findings);
+        assert!(svg.contains("<svg"), "must contain opening SVG tag");
+        assert!(svg.contains("</svg>"), "must contain closing SVG tag");
+        assert!(svg.contains("#dc2626"), "must contain critical color");
+        assert!(svg.contains("#ea580c"), "must contain high color");
+    }
+
+    #[test]
+    fn severity_chart_empty_findings() {
+        let svg = render_severity_chart(&[]);
+        assert!(svg.is_empty(), "empty findings must produce empty string");
+    }
+
+    #[test]
+    fn severity_chart_single_severity() {
+        let findings = vec![make_finding_summary("Only", "critical", None)];
+        let svg = render_severity_chart(&findings);
+        assert!(svg.contains("<circle"), "single severity must use full circle, not arcs");
+        assert!(svg.contains("Critical: 1"), "must show label and count");
+    }
+
+    #[test]
+    fn severity_chart_legend_shows_all_active() {
+        let findings = vec![
+            make_finding_summary("A", "critical", None),
+            make_finding_summary("B", "high", None),
+            make_finding_summary("C", "low", None),
+        ];
+        let svg = render_severity_chart(&findings);
+        assert!(svg.contains("Critical: 1"), "legend must show Critical");
+        assert!(svg.contains("High: 1"), "legend must show High");
+        assert!(svg.contains("Low: 1"), "legend must show Low");
+        // Medium and Info have zero counts — must NOT appear in legend.
+        assert!(!svg.contains("Medium:"), "legend must not show zero-count Medium");
+        assert!(!svg.contains("Info:"), "legend must not show zero-count Info");
+    }
+
+    #[test]
+    fn executive_summary_includes_chart_in_html() {
+        let data = make_report_data_with_findings(vec![
+            ("Vuln", "critical", None, Some(9.5)),
+        ]);
+        let md = build_markdown(&data, ReportTemplate::Executive);
+        assert!(
+            md.contains("<svg"),
+            "Executive template must embed SVG chart when findings exist"
+        );
+    }
+
+    #[test]
+    fn executive_summary_no_chart_when_empty() {
+        let data = make_report_data_with_findings(vec![]);
+        let md = build_markdown(&data, ReportTemplate::Executive);
+        assert!(
+            !md.contains("<svg"),
+            "Executive template must not embed SVG chart when no findings"
+        );
     }
 }
