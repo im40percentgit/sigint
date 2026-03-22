@@ -221,7 +221,7 @@ impl InteractiveSession {
                             if let Some(ref target) = prior.target {
                                 let target = target.clone();
                                 // Create child session
-                                let mut child = Session::new(&format!("Resume of {}", prior.name));
+                                let mut child = Session::new(format!("Resume of {}", prior.name));
                                 child.target = Some(target.clone());
                                 child.parent_session_id = Some(prior.id);
                                 let child_id = child.id;

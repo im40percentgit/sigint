@@ -188,6 +188,24 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         "session resume: parent_session_id",
         "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT REFERENCES sessions(id)",
     ),
+    (
+        4,
+        "campaigns table",
+        "
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            file_path    TEXT,
+            created_at   TEXT NOT NULL,
+            completed_at TEXT
+        )
+        ",
+    ),
+    (
+        5,
+        "sessions: campaign_id foreign key",
+        "ALTER TABLE sessions ADD COLUMN campaign_id TEXT REFERENCES campaigns(id)",
+    ),
 ];
 
 /// Run all pending migrations against the given connection.
@@ -406,5 +424,27 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn migration_creates_campaigns_table_and_campaign_id_column() {
+        use crate::Database;
+
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO campaigns (id, name, created_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params!["camp-1", "test-campaign", "2026-01-01T00:00:00Z"],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, name, created_at, updated_at, campaign_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params!["sess-1", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "camp-1"],
+            ).unwrap();
+            let cid: Option<String> = conn.query_row(
+                "SELECT campaign_id FROM sessions WHERE id = 'sess-1'", [], |row| row.get(0)
+            ).unwrap();
+            assert_eq!(cid.as_deref(), Some("camp-1"));
+            Ok(())
+        }).unwrap();
     }
 }
