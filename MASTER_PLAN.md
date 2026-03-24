@@ -8,9 +8,9 @@
 
 **SIGINT** is a single-binary AI-powered penetration testing tool built in Rust. It replaces overengineered multi-container pentest orchestrators (like PentAGI) with a local-first design: embedded SQLite, local LLM via Ollama, native Linux sandboxing via hakoniwa, and continuous attack surface mapping.
 
-**Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 5-role agent system with Orchestrator dispatch.
+**Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 9 completed — Session Intelligence & Campaign Mode
+**Current Phase:** Phase 10 completed — akaei SDR Integration
 
 ### Architecture
 
@@ -585,7 +585,7 @@ Depends on: P2-5
 - [x] Web Scan Orchestrator: ScanService with start/status/cancel/list, wired into web endpoints
 
 ### Phase 7: Scan Diff, Graceful Shutdown, E2E Testing
-**Status:** in progress
+**Status:** completed
 **Sub-phases:** 7A (Scan Diff) → 7B (E2E Integration Tests) → 7C (Graceful Shutdown)
 **Design:** `docs/plans/2026-03-02-scan-diff-design.md`, `docs/plans/2026-03-02-e2e-integration-testing-design.md`
 **Plan:** `docs/plans/2026-03-02-scan-diff-implementation.md`, `docs/plans/2026-03-02-e2e-integration-testing-implementation.md`
@@ -719,12 +719,30 @@ Sub-phases:
 | DEC-REPORT-001 | Report builder is pure Rust with no template engine dependency | accepted | Plain Rust string formatting avoids pulling in Tera/Handlebars which would add compile time and contributor friction; output quality is equal for structured reports |
 | DEC-WEB-001 | REST handlers are thin wrappers over store CRUD with no business logic | accepted | Web layer is a presentation concern only; all persistence and domain logic lives in sigint-store and sigint-core; keeps handlers testable via tower oneshot |
 | DEC-AGENT-018 | InteractiveSession as EventBus consumer for TUI input routing | accepted | Orchestrator stays unchanged — run_scan() still takes a target string; InteractiveSession bridges the event-driven TUI world to the Orchestrator's imperative API; parse_command extracted as pure function for unit testing without a live provider |
-| DEC-RESUME-001 | Resume creates new session with parent_session_id FK, auto-diffs | proposed | New session preserves temporal record; parent link enables chain-of-scans visualization; diff engine reused from Phase 7A |
-| DEC-RESUME-002 | UUID prefix matching via client-side filter on list_sessions() | proposed | Reuses existing list_sessions(); session count is small enough for client-side filter; matches pattern from DEC-CLI-005 |
-| DEC-CAMPAIGN-001 | Campaign file is flat JSON with named profiles and target references | proposed | Self-contained JSON is easy to version-control and validate; profiles extensible via serde(default) without code changes |
-| DEC-CAMPAIGN-002 | Campaign state stored via campaigns table with campaign_id FK | proposed | Enables aggregated reporting and status queries; nullable FK preserves non-campaign sessions |
-| DEC-DIFF-UI-001 | Diff results emitted as Event::ScanDiffCompleted variant | proposed | Consistent with event-driven architecture; ScanDiff already derives Serialize; TUI and Web both receive via EventBus |
-| DEC-REPORT-003 | Campaign report reuses ReportData with cross-target aggregation wrapper | proposed | Reuses all existing report infrastructure; overview section aggregates severity counts; per-target detail rendered by existing builder |
+| DEC-RESUME-001 | Resume creates new session with parent_session_id FK, auto-diffs | accepted | New session preserves temporal record; parent link enables chain-of-scans visualization; diff engine reused from Phase 7A |
+| DEC-RESUME-002 | UUID prefix matching via client-side filter on list_sessions() | accepted | Reuses existing list_sessions(); session count is small enough for client-side filter; matches pattern from DEC-CLI-005 |
+| DEC-CAMPAIGN-001 | Campaign file is flat JSON with named profiles and target references | accepted | Self-contained JSON is easy to version-control and validate; profiles extensible via serde(default) without code changes |
+| DEC-CAMPAIGN-002 | Campaign state stored via campaigns table with campaign_id FK | accepted | Enables aggregated reporting and status queries; nullable FK preserves non-campaign sessions |
+| DEC-DIFF-UI-001 | Diff results emitted as Event::ScanDiffCompleted variant | accepted | Consistent with event-driven architecture; ScanDiff already derives Serialize; TUI and Web both receive via EventBus |
+| DEC-REPORT-003 | Campaign report reuses ReportData with cross-target aggregation wrapper | accepted | Reuses all existing report infrastructure; overview section aggregates severity counts; per-target detail rendered by existing builder |
+| DEC-E2E-001 | E2E tests use real Axum server on random port with in-memory SQLite | accepted | Testing against a real running server catches integration issues (routing, middleware, serialization) that unit tests miss; in-memory SQLite keeps tests hermetic |
+| DEC-E2E-002 | Session CRUD E2E tests cover empty list, 404 on missing, and bad UUID | accepted | Full HTTP stack verification for session endpoints: routing, UUID parsing, database queries, and JSON serialization |
+| DEC-E2E-003 | Scan lifecycle E2E tests cover start, status, list, cancel, and session creation | accepted | Full HTTP stack verification for scan endpoints: POST /api/scan returns 201, GET /api/scan/{id}/status returns scan state |
+| DEC-E2E-004 | Diff E2E tests use start_server_with_db() to seed findings before HTTP calls | accepted | Diff endpoint requires pre-existing findings in two sessions; start_server_with_db() helper retains DB handle so test can insert seed data before HTTP calls |
+| DEC-AKAEI-001 | akaei tools bypass sandbox — use tokio::process::Command with timeout | accepted | USB device access (HackRF via libusb) breaks Linux user namespace isolation; direct tokio process is the safe path for hardware-touching tools |
+| DEC-AKAEI-002 | Per-command output parsers — JSON-lines, text, tab-separated | accepted | akaei subcommands emit heterogeneous formats; per-tool parsers are simpler and independently testable than a universal discriminated union |
+| DEC-AKAEI-003 | RfRecon agent runs optionally before Researcher — feature-detected via registry | accepted | When no akaei tools are registered (no HackRF) the RF phase is silently skipped; pipeline degrades gracefully to existing 5-role flow |
+
+### Phase 10: akaei SDR Integration
+**Status:** completed
+**Sub-phases:** 10A (Tool Wrappers) → 10B (RfRecon Agent)
+**Plan:** `~/.claude/plans/quiet-fluttering-perlis.md`
+**Decision IDs:** DEC-AKAEI-001, DEC-AKAEI-002, DEC-AKAEI-003
+
+- [x] Sub-Phase 10A: 7 akaei tool wrappers (sweep, decode, analyze, audit, fingerprint, scan, freqdb) + doctor entry
+- [x] Sub-Phase 10B: RfRecon agent role, context threading, optional orchestrator RF phase
+
+---
 
 ## References
 
