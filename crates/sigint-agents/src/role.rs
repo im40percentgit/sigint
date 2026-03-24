@@ -1,17 +1,18 @@
-//! AgentRole — the five specialist roles in the SIGINT agent pipeline.
+//! AgentRole — the specialist roles in the SIGINT agent pipeline.
 //!
 //! Each role represents a distinct phase of a penetration test engagement.
-//! The Orchestrator (P2-4) dispatches tasks to agents in role order:
-//! Researcher → Strategist → Executor → Analyst → Reporter.
+//! The Orchestrator dispatches tasks to agents in pipeline order:
+//! RfRecon (optional) → Researcher → Strategist → Executor → Analyst → Reporter.
 //!
 //! @decision DEC-AGENT-001
-//! @title Five-role agent pipeline: Researcher → Strategist → Executor → Analyst → Reporter
+//! @title Six-role pipeline with optional RfRecon prefix (DEC-AKAEI-003)
 //! @status accepted
-//! @rationale Separating concerns into five specialist roles mirrors real-world
-//! pentest team structure. Each role has a focused system prompt and restricted
-//! tool ACL, which keeps individual LLM context windows small and purposeful.
-//! The ordered pipeline ensures outputs from earlier phases accumulate in
-//! TaskContext and are fed as structured context to later agents.
+//! @rationale The original five-role pentest pipeline is extended with an optional
+//! RfRecon role that runs before Researcher when akaei SDR tools are registered.
+//! RfRecon surveys the radio spectrum; its output feeds into the Strategist prompt
+//! alongside network recon findings. When no akaei tools are registered the phase
+//! is silently skipped, preserving backward compatibility. DEC-AKAEI-003 covers
+//! the feature-detection mechanism in the Orchestrator.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +24,8 @@ use serde::{Deserialize, Serialize};
 /// - How `TaskContext::to_agent_prompt` formats the accumulated context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AgentRole {
+    /// Surveys the RF spectrum before network recon (optional — requires HackRF).
+    RfRecon,
     /// Performs OSINT and initial reconnaissance on the target.
     Researcher,
     /// Analyses recon results and plans the attack strategy.
@@ -38,6 +41,7 @@ pub enum AgentRole {
 impl std::fmt::Display for AgentRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            AgentRole::RfRecon => write!(f, "rf_recon"),
             AgentRole::Researcher => write!(f, "researcher"),
             AgentRole::Strategist => write!(f, "strategist"),
             AgentRole::Executor => write!(f, "executor"),
@@ -54,6 +58,7 @@ mod tests {
     #[test]
     fn all_roles_are_distinct() {
         let roles = [
+            AgentRole::RfRecon,
             AgentRole::Researcher,
             AgentRole::Strategist,
             AgentRole::Executor,
@@ -73,6 +78,7 @@ mod tests {
 
     #[test]
     fn roles_display_correctly() {
+        assert_eq!(AgentRole::RfRecon.to_string(), "rf_recon");
         assert_eq!(AgentRole::Researcher.to_string(), "researcher");
         assert_eq!(AgentRole::Strategist.to_string(), "strategist");
         assert_eq!(AgentRole::Executor.to_string(), "executor");
@@ -83,6 +89,7 @@ mod tests {
     #[test]
     fn role_serialize_deserialize_roundtrip() {
         for role in [
+            AgentRole::RfRecon,
             AgentRole::Researcher,
             AgentRole::Strategist,
             AgentRole::Executor,

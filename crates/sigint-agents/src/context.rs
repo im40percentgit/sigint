@@ -86,6 +86,15 @@ impl TaskContext {
     /// - **Reporter** — target + all prior agent outputs.
     pub fn to_agent_prompt(&self, agent: &dyn Agent) -> String {
         match agent.role() {
+            AgentRole::RfRecon => {
+                format!(
+                    "Target: {}. Perform RF spectrum reconnaissance of the wireless \
+                     environment. Sweep active frequency bands, identify transmitting \
+                     devices, decode detectable protocols, and summarise all RF findings \
+                     so the Strategist can plan wireless attack vectors.",
+                    self.target
+                )
+            }
             AgentRole::Researcher => {
                 format!(
                     "Target: {}. Perform initial reconnaissance. \
@@ -100,12 +109,19 @@ impl TaskContext {
                     .get(&AgentRole::Researcher)
                     .map(String::as_str)
                     .unwrap_or("(no researcher output yet)");
+                // Include RF recon output when present (HackRF was attached).
+                let rf_section = if let Some(rf) = self.agent_outputs.get(&AgentRole::RfRecon) {
+                    format!("\n\nRF Recon findings:\n{}", rf)
+                } else {
+                    String::new()
+                };
                 format!(
-                    "Target: {}. Researcher findings:\n{}\n\n\
+                    "Target: {}. Researcher findings:\n{}{}\n\n\
                      Based on the reconnaissance above, plan the attack strategy. \
-                     Identify the most promising attack vectors, prioritise them by \
-                     likelihood of success, and specify which tools to run and in what order.",
-                    self.target, researcher_output
+                     Identify the most promising attack vectors (network and wireless), \
+                     prioritise them by likelihood of success, and specify which tools \
+                     to run and in what order.",
+                    self.target, researcher_output, rf_section
                 )
             }
             AgentRole::Executor => {
@@ -160,6 +176,7 @@ impl TaskContext {
     /// Format all agent outputs in pipeline order for the Reporter.
     fn format_all_outputs(&self) -> String {
         let pipeline = [
+            AgentRole::RfRecon,
             AgentRole::Researcher,
             AgentRole::Strategist,
             AgentRole::Executor,
@@ -183,7 +200,7 @@ impl TaskContext {
 mod tests {
     use super::*;
     use crate::agents::{
-        AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, StrategistAgent,
+        AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, RfReconAgent, StrategistAgent,
     };
 
     #[test]
@@ -339,6 +356,77 @@ mod tests {
         assert!(
             !prompt.contains("Port specification"),
             "should not mention ports: {prompt}"
+        );
+    }
+
+    #[test]
+    fn rf_recon_prompt_contains_target() {
+        let ctx = TaskContext::new("10.0.0.1");
+        let agent = RfReconAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            prompt.contains("10.0.0.1"),
+            "rf_recon prompt missing target: {prompt}"
+        );
+        assert!(
+            prompt.to_lowercase().contains("rf")
+                || prompt.to_lowercase().contains("spectrum"),
+            "rf_recon prompt should mention RF or spectrum: {prompt}"
+        );
+    }
+
+    #[test]
+    fn strategist_prompt_includes_rf_recon_output_when_present() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs.insert(
+            AgentRole::Researcher,
+            "Found open ports: 22, 80".to_string(),
+        );
+        ctx.agent_outputs.insert(
+            AgentRole::RfRecon,
+            "Active at 433.92 MHz: garage door remotes detected".to_string(),
+        );
+        let agent = StrategistAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            prompt.contains("433.92 MHz"),
+            "strategist should see RF recon output: {prompt}"
+        );
+        assert!(
+            prompt.contains("Found open ports"),
+            "strategist should still see network recon: {prompt}"
+        );
+    }
+
+    #[test]
+    fn strategist_prompt_omits_rf_section_when_no_rf_output() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs.insert(
+            AgentRole::Researcher,
+            "Found open ports: 22, 80".to_string(),
+        );
+        let agent = StrategistAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            !prompt.contains("RF Recon findings"),
+            "should not mention RF section when absent: {prompt}"
+        );
+    }
+
+    #[test]
+    fn reporter_prompt_includes_rf_recon_output() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs
+            .insert(AgentRole::RfRecon, "rf recon data".to_string());
+        ctx.agent_outputs
+            .insert(AgentRole::Researcher, "recon data".to_string());
+        ctx.agent_outputs
+            .insert(AgentRole::Analyst, "analysis data".to_string());
+        let agent = ReporterAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            prompt.contains("rf recon data"),
+            "reporter should see rf recon output: {prompt}"
         );
     }
 

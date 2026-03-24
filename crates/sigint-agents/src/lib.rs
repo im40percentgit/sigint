@@ -1,19 +1,19 @@
-//! sigint-agents — Agent trait, ConversationState, TaskContext, and 5-role pipeline.
+//! sigint-agents — Agent trait, ConversationState, TaskContext, and 6-role pipeline.
 //!
 //! This crate provides the identity and state types for the SIGINT agent system.
 //! The tool-call loop, ToolRegistry, and Orchestrator complete the pipeline.
 //!
 //! # Module layout
 //!
-//! - [`role`] — `AgentRole` enum (5 variants)
+//! - [`role`] — `AgentRole` enum (6 variants: RfRecon + original 5)
 //! - [`agent`] — `Agent` trait (sync identity contract)
 //! - [`state`] — `ConversationState` (sliding-window message history)
 //! - [`context`] — `TaskContext` (shared engagement state across agents)
-//! - [`agents`] — Concrete implementations: Researcher, Strategist, Executor,
-//!   Analyst, Reporter
+//! - [`agents`] — Concrete implementations: RfRecon, Researcher, Strategist,
+//!   Executor, Analyst, Reporter
 //! - [`loop_engine`] — `run_tool_loop` (LLM ↔ tool execution cycle)
 //! - [`registry`] — `ToolRegistry` (tool storage with role-based ACL filtering)
-//! - [`orchestrator`] — `Orchestrator` (five-role pipeline coordinator)
+//! - [`orchestrator`] — `Orchestrator` (six-role pipeline coordinator)
 //! - [`report`] — `ScanReport` (final pipeline output)
 //!
 //! @decision DEC-AGENT-002
@@ -41,7 +41,9 @@ pub mod state;
 
 // Flat re-exports for ergonomic use by downstream crates.
 pub use agent::Agent;
-pub use agents::{AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, StrategistAgent};
+pub use agents::{
+    AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, RfReconAgent, StrategistAgent,
+};
 pub use context::TaskContext;
 pub use interactive::{parse_command, Command, InteractiveSession};
 pub use loop_engine::run_tool_loop;

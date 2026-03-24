@@ -312,6 +312,7 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
         ("dig", "sudo apt install dnsutils"),
         ("whois", "sudo apt install whois"),
         ("curl", "sudo apt install curl"),
+        ("akaei", "Build from ~/CerebrumCraft/akaei and add to PATH"),
     ];
     for (name, hint) in &tools {
         results.push(check_tool(name, hint));

@@ -59,7 +59,9 @@ use sigint_memory::MemoryService;
 
 use crate::{
     agent::Agent,
-    agents::{AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, StrategistAgent},
+    agents::{
+        AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, RfReconAgent, StrategistAgent,
+    },
     context::TaskContext,
     loop_engine::{run_tool_loop, ToolLoopOptions},
     registry::ToolRegistry,
@@ -271,6 +273,18 @@ impl Orchestrator {
         info!(target, "orchestrator: starting scan pipeline");
 
         let mut ctx = TaskContext::new(target).with_ports(self.ports.clone());
+
+        // ── 0. RfRecon (optional) ────────────────────────────────────────────
+        // Feature-detected: only runs when akaei_sweep is registered in the
+        // tool registry. When no HackRF is available the phase is silently
+        // skipped and the rest of the pipeline proceeds unchanged.
+        // See DEC-AKAEI-003 for the rationale behind feature-detection.
+        if self.registry.get("akaei_sweep").is_some() {
+            let rf_recon = RfReconAgent::new();
+            info!("orchestrator: running rf_recon agent (akaei tools detected)");
+            let rf_output = self.run_agent(&rf_recon, &mut ctx).await?;
+            ctx.agent_outputs.insert(AgentRole::RfRecon, rf_output);
+        }
 
         // ── 1. Researcher ────────────────────────────────────────────────────
         let researcher = ResearcherAgent::new();
