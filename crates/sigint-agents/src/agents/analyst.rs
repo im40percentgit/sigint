@@ -1,13 +1,15 @@
 //! AnalystAgent — security findings correlation and severity classification.
 //!
 //! @decision DEC-AGENT-010
-//! @title Analyst allowed tools: shell only
+//! @title Analyst allowed tools: shell + create_finding
 //! @status accepted
 //! @rationale The Analyst primarily reasons over tool output already captured in
 //! TaskContext. Shell access is retained for ad-hoc verification — e.g. querying
 //! a CVE database, running a targeted check to confirm a finding, or extracting
 //! structured data from raw output with grep/awk. nmap is excluded because the
 //! Analyst should not be initiating new scans; that is the Executor's domain.
+//! `create_finding` is added so the Analyst records each vulnerability as a
+//! structured Finding (DEC-FINDING-001) rather than leaving them as prose text.
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -23,7 +25,7 @@ pub struct AnalystAgent {
 impl AnalystAgent {
     pub fn new() -> Self {
         Self {
-            allowed_tools: vec!["shell".to_string()],
+            allowed_tools: vec!["shell".to_string(), "create_finding".to_string()],
         }
     }
 }
@@ -48,19 +50,23 @@ impl Agent for AnalystAgent {
          and finding classification. You receive raw tool output from a penetration \
          test and convert it into structured, actionable findings. \
          \n\n\
-         For each finding you identify:\n\
-         1. Title — a concise, descriptive name (e.g. 'Unauthenticated Redis Exposure').\n\
-         2. Description — what the vulnerability is, why it matters, and how it was found.\n\
-         3. Severity — Critical, High, Medium, Low, or Info — following CVSS v3 guidelines.\n\
-         4. Evidence — the exact tool output or observation that proves the finding.\n\
-         5. Asset — the specific host, port, or URL affected.\n\
+         IMPORTANT: For every vulnerability or misconfiguration you identify, you MUST \
+         call the create_finding tool. Do not merely describe findings in text — use the \
+         tool so they are recorded as structured data. Call it once per distinct finding.\n\
          \n\
-         You have shell access for targeted verification (CVE lookups, banner grabs, \
+         For each create_finding call, provide:\n\
+         - title: a concise, descriptive name (e.g. 'Unauthenticated Redis Exposure')\n\
+         - severity: critical / high / medium / low / info (CVSS v3 guidelines)\n\
+         - description: what the vulnerability is, why it matters, and how it was found\n\
+         - evidence: the exact tool output, command, or observation that proves the finding\n\
+         - asset: the specific host, port, URL, or service affected\n\
+         \n\
+         You also have shell access for targeted verification (CVE lookups, banner grabs, \
          lightweight confirmations). Do not initiate new broad scans — that is the \
          Executor's role.\n\
          \n\
          Be precise. Avoid false positives. If the evidence is ambiguous, classify \
-         the finding as Info and note what additional evidence would confirm it."
+         the finding as info and note what additional evidence would confirm it."
     }
 
     fn allowed_tools(&self) -> &[String] {
@@ -104,10 +110,14 @@ mod tests {
             "analyst must have shell"
         );
         assert!(
-            !tools.contains(&"nmap".to_string()),
-            "analyst must not have nmap"
+            tools.contains(&"create_finding".to_string()),
+            "analyst must have create_finding"
         );
-        assert_eq!(tools.len(), 1, "analyst should have exactly 1 tool");
+        assert!(
+            !tools.contains(&"nmap_scan".to_string()),
+            "analyst must not have nmap_scan"
+        );
+        assert_eq!(tools.len(), 2, "analyst should have exactly 2 tools: shell + create_finding");
     }
 
     #[test]

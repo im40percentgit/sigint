@@ -53,9 +53,14 @@ use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
-use sigint_core::{event::EventBus, ApprovalRegistry, Error};
+use sigint_core::{
+    event::{Event, EventBus},
+    types::{Finding, Severity},
+    ApprovalRegistry, Error,
+};
 use sigint_llm::provider::LlmProvider;
 use sigint_memory::MemoryService;
+use sigint_tools::{new_finding_collector, CreateFindingTool, Tool};
 
 use crate::{
     agent::Agent,
@@ -308,10 +313,51 @@ impl Orchestrator {
             .insert(AgentRole::Executor, executor_output);
 
         // ── 4. Analyst ───────────────────────────────────────────────────────
+        // Create a FindingCollector shared between CreateFindingTool (writer)
+        // and this function (reader). The Analyst calls `create_finding` for
+        // each vulnerability; we drain the collector into ctx.findings below.
+        let finding_collector = new_finding_collector();
+        let create_finding_tool = CreateFindingTool::new(Arc::clone(&finding_collector));
+
         let analyst = AnalystAgent::new();
         info!("orchestrator: running analyst agent");
-        let analyst_output = self.run_agent(&analyst, &mut ctx).await?;
+        let analyst_output = self
+            .run_agent_with_extras(&analyst, &mut ctx, &[&create_finding_tool as &dyn Tool])
+            .await?;
         ctx.agent_outputs.insert(AgentRole::Analyst, analyst_output);
+
+        // Drain the collector: convert raw JSON values into Finding structs
+        // and emit FindingCreated events for each one.
+        {
+            let raw_findings = finding_collector
+                .lock()
+                .expect("finding collector lock poisoned")
+                .drain(..)
+                .collect::<Vec<_>>();
+
+            for raw in raw_findings {
+                let title = raw["title"].as_str().unwrap_or("Untitled").to_string();
+                let description = raw["description"].as_str().unwrap_or("").to_string();
+                let severity_str = raw["severity"].as_str().unwrap_or("info");
+                let severity = match severity_str {
+                    "critical" => Severity::Critical,
+                    "high" => Severity::High,
+                    "medium" => Severity::Medium,
+                    "low" => Severity::Low,
+                    _ => Severity::Info,
+                };
+                let asset = raw["asset"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+                let evidence = raw["evidence"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+
+                let mut finding = Finding::new(self.session_id, &title, &description, severity);
+                finding.asset = asset;
+                finding.evidence = evidence;
+
+                self.event_bus.emit(Event::FindingCreated(finding.clone()));
+                info!(title = %finding.title, severity = %finding.severity, "orchestrator: finding recorded");
+                ctx.findings.push(finding);
+            }
+        }
 
         // ── 5. Reporter ──────────────────────────────────────────────────────
         let reporter = ReporterAgent::new();
@@ -332,6 +378,20 @@ impl Orchestrator {
     ///    by `agent.allowed_tools()`.
     /// 4. Runs `run_tool_loop` to completion and returns the text result.
     async fn run_agent(&self, agent: &dyn Agent, ctx: &mut TaskContext) -> Result<String, Error> {
+        self.run_agent_with_extras(agent, ctx, &[]).await
+    }
+
+    /// Like `run_agent` but appends `extra_tools` to the registry-filtered tool set.
+    ///
+    /// Used by the Analyst phase to inject `CreateFindingTool` without adding it
+    /// to the static registry (it requires a per-scan `FindingCollector` at
+    /// construction time and is not reusable across scans).
+    async fn run_agent_with_extras(
+        &self,
+        agent: &dyn Agent,
+        ctx: &mut TaskContext,
+        extra_tools: &[&dyn Tool],
+    ) -> Result<String, Error> {
         let mut state = ConversationState::new(self.context_window);
 
         // System prompt defines the agent's identity and behavioral constraints.
@@ -378,6 +438,14 @@ impl Orchestrator {
                 tool_refs.retain(|t| allowed.contains(t.name()));
                 tool_defs.retain(|d| allowed.contains(d.function.name.as_str()));
             }
+        }
+
+        // Append any caller-supplied extra tools (e.g. CreateFindingTool for
+        // the Analyst). These bypass the registry and profile filter — they are
+        // always appended when provided.
+        for extra in extra_tools {
+            tool_refs.push(*extra);
+            tool_defs.push(extra.definition());
         }
 
         run_tool_loop(

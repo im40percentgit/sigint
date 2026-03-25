@@ -21,6 +21,7 @@
 pub mod akaei;
 pub mod error;
 pub mod feroxbuster;
+pub mod finding;
 pub mod gobuster;
 pub mod nikto;
 pub mod nmap;
@@ -35,6 +36,9 @@ pub use akaei::{
 };
 pub use error::{Result, ToolError};
 pub use feroxbuster::FeroxbusterTool;
+// CreateFindingTool is NOT in all_executor_tools() — it requires a FindingCollector
+// at construction and is registered separately by the orchestrator per scan.
+pub use finding::{new_finding_collector, CreateFindingTool, FindingCollector};
 pub use gobuster::GobusterTool;
 pub use nikto::NiktoTool;
 pub use nmap::NmapTool;
