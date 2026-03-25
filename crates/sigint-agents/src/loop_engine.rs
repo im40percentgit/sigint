@@ -1,14 +1,13 @@
 //! Tool-call loop engine — drives the LLM ↔ tool execution cycle.
 //!
 //! The loop sends a `ChatRequest` to the provider via `chat_stream()`. If the
-//! model responds with tool calls (present on the `done=true` chunk), the engine
-//! executes them, appends results to the conversation state, and repeats. The
-//! loop terminates when the model produces a plain-text response or
-//! `max_iterations` is exceeded.
+//! model responds with tool calls, the engine executes them, appends results to
+//! the conversation state, and repeats. The loop terminates when the model
+//! produces a plain-text response or `max_iterations` is exceeded.
 //!
 //! Streaming is used for every iteration so incremental tokens can be emitted
 //! as `AgentThinking` events, giving users real-time visibility into reasoning.
-//! Tool calls still arrive atomically on the `done=true` chunk (DEC-LLM-003).
+//! Tool calls are accumulated across ALL stream chunks (see DEC-LLM-007).
 //!
 //! @decision DEC-AGENT-007-REV
 //! @title Streaming (`chat_stream()`) for all tool-loop iterations (Phase 8A)
@@ -17,8 +16,17 @@
 //! require complete, structured JSON that only arrives on the final chunk.
 //! Phase 8A switches to `chat_stream()` for ALL iterations so incremental
 //! tokens can be emitted as `AgentThinking` events, giving users real-time
-//! visibility into the model's reasoning between tool calls. Tool calls still
-//! arrive only on `done=true` (DEC-LLM-003), so execution order is unchanged.
+//! visibility into the model's reasoning between tool calls. Tool calls are
+//! accumulated from every chunk position (see DEC-LLM-007).
+//!
+//! @decision DEC-LLM-007
+//! @title Accumulate tool_calls from all stream chunks, not just done=true
+//! @status accepted
+//! @rationale Ollama sends tool_calls on the content chunk (done=false),
+//! not the final metadata chunk (done=true). The done chunk carries only
+//! token counts. Replacing the assignment with extend() collects tool calls
+//! from any chunk position, which is correct for both Ollama and OpenAI
+//! streaming formats.
 //!
 //! @decision DEC-AGENT-008
 //! @title Event emission is best-effort; errors are silently discarded
@@ -234,8 +242,14 @@ pub async fn run_tool_loop(
                         });
                     }
 
+                    // Accumulate tool calls from every chunk — Ollama sends them
+                    // on the content chunk (done=false), not the metadata chunk
+                    // (done=true). Using extend() works for both Ollama and
+                    // OpenAI streaming formats. (DEC-LLM-007)
+                    if !chunk.tool_calls.is_empty() {
+                        final_tool_calls.extend(chunk.tool_calls);
+                    }
                     if chunk.done {
-                        final_tool_calls = chunk.tool_calls;
                         break;
                     }
                 }
