@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 10 completed — akaei SDR Integration
+**Current Phase:** Phase 11 in-progress — Findings Extraction + Engagement Log (11D: sigint log command)
 
 ### Architecture
 
@@ -638,7 +638,7 @@ Sub-phases:
 | DEC-STORE-001 | SQLite bundled (not external DB) | accepted | Zero-config, single file, portable |
 | DEC-SAND-001 | hakoniwa for sandboxing | accepted | Native Linux namespaces, no Docker overhead |
 | DEC-LLM-001 | Ollama-first, cloud fallback | accepted | Local-first privacy, cloud for capability |
-| DEC-EMBED-001 | fastembed with all-MiniLM-L6-v2 | accepted | Local embeddings, no API calls, ONNX runtime |
+| DEC-EMBED-001 | fastembed with all-MiniLM-L6-v2 | deprecated | Superseded by DEC-P3-002 which is annotated in sigint-memory |
 | DEC-SAND-002 | Generic SandboxedCommand builder | accepted | Consuming builder over hakoniwa's &mut self API; tool-agnostic, profiles specialize |
 | DEC-SAND-003 | Runtime capability detection via /proc | accepted | Probes namespaces + AppArmor + PATH at runtime for actionable error messages |
 | DEC-SAND-004 | Per-tool sandbox profiles | accepted | Nmap (Pasta + 300s) and Offline (None + 60s) presets; extensible for future tools |
@@ -649,11 +649,11 @@ Sub-phases:
 | DEC-AGENT-004 | spawn_blocking for tool execution | accepted | hakoniwa fork(2) incompatible with tokio; consistent with DEC-SAND-002 |
 | DEC-AGENT-005 | Context window mgmt via token heuristic | accepted | 4 chars ~= 1 token; calibrated by Ollama response counts; trim oldest non-system messages |
 | DEC-AGENT-006 | Non-streaming tool loop, streaming final text | accepted | stream:false during tool iterations; streaming for final user-facing response |
-| DEC-HOTFIX-001 | Bare command path resolution via `which` | accepted | Sandbox requires absolute paths; runtime `which` lookup before exec |
-| DEC-HOTFIX-002 | DNS via /etc/resolv.conf bind-mount | accepted | Pasta namespaces lack DNS; bind-mount host resolv.conf |
-| DEC-HOTFIX-003 | Nmap ACL name standardization | accepted | Tool name "nmap_scan" must match ACL entries; was "nmap" vs "nmap_scan" |
-| DEC-HOTFIX-004 | /dev mount for Pasta sandbox | accepted | Nmap needs /dev/null, /dev/urandom; added /dev bind-mount |
-| DEC-HOTFIX-005 | ShellTool combined-command splitting | accepted | Handle piped/redirected commands via shell-style string splitting |
+| DEC-HOTFIX-001 | Bare command path resolution via `which` | deprecated | Operational fix documented in commit history; absorbed into DEC-SAND-006 which is annotated in sandbox/command.rs |
+| DEC-HOTFIX-002 | DNS via /etc/resolv.conf bind-mount | deprecated | Operational fix documented in commit history; absorbed into DEC-SAND-004 profile annotations |
+| DEC-HOTFIX-003 | Nmap ACL name standardization | deprecated | Operational fix documented in commit history; resolved in tool registry |
+| DEC-HOTFIX-004 | /dev mount for Pasta sandbox | deprecated | Operational fix documented in commit history; absorbed into DEC-SAND-004 profile annotations |
+| DEC-HOTFIX-005 | ShellTool combined-command splitting | deprecated | Operational fix documented in commit history; absorbed into DEC-TOOL-005 ShellTool annotations |
 | DEC-LLM-002 | Tool-calling types use OpenAI-compatible JSON Schema | accepted | Ollama tool API is OpenAI-compatible; same ToolDefinition/ToolCall shapes work with any OpenAI-compatible provider added later without conversion |
 | DEC-LLM-003 | Tool calls threaded through OllamaMessage, accumulated in streaming | accepted | Ollama embeds tool_calls in the message object; for streaming they appear only on the final done=true chunk, propagated via StreamChunk.tool_calls |
 | DEC-STORE-002 | ScanRecord as denormalized row — one row per tool invocation | accepted | Per-tool rows enable per-tool queries, exit_code filtering, and future diff across scans; args as JSON for readability without a separate table |
@@ -732,6 +732,18 @@ Sub-phases:
 | DEC-AKAEI-001 | akaei tools bypass sandbox — use tokio::process::Command with timeout | accepted | USB device access (HackRF via libusb) breaks Linux user namespace isolation; direct tokio process is the safe path for hardware-touching tools |
 | DEC-AKAEI-002 | Per-command output parsers — JSON-lines, text, tab-separated | accepted | akaei subcommands emit heterogeneous formats; per-tool parsers are simpler and independently testable than a universal discriminated union |
 | DEC-AKAEI-003 | RfRecon agent runs optionally before Researcher — feature-detected via registry | accepted | When no akaei tools are registered (no HackRF) the RF phase is silently skipped; pipeline degrades gracefully to existing 5-role flow |
+| DEC-TUI-002 | Redirect tracing output to log file when TUI is active | accepted | ratatui occupies the alternate screen buffer on stderr; tracing lines written to stderr corrupt TUI rendering; redirect to ~/.local/share/sigint/sigint.log when TUI detected |
+| DEC-TUI-BUG-001 | TerminalGuard drop-guard ensures terminal is restored on all exit paths | accepted | Explicit restore_terminal() handles normal returns; panic hook handles panics; TerminalGuard adds a third layer via Drop for future code paths that bypass both |
+| DEC-TUI-BUG-002 | Resize events consumed and redrawn immediately via the normal render cycle | accepted | crossterm emits CEvent::Resize(w,h); ratatui's Terminal::draw() queries current area on each call so no explicit size update needed; consuming the event prevents spurious state changes |
+| DEC-TUI-BUG3-001 | TUI lifecycle fix — terminal restored before tokio runtime exits | accepted | Terminal raw mode must be disabled before the process exits regardless of scan outcome; TerminalGuard ensures this even when run() returns an error |
+| DEC-P6-APPROVAL-001 | PendingApproval held in AppState; approval responses emitted by app.rs | accepted | AppState remains a pure data structure with no channel handles; apply() records pending approvals; app.rs reads and emits responses then clears pending_approval |
+| DEC-RESUME-002 | UUID prefix matching via client-side filter on list_sessions() | accepted | Reuses existing list_sessions(); session count is small enough for client-side filter; matches pattern from DEC-CLI-005 |
+| DEC-DIFF-UI-001 | Diff results emitted as Event::ScanDiffCompleted variant | accepted | Consistent with event-driven architecture; ScanDiff already derives Serialize; TUI and Web both receive via EventBus |
+| DEC-REPORT-003 | Campaign report reuses ReportData with cross-target aggregation wrapper | accepted | Reuses all existing report infrastructure; overview section aggregates severity counts; per-target detail rendered by existing builder |
+| DEC-FINDING-001 | Use create_finding tool call (not text parsing) to extract structured findings | accepted | Text parsing is brittle against model drift and provides no validation at generation time; a tool call validates severity enum immediately, gives the LLM correctable feedback, and uses a shared Arc<Mutex<Vec<Value>>> collector drained by the orchestrator after the Analyst agent completes |
+| DEC-LLM-007 | Accumulate tool_calls from all stream chunks, not just done=true | accepted | Ollama sends tool_calls on the content chunk (done=false), not the final metadata chunk (done=true); extending rather than replacing the accumulator collects tool calls from any chunk position |
+| DEC-AGENT-007-REV | Streaming (chat_stream()) for all tool-loop iterations (Phase 8A) | accepted | Switched from non-streaming chat() to chat_stream() so incremental tokens emit AgentThinking events; tool calls still accumulate across all chunks per DEC-LLM-007 |
+| DEC-LOG-001 | sigint log renders chronological audit trail from scan_history with agent attribution | accepted | Operators need a timestamped audit trail showing which agent invoked which tool with what args and output; chronological rendering from scan_history ordered by started_at; agent_role column (migration 7) attributes each tool call to a role without denormalizing the data model |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -741,6 +753,26 @@ Sub-phases:
 
 - [x] Sub-Phase 10A: 7 akaei tool wrappers (sweep, decode, analyze, audit, fingerprint, scan, freqdb) + doctor entry
 - [x] Sub-Phase 10B: RfRecon agent role, context threading, optional orchestrator RF phase
+
+---
+
+### Phase 11: Findings Extraction + Engagement Log
+**Status:** in-progress
+**Sub-phases:** 11A (CreateFindingTool) → 11B (Orchestrator wiring) → 11C (Persistence) → 11D (sigint log command)
+**Decision IDs:** DEC-FINDING-001, DEC-STORE-003, DEC-LOG-001
+**Definition of Done:**
+- `create_finding` tool registered in the tool catalog and accessible to the Analyst
+- Analyst system prompt instructs the LLM to call `create_finding` for each vulnerability
+- Orchestrator drains the finding collector into `ctx.findings` after the Analyst completes
+- `FindingCreated` events emitted via the event bus for each finding
+- `persist_scan()` in sigint-cli persists findings to the database findings table
+- `sigint log <session-id>` renders chronological audit trail with agent attribution
+- All non-integration tests pass
+
+- [x] Sub-Phase 11A: `CreateFindingTool` in `sigint-tools/src/finding.rs` — in-memory tool with `FindingCollector` (Arc<Mutex<Vec<Value>>>), severity validation, structured output
+- [x] Sub-Phase 11B: Analyst agent updated (allowed_tools + system prompt); Orchestrator wires collector into `run_scan`, drains findings into `ctx.findings`, emits `FindingCreated` events
+- [x] Sub-Phase 11C: `persist_scan()` in sigint-cli persists `ctx.findings` to the database
+- [ ] Sub-Phase 11D: `sigint log <session-id>` command — migration 7 adds `agent_role` to scan_history; CLI renders chronological engagement log (Markdown/HTML) with per-agent tool attribution and findings summary
 
 ---
 
