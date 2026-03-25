@@ -51,22 +51,22 @@ fn parse_fingerprint_output(output: &str, action: &str) -> Value {
         let lower = line.to_lowercase();
         if lower.contains("label:") {
             label = line
-                .splitn(2, ':')
-                .nth(1)
+                .split_once(':')
+                .map(|x| x.1)
                 .unwrap_or("")
                 .trim()
                 .to_string();
         } else if lower.contains("distance:") {
             distance = line
-                .splitn(2, ':')
-                .nth(1)
+                .split_once(':')
+                .map(|x| x.1)
                 .unwrap_or("")
                 .trim()
                 .to_string();
         } else if lower.contains("confidence:") {
             confidence = line
-                .splitn(2, ':')
-                .nth(1)
+                .split_once(':')
+                .map(|x| x.1)
                 .unwrap_or("")
                 .trim()
                 .to_string();
