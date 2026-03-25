@@ -19,13 +19,14 @@
 //! for the primary user-facing path.
 //!
 //! @decision DEC-CLI-002
-//! @title Event display runs in a detached tokio task; scan does not block on it
+//! @title TUI task is awaited after scan; stdout printer is detached
 //! @status accepted
-//! @rationale The EventBus receiver loop must not block `orchestrator.run_scan`.
-//! tokio::spawn creates a lightweight green thread that reads from the broadcast
-//! receiver concurrently with the scan pipeline. The task is intentionally not
-//! awaited — when the function returns and the EventBus is dropped, the broadcast
-//! channel closes and the spawned task exits naturally via `RecvError::Closed`.
+//! @rationale In TUI mode the JoinHandle is saved and awaited at the end of
+//! `run()` so the TUI stays open after the scan completes. The user reads the
+//! results and presses 'q' to exit — the process does not terminate prematurely.
+//! In stdout mode the task is still detached (fire-and-forget) because there is
+//! no interactive component to wait for; the task exits naturally when the
+//! broadcast channel closes on function return.
 
 use std::io::IsTerminal;
 use std::sync::Arc;
@@ -93,23 +94,25 @@ pub async fn run(
         std::io::stdout().is_terminal()
     };
 
-    if use_tui {
+    let tui_handle = if use_tui {
         match sigint_tui::TuiApp::new(core.events.subscribe(), core.events.sender()) {
             Ok(tui) => {
-                tokio::spawn(async move {
+                Some(tokio::spawn(async move {
                     if let Err(e) = tui.run().await {
                         tracing::error!("TUI error: {e}");
                     }
-                });
+                }))
             }
             Err(e) => {
                 warn!("TUI init failed, falling back to stdout: {e}");
                 spawn_stdout_printer(core.events.subscribe());
+                None
             }
         }
     } else {
         spawn_stdout_printer(core.events.subscribe());
-    }
+        None
+    };
 
     // ── Database + Memory + Embedding worker ──────────────────────────────────
     let db_path = core.config.resolved_db_path();
@@ -263,6 +266,19 @@ pub async fn run(
                 warn!("Failed to store episode summary: {e}");
             }
         }
+    }
+
+    // Signal the TUI that the scan is done — it should display results
+    // and wait for the user to press 'q' to exit.
+    let _ = core
+        .events
+        .sender()
+        .send(Event::Status("Scan complete — press 'q' to exit".into()));
+
+    // Wait for the TUI to exit (user presses 'q' or Ctrl-C).
+    // In stdout mode tui_handle is None and this is a no-op.
+    if let Some(handle) = tui_handle {
+        let _ = handle.await;
     }
 
     Ok(())

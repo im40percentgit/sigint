@@ -126,8 +126,8 @@ impl TuiApp {
                         tracing::warn!("TUI: dropped {n} events (lagged)");
                     }
                     Err(broadcast::error::TryRecvError::Closed) => {
-                        // Channel closed — scan completed or app shutting down.
-                        self.state.should_quit = true;
+                        // Channel closed — scan completed. Keep the TUI running
+                        // so the user can review results. They'll press 'q' to exit.
                         break;
                     }
                 }
