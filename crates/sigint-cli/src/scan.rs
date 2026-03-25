@@ -392,6 +392,14 @@ async fn persist_scan(
         warn!("scan: cannot persist scan history record: {}", e);
     }
 
+    // Persist findings collected by the Analyst agent.
+    // Each Finding already has session_id set by the orchestrator.
+    for finding in &report.context.findings {
+        if let Err(e) = db.create_finding(finding) {
+            warn!("scan: cannot persist finding '{}': {}", finding.title, e);
+        }
+    }
+
     Some(session_id)
 }
 
