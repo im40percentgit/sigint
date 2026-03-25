@@ -211,6 +211,11 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         "findings: cvss_score column",
         "ALTER TABLE findings ADD COLUMN cvss_score REAL",
     ),
+    (
+        7,
+        "scan_history: agent_role column",
+        "ALTER TABLE scan_history ADD COLUMN agent_role TEXT",
+    ),
 ];
 
 /// Run all pending migrations against the given connection.

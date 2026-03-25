@@ -2,7 +2,8 @@
 //!
 //! Each `ScanRecord` captures one tool execution during a scan pipeline run.
 //! Records are keyed by UUID and linked to a parent session via `session_id`.
-//! The scan_history table was created in migration 1; no schema changes here.
+//! The scan_history table was created in migration 1; `agent_role` was added in
+//! migration 7 so the engagement log can attribute tool calls to an agent role.
 //!
 //! @decision DEC-STORE-002
 //! @title ScanRecord stored as denormalized row — one row per tool invocation
@@ -14,6 +15,14 @@
 //! requiring a separate arguments table. `output` combines stdout; stderr is
 //! elided from the table (available in the in-memory ScanResult during a
 //! live run) to avoid doubling storage for large nmap outputs.
+//!
+//! @decision DEC-LOG-001
+//! @title agent_role is Option<String> on ScanRecord — older rows stay NULL
+//! @status accepted
+//! @rationale Migration 7 adds the column with no DEFAULT, so pre-existing rows
+//! have NULL agent_role. Making the field `Option<String>` handles both old
+//! databases (NULL -> None) and new records (role name -> Some). The log command
+//! groups by agent_role and falls back to "Unknown Agent" for NULL rows.
 
 use rusqlite::params;
 use sigint_core::Error;
@@ -40,6 +49,11 @@ pub struct ScanRecord {
     pub started_at: String,
     /// ISO-8601 timestamp when the tool finished (None if still running).
     pub finished_at: Option<String>,
+    /// Agent role that invoked this tool (e.g. "researcher", "executor").
+    ///
+    /// Set from `ToolLoopOptions::agent_role` at record creation time.
+    /// `None` for records created before migration 7.
+    pub agent_role: Option<String>,
 }
 
 impl ScanRecord {
@@ -55,6 +69,7 @@ impl ScanRecord {
             exit_code: None,
             started_at: now,
             finished_at: None,
+            agent_role: None,
         }
     }
 }
@@ -64,8 +79,8 @@ impl Database {
     pub fn create_scan_record(&self, record: &ScanRecord) -> Result<(), Error> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO scan_history (id, session_id, tool, args, output, exit_code, started_at, finished_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO scan_history (id, session_id, tool, args, output, exit_code, started_at, finished_at, agent_role)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     record.id.to_string(),
                     record.session_id.to_string(),
@@ -75,6 +90,7 @@ impl Database {
                     record.exit_code,
                     record.started_at,
                     record.finished_at,
+                    record.agent_role,
                 ],
             )
             .map_err(|e| Error::Database(format!("create_scan_record failed: {}", e)))?;
@@ -109,7 +125,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, session_id, tool, args, output, exit_code, started_at, finished_at
+                    "SELECT id, session_id, tool, args, output, exit_code, started_at, finished_at, agent_role
                      FROM scan_history
                      WHERE session_id = ?1
                      ORDER BY started_at ASC",
@@ -139,6 +155,7 @@ pub(crate) fn row_to_scan_record(row: &rusqlite::Row<'_>) -> Result<ScanRecord, 
     let exit_code: Option<i32> = row.get(5).map_err(|e| Error::Database(e.to_string()))?;
     let started_at: String = row.get(6).map_err(|e| Error::Database(e.to_string()))?;
     let finished_at: Option<String> = row.get(7).map_err(|e| Error::Database(e.to_string()))?;
+    let agent_role: Option<String> = row.get(8).map_err(|e| Error::Database(e.to_string()))?;
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid scan record UUID '{}': {}", id_str, e)))?;
@@ -155,6 +172,7 @@ pub(crate) fn row_to_scan_record(row: &rusqlite::Row<'_>) -> Result<ScanRecord, 
         exit_code,
         started_at,
         finished_at,
+        agent_role,
     })
 }
 
@@ -233,7 +251,6 @@ mod tests {
         let db = db();
         let s1 = make_session(&db);
 
-        // Second session
         let s2_session = sigint_core::types::Session::new("session-2");
         db.create_session(&s2_session).unwrap();
         let s2 = s2_session.id;
@@ -258,7 +275,7 @@ mod tests {
         let db = db();
         let session_id = make_session(&db);
 
-        // Record with no output, no exit_code, no finished_at
+        // Record with no output, no exit_code, no finished_at, no agent_role.
         let record = ScanRecord::new(session_id, "shell", "[]");
         db.create_scan_record(&record).unwrap();
 
@@ -267,6 +284,7 @@ mod tests {
         assert!(records[0].output.is_none());
         assert!(records[0].exit_code.is_none());
         assert!(records[0].finished_at.is_none());
+        assert!(records[0].agent_role.is_none());
     }
 
     #[test]
@@ -274,12 +292,10 @@ mod tests {
         let db = db();
         let session_id = make_session(&db);
 
-        // Insert a bare record — no output, exit_code, or finished_at.
         let record = ScanRecord::new(session_id, "nmap_scan", r#"{"target":"10.0.0.1"}"#);
         let record_id = record.id;
         db.create_scan_record(&record).unwrap();
 
-        // Update it with output and completion metadata.
         db.update_scan_record(
             record_id,
             Some("scan output here"),
@@ -288,7 +304,6 @@ mod tests {
         )
         .unwrap();
 
-        // Verify the update was persisted.
         let records = db.get_scan_records(session_id).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].output.as_deref(), Some("scan output here"));
@@ -302,8 +317,35 @@ mod tests {
     #[test]
     fn update_scan_record_nonexistent_is_noop() {
         let db = db();
-        // Updating a non-existent UUID should succeed (zero rows updated, not an error).
         db.update_scan_record(Uuid::new_v4(), Some("output"), 0, "2026-03-13T00:00:00Z")
             .unwrap();
+    }
+
+    #[test]
+    fn agent_role_roundtrip() {
+        let db = db();
+        let session_id = make_session(&db);
+
+        let mut record = ScanRecord::new(session_id, "nmap_scan", "{}");
+        record.agent_role = Some("researcher".to_string());
+        db.create_scan_record(&record).unwrap();
+
+        let records = db.get_scan_records(session_id).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].agent_role.as_deref(), Some("researcher"));
+    }
+
+    #[test]
+    fn agent_role_null_roundtrip() {
+        let db = db();
+        let session_id = make_session(&db);
+
+        // No agent_role set — should come back as None.
+        let record = ScanRecord::new(session_id, "shell", "{}");
+        db.create_scan_record(&record).unwrap();
+
+        let records = db.get_scan_records(session_id).unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].agent_role.is_none());
     }
 }
