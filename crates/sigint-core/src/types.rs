@@ -227,6 +227,38 @@ impl Severity {
     }
 }
 
+// ── EscalationTier ───────────────────────────────────────────────────────────
+
+/// Escalation tier for an agent cycle, used to gate destructive actions
+/// behind user approval (DEC-LOOP-004).
+///
+/// Variants are ordered from least to most invasive so comparison operators
+/// work as expected: Recon < Exploitation < PostExploitation.
+///
+/// @decision DEC-LOOP-004
+/// @title Escalation detected via string marker in Strategist output
+/// @status accepted
+/// @rationale Strategist is tool-free (DEC-AGENT-008); adding a dedicated
+/// tool would violate that constraint. String markers are parsed by the
+/// orchestrator after each Strategist completion to determine the tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EscalationTier {
+    Recon,
+    Exploitation,
+    PostExploitation,
+}
+
+impl std::fmt::Display for EscalationTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EscalationTier::Recon => write!(f, "recon"),
+            EscalationTier::Exploitation => write!(f, "exploitation"),
+            EscalationTier::PostExploitation => write!(f, "post-exploitation"),
+        }
+    }
+}
+
 /// A security finding discovered during a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
@@ -241,6 +273,18 @@ pub struct Finding {
     /// Optional CVSS-style numeric score (0.0–10.0). When `None`, callers
     /// may fall back to `severity.default_score()` for reporting purposes.
     pub cvss_score: Option<f32>,
+    /// LLM-generated remediation guidance (Phase 12A).
+    pub remediation: Option<String>,
+    /// How easily this finding can be exploited (Phase 12A).
+    pub exploitability: Option<String>,
+    /// Business or technical impact if exploited (Phase 12A).
+    pub impact: Option<String>,
+    /// FK to scan_history.id — the tool invocation that produced the evidence (Phase 12A).
+    pub evidence_ref: Option<Uuid>,
+    /// Groups related findings into a named attack path (Phase 12A).
+    pub chain_id: Option<Uuid>,
+    /// Ordering within the attack chain; lower = earlier in chain (Phase 12A).
+    pub chain_order: Option<i32>,
 }
 
 impl Finding {
@@ -260,6 +304,12 @@ impl Finding {
             evidence: None,
             created_at: Utc::now(),
             cvss_score: None,
+            remediation: None,
+            exploitability: None,
+            impact: None,
+            evidence_ref: None,
+            chain_id: None,
+            chain_order: None,
         }
     }
 }
@@ -549,5 +599,69 @@ mod tests {
         let risks = [ToolRisk::High, ToolRisk::Low, ToolRisk::Medium];
         assert_eq!(risks.iter().min(), Some(&ToolRisk::Low));
         assert_eq!(risks.iter().max(), Some(&ToolRisk::High));
+    }
+
+    #[test]
+    fn escalation_tier_ordering() {
+        // Recon < Exploitation < PostExploitation
+        assert!(EscalationTier::Recon < EscalationTier::Exploitation);
+        assert!(EscalationTier::Exploitation < EscalationTier::PostExploitation);
+        assert!(EscalationTier::Recon < EscalationTier::PostExploitation);
+
+        let tiers = [
+            EscalationTier::PostExploitation,
+            EscalationTier::Recon,
+            EscalationTier::Exploitation,
+        ];
+        assert_eq!(tiers.iter().min(), Some(&EscalationTier::Recon));
+        assert_eq!(tiers.iter().max(), Some(&EscalationTier::PostExploitation));
+    }
+
+    #[test]
+    fn escalation_tier_display() {
+        assert_eq!(EscalationTier::Recon.to_string(), "recon");
+        assert_eq!(EscalationTier::Exploitation.to_string(), "exploitation");
+        assert_eq!(EscalationTier::PostExploitation.to_string(), "post-exploitation");
+    }
+
+    #[test]
+    fn escalation_tier_serializes() {
+        let json = serde_json::to_string(&EscalationTier::PostExploitation).unwrap();
+        assert_eq!(json, "\"post_exploitation\"");
+
+        let tier: EscalationTier = serde_json::from_str("\"recon\"").unwrap();
+        assert_eq!(tier, EscalationTier::Recon);
+    }
+
+    #[test]
+    fn finding_new_fields_default_to_none() {
+        let sid = Uuid::new_v4();
+        let f = Finding::new(sid, "Test", "desc", Severity::High);
+        assert!(f.remediation.is_none());
+        assert!(f.exploitability.is_none());
+        assert!(f.impact.is_none());
+        assert!(f.evidence_ref.is_none());
+        assert!(f.chain_id.is_none());
+        assert!(f.chain_order.is_none());
+    }
+
+    #[test]
+    fn finding_with_enrichment_fields() {
+        let sid = Uuid::new_v4();
+        let chain_id = Uuid::new_v4();
+        let evidence_ref = Uuid::new_v4();
+        let mut f = Finding::new(sid, "SQLi", "Union-based injection", Severity::Critical);
+        f.remediation = Some("Use parameterized queries".to_string());
+        f.exploitability = Some("publicly accessible, no auth required".to_string());
+        f.impact = Some("Full database exfiltration".to_string());
+        f.evidence_ref = Some(evidence_ref);
+        f.chain_id = Some(chain_id);
+        f.chain_order = Some(2);
+        f.cvss_score = Some(9.8);
+
+        assert_eq!(f.remediation.as_deref(), Some("Use parameterized queries"));
+        assert_eq!(f.chain_order, Some(2));
+        assert_eq!(f.evidence_ref, Some(evidence_ref));
+        assert_eq!(f.chain_id, Some(chain_id));
     }
 }
