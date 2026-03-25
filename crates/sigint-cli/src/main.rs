@@ -24,6 +24,7 @@ mod campaign;
 mod chat;
 mod diff;
 mod doctor;
+mod log;
 mod recon;
 mod report;
 mod scan;
@@ -86,6 +87,8 @@ enum Commands {
     },
     /// Compare findings between two scan sessions.
     Diff(diff::DiffArgs),
+    /// Show the chronological engagement log for a scan session.
+    Log(log::LogArgs),
     /// Generate a report for a scan session.
     Report(report::ReportArgs),
     /// Start the SIGINT web UI server.
@@ -226,6 +229,7 @@ async fn main() {
             }
         },
         Commands::Diff(args) => diff::run(core, args).await,
+        Commands::Log(args) => log::run(core, args).await,
         Commands::Report(args) => report::run(core, args).await,
         Commands::Serve { bind } => serve::run(core, &bind).await,
         Commands::Recon {

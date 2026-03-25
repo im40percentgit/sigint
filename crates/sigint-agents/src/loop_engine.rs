@@ -377,11 +377,13 @@ pub async fn run_tool_loop(
                     // Create a ScanRecord before execution so the record exists
                     // even if the tool panics or the process dies mid-run.
                     let record_id: Option<Uuid> = if let Some(db) = db {
-                        let record = sigint_store::ScanRecord::new(
+                        let mut record = sigint_store::ScanRecord::new(
                             session_id,
                             name.as_str(),
                             args.to_string(),
                         );
+                        // Attribute this tool call to the invoking agent role.
+                        record.agent_role = Some(agent_role.to_string());
                         let rid = record.id;
                         if let Err(e) = db.create_scan_record(&record) {
                             warn!(tool_name = %name, error = %e, "scan record create failed");

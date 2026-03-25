@@ -62,7 +62,7 @@ impl<'a> ScanQuery<'a> {
     pub fn list(self) -> Result<Vec<ScanRecord>, Error> {
         self.db.with_conn(|conn| {
             let mut sql = String::from(
-                "SELECT id, session_id, tool, args, output, exit_code, started_at, finished_at \
+                "SELECT id, session_id, tool, args, output, exit_code, started_at, finished_at, agent_role \
                  FROM scan_history",
             );
             let mut params: Vec<rusqlite::types::Value> = Vec::new();
