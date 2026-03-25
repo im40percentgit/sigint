@@ -186,6 +186,18 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
         ]));
     }
 
+    // Apply scroll offset: 0 = auto-scroll to bottom; >0 = user scrolled up N
+    // lines from the natural bottom position. Ratatui Paragraph::scroll takes
+    // (lines_from_top, cols_from_left). We store "lines from bottom" and convert.
+    let scroll_up = state.scroll_offsets.get(&Panel::Chat).copied().unwrap_or(0);
+    let inner_height = area.height.saturating_sub(2) as usize; // subtract border rows
+    let bottom = lines.len().saturating_sub(inner_height);
+    let vertical = if scroll_up == 0 {
+        bottom as u16
+    } else {
+        bottom.saturating_sub(scroll_up) as u16
+    };
+
     let chat = Paragraph::new(lines)
         .block(
             Block::default()
@@ -193,7 +205,8 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(border_style),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((vertical, 0));
 
     frame.render_widget(chat, area);
 }
@@ -236,6 +249,21 @@ fn render_tool_output(frame: &mut Frame, state: &AppState, area: Rect) {
         lines.push(Line::default());
     }
 
+    // Apply scroll offset identically to render_chat: 0 = auto-scroll to
+    // bottom; >0 = user scrolled up N lines from the natural bottom position.
+    let scroll_up = state
+        .scroll_offsets
+        .get(&Panel::ToolOutput)
+        .copied()
+        .unwrap_or(0);
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let bottom = lines.len().saturating_sub(inner_height);
+    let vertical = if scroll_up == 0 {
+        bottom as u16
+    } else {
+        bottom.saturating_sub(scroll_up) as u16
+    };
+
     let panel = Paragraph::new(lines)
         .block(
             Block::default()
@@ -243,7 +271,8 @@ fn render_tool_output(frame: &mut Frame, state: &AppState, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(border_style),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((vertical, 0));
 
     frame.render_widget(panel, area);
 }

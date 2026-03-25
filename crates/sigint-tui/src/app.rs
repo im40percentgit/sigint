@@ -18,6 +18,26 @@
 //! @rationale When stdout is a TTY the user is interactive — show TUI.
 //! When piped or in CI, fall back to the existing stdout event printer.
 //! --tui and --no-tui flags override the heuristic for scripting and testing.
+//!
+//! @decision DEC-TUI-BUG-001
+//! @title TerminalGuard drop-guard ensures terminal is restored on all exit paths
+//! @status accepted
+//! @rationale The explicit restore_terminal() call in run() handles normal
+//! returns and error propagation. The panic hook in setup_terminal() handles
+//! panics. TerminalGuard adds a third layer: its Drop fires on any unwind,
+//! including future code paths that bypass both (e.g. std::process::exit
+//! from a spawned thread). Redundant calls to disable_raw_mode are safe
+//! (no-op when not in raw mode), so over-restoring is harmless.
+//!
+//! @decision DEC-TUI-BUG-002
+//! @title Resize events consumed and redrawn immediately via the normal render cycle
+//! @status accepted
+//! @rationale crossterm emits CEvent::Resize(w,h) when the terminal resizes.
+//! ratatui's Terminal::draw() always queries the current area from the backend
+//! on each call, so no explicit size update is needed — draw() on the next tick
+//! reflows the layout automatically. Consuming the event prevents it from
+//! being silently dropped through the wildcard arm, and the unconditional
+//! draw at step 4 handles the resize within one tick (≤33ms).
 
 use std::io::{self, Stdout};
 use std::time::Duration;
@@ -73,13 +93,21 @@ impl TuiApp {
     /// Run the TUI event loop until the user quits or `Event::Shutdown` is received.
     ///
     /// Renders at ~30fps (33ms tick). Always restores the terminal before returning,
-    /// including on error paths.
+    /// including on error paths and panics (via `TerminalGuard`).
     pub async fn run(mut self) -> Result<(), io::Error> {
         let tick_rate = Duration::from_millis(33);
+
+        // Belt-and-suspenders terminal cleanup: the explicit restore_terminal()
+        // below handles normal and error returns; TerminalGuard's Drop handles
+        // panic unwinds and any future exit paths that bypass the explicit call.
+        // See @decision DEC-TUI-BUG-001.
+        let _guard = TerminalGuard;
 
         let result = self.run_inner(tick_rate).await;
 
         // Always restore terminal, even if run_inner returned an error.
+        // TerminalGuard::drop will also run, making this redundant on clean
+        // paths, but calling disable_raw_mode twice is harmless.
         if let Err(e) = restore_terminal() {
             error!("TUI: failed to restore terminal: {e}");
         }
@@ -107,10 +135,17 @@ impl TuiApp {
 
             // 2. Poll terminal input (non-blocking).
             if event::poll(Duration::ZERO)? {
-                if let CEvent::Key(key) = event::read()? {
-                    if self.handle_key(key) {
-                        break;
+                match event::read()? {
+                    CEvent::Key(key) => {
+                        if self.handle_key(key) {
+                            break;
+                        }
                     }
+                    CEvent::Resize(_, _) => {
+                        // Terminal resized — ratatui queries size on each draw(),
+                        // so the next render tick reflows automatically.
+                    }
+                    _ => {}
                 }
             }
 
@@ -216,6 +251,22 @@ impl TuiApp {
         }
 
         false
+    }
+}
+
+/// RAII guard that restores terminal state on drop.
+///
+/// Fires on any exit path: normal return, `?` error propagation, or panic
+/// unwind. Calls are best-effort — errors are silently ignored since this runs
+/// during cleanup where there is nothing useful to do with an error.
+///
+/// See @decision DEC-TUI-BUG-001 in the module doc.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+        let _ = io::stdout().execute(LeaveAlternateScreen);
     }
 }
 
