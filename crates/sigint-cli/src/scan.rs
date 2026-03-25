@@ -243,8 +243,12 @@ pub async fn run(
     })?;
 
     // ── Display the report ────────────────────────────────────────────────────
-    println!();
-    println!("{}", report);
+    // In TUI mode the report is visible in the Chat panel; printing to stdout
+    // would collide with the alternate-screen buffer and produce garbled output.
+    if !use_tui {
+        println!();
+        println!("{}", report);
+    }
 
     // ── Persist to database + episodic memory (best-effort) ──────────────────
     // Pass the pre-generated session_id so the summary record links to the

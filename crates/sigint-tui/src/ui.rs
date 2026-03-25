@@ -127,7 +127,7 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
     };
 
     let thinking_style = Style::default()
-        .fg(Color::DarkGray)
+        .fg(Color::Gray)
         .add_modifier(Modifier::ITALIC);
 
     let mut lines: Vec<Line> = Vec::new();
@@ -135,10 +135,24 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
         match msg.role.as_str() {
             "thinking" => {
                 // Agent reasoning segments — rendered dimmed and italic.
-                lines.push(Line::from(vec![
-                    Span::styled("[Thinking] ", thinking_style.add_modifier(Modifier::BOLD)),
-                    Span::styled(msg.content.clone(), thinking_style),
-                ]));
+                // Split on newlines: first line gets the "[Thinking]" prefix,
+                // subsequent lines are plain italic (no repeated prefix).
+                for (i, text_line) in msg.content.split('\n').enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                "[Thinking] ",
+                                thinking_style.add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(text_line.to_string(), thinking_style),
+                        ]));
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            text_line.to_string(),
+                            thinking_style,
+                        )));
+                    }
+                }
             }
             role => {
                 let (prefix, color) = match role {
@@ -148,42 +162,82 @@ fn render_chat(frame: &mut Frame, state: &AppState, area: Rect) {
                     "tool" => ("[Tool] ", Color::Yellow),
                     _ => ("", Color::White),
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        prefix,
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(msg.content.clone()),
-                ]));
+                // Split on newlines: first line gets the role prefix,
+                // subsequent lines are plain (no repeated prefix).
+                for (i, text_line) in msg.content.split('\n').enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                prefix,
+                                Style::default().fg(color).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::raw(text_line.to_string()),
+                        ]));
+                    } else {
+                        lines.push(Line::from(Span::raw(text_line.to_string())));
+                    }
+                }
             }
         }
     }
 
     // Show streaming buffer with cursor indicator when non-empty.
+    // Split on newlines so multi-line streaming content renders correctly.
     if !state.streaming_buffer.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                "[Agent] ",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(state.streaming_buffer.clone()),
-            Span::styled("\u{2588}", Style::default().fg(Color::Green)),
-        ]));
+        let buffer_lines: Vec<&str> = state.streaming_buffer.split('\n').collect();
+        for (i, text_line) in buffer_lines.iter().enumerate() {
+            let is_last = i == buffer_lines.len() - 1;
+            if i == 0 {
+                let mut spans = vec![
+                    Span::styled(
+                        "[Agent] ",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(text_line.to_string()),
+                ];
+                if is_last {
+                    spans.push(Span::styled("\u{2588}", Style::default().fg(Color::Green)));
+                }
+                lines.push(Line::from(spans));
+            } else {
+                let mut spans = vec![Span::raw(text_line.to_string())];
+                if is_last {
+                    spans.push(Span::styled("\u{2588}", Style::default().fg(Color::Green)));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
     }
 
     // Show live reasoning buffer if an agent is currently thinking.
+    // Split on newlines: first line gets the agent label, subsequent lines are plain.
     if !state.reasoning_buffer.is_empty() {
         let label = match &state.thinking_agent {
             Some(name) => format!("[{name}] "),
             None => "[Thinking] ".to_string(),
         };
-        lines.push(Line::from(vec![
-            Span::styled(label, thinking_style.add_modifier(Modifier::BOLD)),
-            Span::styled(state.reasoning_buffer.clone(), thinking_style),
-            Span::styled("\u{2588}", thinking_style),
-        ]));
+        let reasoning_lines: Vec<&str> = state.reasoning_buffer.split('\n').collect();
+        for (i, text_line) in reasoning_lines.iter().enumerate() {
+            let is_last = i == reasoning_lines.len() - 1;
+            if i == 0 {
+                let mut spans = vec![
+                    Span::styled(label.clone(), thinking_style.add_modifier(Modifier::BOLD)),
+                    Span::styled(text_line.to_string(), thinking_style),
+                ];
+                if is_last {
+                    spans.push(Span::styled("\u{2588}", thinking_style));
+                }
+                lines.push(Line::from(spans));
+            } else {
+                let mut spans = vec![Span::styled(text_line.to_string(), thinking_style)];
+                if is_last {
+                    spans.push(Span::styled("\u{2588}", thinking_style));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
     }
 
     // Apply scroll offset: 0 = auto-scroll to bottom; >0 = user scrolled up N
