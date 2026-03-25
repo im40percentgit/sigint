@@ -133,10 +133,13 @@ impl Tool for CreateFindingTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::MissingArgument("title".into()))?;
 
-        let severity = args
+        let severity_raw = args
             .get("severity")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::MissingArgument("severity".into()))?;
+        // Normalize to lowercase — LLMs often send "High", "Critical", etc.
+        let severity = severity_raw.to_lowercase();
+        let severity = severity.as_str();
 
         let description = args
             .get("description")
@@ -293,6 +296,19 @@ mod tests {
             err.to_string().contains("ultra-critical"),
             "error should include the invalid value: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_accepts_capitalized_severity() {
+        let collector = new_finding_collector();
+        let tool = CreateFindingTool::new(Arc::clone(&collector));
+        let args = json!({
+            "title": "Test",
+            "severity": "High",
+            "description": "test"
+        });
+        let result = tool.execute(args).await.unwrap();
+        assert!(result.success());
     }
 
     #[tokio::test]
