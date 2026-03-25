@@ -9,6 +9,16 @@
 //! @rationale clap derive provides compile-time argument validation and
 //! auto-generated help text. All subcommands live in separate modules
 //! so the main.rs stays minimal and each command can be tested in isolation.
+//!
+//! @decision DEC-TUI-002
+//! @title Redirect tracing output to a file when TUI is active
+//! @status accepted
+//! @rationale ratatui occupies the alternate screen buffer on stderr; tracing
+//! lines written to stderr corrupt the TUI rendering. The fix detects TUI
+//! mode before init (by inspecting the parsed CLI args + isatty) and redirects
+//! the tracing subscriber to a log file (~/.local/share/sigint/sigint.log)
+//! instead of stderr. No extra crates needed: std::io::IsTerminal (stable
+//! since Rust 1.70) and Mutex<File> satisfy MakeWriter requirements.
 
 mod campaign;
 mod chat;
@@ -19,6 +29,9 @@ mod report;
 mod scan;
 mod serve;
 mod sessions;
+
+use std::io::IsTerminal;
+use std::sync::Mutex;
 
 use clap::{Parser, Subcommand};
 use sigint_core::{event::Event, AppCore};
@@ -131,12 +144,43 @@ async fn main() {
         1 => "sigint=debug,warn".to_string(),
         _ => "sigint=trace,debug".to_string(),
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env("SIGINT_LOG").unwrap_or_else(|_| EnvFilter::new(filter)),
-        )
-        .with_target(false)
-        .init();
+    let env_filter = EnvFilter::try_from_env("SIGINT_LOG").unwrap_or_else(|_| EnvFilter::new(filter));
+
+    // Determine whether a TUI will be active for this invocation.
+    // ratatui occupies the alternate screen on stderr, so any tracing output
+    // written to stderr would corrupt the display.  When TUI mode is detected,
+    // redirect the subscriber to a log file instead.
+    let tui_active = match &cli.command {
+        Commands::Scan { tui, no_tui, .. } => {
+            if *no_tui { false } else if *tui { true } else { std::io::stderr().is_terminal() }
+        }
+        Commands::Campaign { action: CampaignAction::Run { no_tui, .. } } => !no_tui && std::io::stderr().is_terminal(),
+        _ => false,
+    };
+
+    if tui_active {
+        // TUI mode: redirect tracing to a log file so stderr stays clean.
+        let log_dir = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".local")
+            .join("share")
+            .join("sigint");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file = std::fs::File::create(log_dir.join("sigint.log"))
+            .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap());
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(false)
+            .with_ansi(false)
+            .with_writer(Mutex::new(log_file))
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(false)
+            .init();
+    }
 
     // Load AppCore (config + event bus). Errors here are fatal.
     let core = match AppCore::load() {
