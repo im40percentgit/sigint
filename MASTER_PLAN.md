@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 11 in-progress — Findings Extraction + Engagement Log (11D: sigint log command)
+**Current Phase:** Phase 11 completed — Findings Extraction + Engagement Log
 
 ### Architecture
 
@@ -757,7 +757,7 @@ Sub-phases:
 ---
 
 ### Phase 11: Findings Extraction + Engagement Log
-**Status:** in-progress
+**Status:** completed
 **Sub-phases:** 11A (CreateFindingTool) → 11B (Orchestrator wiring) → 11C (Persistence) → 11D (sigint log command)
 **Decision IDs:** DEC-FINDING-001, DEC-STORE-003, DEC-LOG-001
 **Definition of Done:**
@@ -772,7 +772,7 @@ Sub-phases:
 - [x] Sub-Phase 11A: `CreateFindingTool` in `sigint-tools/src/finding.rs` — in-memory tool with `FindingCollector` (Arc<Mutex<Vec<Value>>>), severity validation, structured output
 - [x] Sub-Phase 11B: Analyst agent updated (allowed_tools + system prompt); Orchestrator wires collector into `run_scan`, drains findings into `ctx.findings`, emits `FindingCreated` events
 - [x] Sub-Phase 11C: `persist_scan()` in sigint-cli persists `ctx.findings` to the database
-- [ ] Sub-Phase 11D: `sigint log <session-id>` command — migration 7 adds `agent_role` to scan_history; CLI renders chronological engagement log (Markdown/HTML) with per-agent tool attribution and findings summary
+- [x] Sub-Phase 11D: `sigint log <session-id>` command — migration 7 adds `agent_role` to scan_history; CLI renders chronological engagement log (Markdown/HTML) with per-agent tool attribution and findings summary
 
 ---
 

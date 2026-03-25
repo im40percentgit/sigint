@@ -11,3 +11,4 @@
 .worktrees/
 .fastembed_cache/
 .serena/
+.gstack/
