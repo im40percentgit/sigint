@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 11 completed — Findings Extraction + Engagement Log
+**Current Phase:** Phase 12 in progress — Iterative Convergence + Finding Intelligence
 
 ### Architecture
 
@@ -744,6 +744,13 @@ Sub-phases:
 | DEC-LLM-007 | Accumulate tool_calls from all stream chunks, not just done=true | accepted | Ollama sends tool_calls on the content chunk (done=false), not the final metadata chunk (done=true); extending rather than replacing the accumulator collects tool calls from any chunk position |
 | DEC-AGENT-007-REV | Streaming (chat_stream()) for all tool-loop iterations (Phase 8A) | accepted | Switched from non-streaming chat() to chat_stream() so incremental tokens emit AgentThinking events; tool calls still accumulate across all chunks per DEC-LLM-007 |
 | DEC-LOG-001 | sigint log renders chronological audit trail from scan_history with agent attribution | accepted | Operators need a timestamped audit trail showing which agent invoked which tool with what args and output; chronological rendering from scan_history ordered by started_at; agent_role column (migration 7) attributes each tool call to a role without denormalizing the data model |
+| DEC-LOOP-001 | Researcher runs once; loop wraps Strategist/Executor/Analyst | accepted | Recon results don't change between iterations; re-running wastes tokens. Phase 12C. |
+| DEC-LOOP-002 | Convergence = no new findings OR goal keyword match (heuristic) | accepted | LLM-judged convergence adds latency and cost; heuristic sufficient for v1. Phase 12C. |
+| DEC-LOOP-003 | max_cycles defaults to 1 for backward compatibility | accepted | Existing tests and workflows unaffected; --max-cycles N opts into iterative mode. Phase 12C. |
+| DEC-LOOP-004 | Escalation detected via string marker in Strategist output | accepted | Strategist is tool-free (DEC-AGENT-008); adding a tool would violate that design; string markers are parsed by the orchestrator. Phase 12A/12E. |
+| DEC-LOOP-005 | Evidence linking via post-processing DB query after Executor | accepted | Analyst needs all Executor records, not just the latest; DB query is cleaner than plumbing IDs through the tool loop. Phase 12D. |
+| DEC-LOOP-006 | Per-cycle agent_output clearing for Strategist/Executor/Analyst; Researcher preserved | accepted | Prevents stale context from polluting re-planning; Researcher output is stable across cycles. Phase 12C. |
+| DEC-FINDING-002 | Phase 12B enrichment fields are optional in both schema and execute() | accepted | All five new fields (remediation, exploitability, impact, cvss_score, evidence_ref) are optional so existing calls without them continue to work; CVSS score is the only field with a validation constraint (0.0–10.0) because out-of-range values indicate a model error worth surfacing immediately. Phase 12B. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -753,6 +760,20 @@ Sub-phases:
 
 - [x] Sub-Phase 10A: 7 akaei tool wrappers (sweep, decode, analyze, audit, fingerprint, scan, freqdb) + doctor entry
 - [x] Sub-Phase 10B: RfRecon agent role, context threading, optional orchestrator RF phase
+
+---
+
+### Phase 12: Iterative Convergence + Finding Intelligence
+**Status:** in_progress
+**Sub-phases:** 12A (Finding Model) → 12B (CreateFindingTool) → 12C (Convergence Loop) → 12D (Evidence Linking) → 12E (Approval-Gated Escalation)
+**Plan:** `~/.claude/plans/bright-hopping-matsumoto.md`
+**Decision IDs:** DEC-LOOP-001, DEC-LOOP-002, DEC-LOOP-003, DEC-LOOP-004, DEC-LOOP-005, DEC-LOOP-006, DEC-FINDING-002
+
+- [x] Sub-Phase 12A: Enhanced Finding Model + Migration 8 — 6 new fields on Finding (remediation, exploitability, impact, evidence_ref, chain_id, chain_order), EscalationTier enum, migration 8
+- [ ] Sub-Phase 12B: Enhanced CreateFindingTool — extend tool schema with 5 enrichment fields (remediation, exploitability, impact, cvss_score, evidence_ref), CVSS validation, Analyst prompt enrichment, orchestrator drain extraction
+- [ ] Sub-Phase 12C: Convergence Loop — max_cycles, goal matching, run_inner_cycle, is_converged, CycleCompleted event
+- [ ] Sub-Phase 12D: Evidence Linking — scan_record_refs in context, get_scan_records_by_role query, evidence_ref validation
+- [ ] Sub-Phase 12E: Approval-Gated Escalation — tier detection, EscalationRequested event, ApprovalRegistry gate
 
 ---
 

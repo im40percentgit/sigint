@@ -54,12 +54,30 @@ impl Agent for AnalystAgent {
          call the create_finding tool. Do not merely describe findings in text — use the \
          tool so they are recorded as structured data. Call it once per distinct finding.\n\
          \n\
-         For each create_finding call, provide:\n\
+         For each create_finding call, provide the core fields:\n\
          - title: a concise, descriptive name (e.g. 'Unauthenticated Redis Exposure')\n\
          - severity: critical / high / medium / low / info (CVSS v3 guidelines)\n\
          - description: what the vulnerability is, why it matters, and how it was found\n\
          - evidence: the exact tool output, command, or observation that proves the finding\n\
          - asset: the specific host, port, URL, or service affected\n\
+         \n\
+         Additionally, enrich every finding with these fields whenever possible:\n\
+         - remediation: specific, actionable fix steps (e.g. 'Upgrade OpenSSL to 3.x, \
+           disable TLS 1.0/1.1 in server config, rotate any exposed private keys'). \
+           Always provide this — a finding without a remediation path has limited value.\n\
+         - exploitability: how easily this can be exploited (e.g. 'publicly accessible \
+           with no authentication required', 'requires local network access', \
+           'requires valid user credentials'). Always provide this.\n\
+         - impact: business or technical impact if exploited (e.g. 'full database \
+           read/write access', 'remote code execution as www-data', \
+           'credential theft affecting all users'). Always provide this.\n\
+         - cvss_score: CVSS v3.1 base score (0.0-10.0). Provide when you can make a \
+           confident assessment from the available evidence. Use standard CVSS v3.1 \
+           scoring criteria: attack vector, complexity, privileges required, user \
+           interaction, confidentiality/integrity/availability impact.\n\
+         - evidence_ref: if a specific scan record UUID was mentioned in your context \
+           as the source of the evidence, include it here so findings can be traced \
+           back to the exact tool invocation.\n\
          \n\
          You also have shell access for targeted verification (CVE lookups, banner grabs, \
          lightweight confirmations). Do not initiate new broad scans — that is the \
@@ -98,6 +116,32 @@ mod tests {
         assert!(
             prompt.to_lowercase().contains("severity"),
             "prompt should mention severity: {prompt}"
+        );
+    }
+
+    #[test]
+    fn analyst_system_prompt_includes_enrichment_instructions() {
+        let agent = AnalystAgent::new();
+        let prompt = agent.system_prompt();
+        assert!(
+            prompt.contains("remediation"),
+            "prompt should instruct Analyst to provide remediation: {prompt}"
+        );
+        assert!(
+            prompt.contains("exploitability"),
+            "prompt should instruct Analyst to provide exploitability: {prompt}"
+        );
+        assert!(
+            prompt.contains("impact"),
+            "prompt should instruct Analyst to provide impact: {prompt}"
+        );
+        assert!(
+            prompt.contains("cvss_score"),
+            "prompt should instruct Analyst to provide cvss_score: {prompt}"
+        );
+        assert!(
+            prompt.contains("evidence_ref"),
+            "prompt should instruct Analyst to provide evidence_ref: {prompt}"
         );
     }
 
