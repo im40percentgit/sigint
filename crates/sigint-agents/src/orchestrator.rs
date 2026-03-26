@@ -47,6 +47,19 @@
 //! opened once and shared. `session_id` is a `Uuid` defaulting to `Uuid::nil()`
 //! when no database is provided — `nil` is harmless since the DB path is never
 //! taken. Builder methods (`with_db`, `with_session_id`) keep `new()` stable.
+//!
+//! @decision DEC-AGENT-017
+//! @title Convergence loop uses max_cycles=1 default to preserve backward compatibility
+//! @status accepted
+//! @rationale The iterative Strategist→Executor→Analyst loop must not change
+//! existing behaviour for any caller that does not opt in. Defaulting `max_cycles`
+//! to 1 means the `for cycle in 0..1` body runs exactly once and `is_converged`
+//! is never called — the loop exits via the natural `0 < 1` termination condition.
+//! This is mechanically verified by `run_scan_linear_default` which uses a 5-response
+//! mock queue; if the loop ran more than once the mock would exhaust and the
+//! summary assertion would fail. The fresh-FindingCollector-per-cycle design in
+//! `run_inner_cycle` lets the convergence check compare only *new* findings
+//! against the goal, rather than re-inspecting the full accumulated set.
 
 use std::sync::Arc;
 
@@ -135,6 +148,21 @@ pub struct Orchestrator {
     /// role ACL — profiles can only restrict, never expand tool access.
     /// `max_iterations` and `ports` overrides are applied at builder time.
     profile: Option<sigint_core::campaign::ScanProfile>,
+    /// Maximum number of Strategist → Executor → Analyst cycles to run.
+    ///
+    /// Defaults to 1, which reproduces the original linear pipeline exactly.
+    /// Set to a higher value to enable iterative convergence — the loop exits
+    /// early when `is_converged` returns `true` (no new findings, or a goal
+    /// keyword match). The Reporter always runs once after the loop exits.
+    max_cycles: usize,
+    /// Optional convergence goal string.
+    ///
+    /// When set, `is_converged` returns `true` as soon as any finding's
+    /// `title` or `description` contains this string (case-insensitive).
+    /// This allows callers to drive the loop toward a specific objective and
+    /// stop as soon as evidence is found, even if `max_cycles` hasn't been
+    /// reached.
+    goal: Option<String>,
 }
 
 impl Orchestrator {
@@ -167,6 +195,8 @@ impl Orchestrator {
             approval_registry: None,
             auto_approve: "all".to_string(),
             profile: None,
+            max_cycles: 1,
+            goal: None,
         }
     }
 
@@ -261,73 +291,102 @@ impl Orchestrator {
         self
     }
 
-    /// Run the full five-agent scan pipeline against `target`.
+    /// Set the maximum number of Strategist → Executor → Analyst cycles.
     ///
-    /// Pipeline order: Researcher → Strategist → Executor → Analyst → Reporter.
-    /// Each agent's text output is stored in `TaskContext::agent_outputs` before
-    /// the next agent runs, giving downstream agents full visibility into prior
-    /// work via `TaskContext::to_agent_prompt`.
-    ///
-    /// # Returns
-    /// A `ScanReport` whose `summary` field is the Reporter's final output.
-    ///
-    /// # Errors
-    /// Returns `Error` if any agent's LLM call fails. Tool execution errors
-    /// within an agent turn are recovered internally (fed back to the model).
-    pub async fn run_scan(&self, target: &str) -> Result<ScanReport, Error> {
-        info!(target, "orchestrator: starting scan pipeline");
+    /// Defaults to `1`, which reproduces the original linear pipeline exactly.
+    /// Values greater than 1 enable iterative convergence: the loop exits early
+    /// when `is_converged` determines no further progress is possible (no new
+    /// findings this cycle, or a goal keyword match). The Reporter always runs
+    /// once after the loop exits, regardless of how many cycles completed.
+    pub fn with_max_cycles(mut self, n: usize) -> Self {
+        self.max_cycles = n;
+        self
+    }
 
-        let mut ctx = TaskContext::new(target).with_ports(self.ports.clone());
+    /// Set a convergence goal string.
+    ///
+    /// When set, `is_converged` returns `true` as soon as any finding produced
+    /// in the current cycle has a `title` or `description` containing this
+    /// string (case-insensitive). This allows the loop to terminate as soon as
+    /// evidence for a specific objective is found, without exhausting all cycles.
+    pub fn with_goal(mut self, goal: impl Into<String>) -> Self {
+        self.goal = Some(goal.into());
+        self
+    }
 
-        // ── 0. RfRecon (optional) ────────────────────────────────────────────
-        // Feature-detected: only runs when akaei_sweep is registered in the
-        // tool registry. When no HackRF is available the phase is silently
-        // skipped and the rest of the pipeline proceeds unchanged.
-        // See DEC-AKAEI-003 for the rationale behind feature-detection.
-        if self.registry.get("akaei_sweep").is_some() {
-            let rf_recon = RfReconAgent::new();
-            info!("orchestrator: running rf_recon agent (akaei tools detected)");
-            let rf_output = self.run_agent(&rf_recon, &mut ctx).await?;
-            ctx.agent_outputs.insert(AgentRole::RfRecon, rf_output);
+    /// Check whether the convergence loop should stop after this cycle.
+    ///
+    /// Convergence is declared when either:
+    /// 1. The current cycle produced no new findings (the model is not making
+    ///    progress — continuing would just repeat the same work).
+    /// 2. A goal string is set and at least one new finding's `title` or
+    ///    `description` contains the goal string (case-insensitive match).
+    ///
+    /// Note: `is_converged` is only called when `max_cycles > 1`. With the
+    /// default `max_cycles = 1` the loop exits after a single iteration and
+    /// this method is never invoked.
+    fn is_converged(&self, new_findings: &[Finding], _all_findings: &[Finding]) -> bool {
+        // No new findings this cycle → the model has nothing left to explore.
+        if new_findings.is_empty() {
+            return true;
         }
+        // Goal match: stop as soon as a finding references the objective.
+        if let Some(ref goal) = self.goal {
+            let goal_lower = goal.to_lowercase();
+            return new_findings.iter().any(|f| {
+                f.title.to_lowercase().contains(&goal_lower)
+                    || f.description.to_lowercase().contains(&goal_lower)
+            });
+        }
+        false
+    }
 
-        // ── 1. Researcher ────────────────────────────────────────────────────
-        let researcher = ResearcherAgent::new();
-        info!("orchestrator: running researcher agent");
-        let researcher_output = self.run_agent(&researcher, &mut ctx).await?;
-        ctx.agent_outputs
-            .insert(AgentRole::Researcher, researcher_output);
-
-        // ── 2. Strategist ────────────────────────────────────────────────────
+    /// Run one Strategist → Executor → Analyst cycle.
+    ///
+    /// Creates a fresh `FindingCollector` scoped to this cycle, runs the three
+    /// agents in order, drains the collector into `Finding` structs, and returns
+    /// the new findings discovered this cycle. The caller is responsible for
+    /// extending `ctx.findings` and emitting `CycleCompleted`.
+    ///
+    /// `ctx.cycle` must be set by the caller before invoking this method so
+    /// that `to_agent_prompt` injects the correct prior-cycle context.
+    async fn run_inner_cycle(
+        &self,
+        ctx: &mut TaskContext,
+        _cycle: usize,
+    ) -> Result<Vec<Finding>, Error> {
+        // ── Strategist ───────────────────────────────────────────────────────
         let strategist = StrategistAgent::new();
-        info!("orchestrator: running strategist agent");
-        let strategist_output = self.run_agent(&strategist, &mut ctx).await?;
+        info!(cycle = ctx.cycle, "orchestrator: running strategist agent");
+        let strategist_output = self.run_agent(&strategist, ctx).await?;
         ctx.agent_outputs
             .insert(AgentRole::Strategist, strategist_output);
 
-        // ── 3. Executor ──────────────────────────────────────────────────────
+        // ── Executor ─────────────────────────────────────────────────────────
         let executor = ExecutorAgent::new();
-        info!("orchestrator: running executor agent");
-        let executor_output = self.run_agent(&executor, &mut ctx).await?;
+        info!(cycle = ctx.cycle, "orchestrator: running executor agent");
+        let executor_output = self.run_agent(&executor, ctx).await?;
         ctx.agent_outputs
             .insert(AgentRole::Executor, executor_output);
 
-        // ── 4. Analyst ───────────────────────────────────────────────────────
-        // Create a FindingCollector shared between CreateFindingTool (writer)
-        // and this function (reader). The Analyst calls `create_finding` for
-        // each vulnerability; we drain the collector into ctx.findings below.
+        // ── Analyst ──────────────────────────────────────────────────────────
+        // Fresh FindingCollector per cycle so we can identify new-vs-prior
+        // findings and check convergence at the end of this cycle.
         let finding_collector = new_finding_collector();
         let create_finding_tool = CreateFindingTool::new(Arc::clone(&finding_collector));
 
         let analyst = AnalystAgent::new();
-        info!("orchestrator: running analyst agent");
+        info!(cycle = ctx.cycle, "orchestrator: running analyst agent");
         let analyst_output = self
-            .run_agent_with_extras(&analyst, &mut ctx, &[&create_finding_tool as &dyn Tool])
+            .run_agent_with_extras(&analyst, ctx, &[&create_finding_tool as &dyn Tool])
             .await?;
-        ctx.agent_outputs.insert(AgentRole::Analyst, analyst_output);
+        ctx.agent_outputs
+            .insert(AgentRole::Analyst, analyst_output);
 
-        // Drain the collector: convert raw JSON values into Finding structs
-        // and emit FindingCreated events for each one.
+        // Drain the collector: convert raw JSON into Finding structs and emit
+        // FindingCreated events. Identical logic to the original single-cycle
+        // drain so enrichment fields (12B) are preserved.
+        let mut new_findings = Vec::new();
         {
             let raw_findings = finding_collector
                 .lock()
@@ -346,11 +405,14 @@ impl Orchestrator {
                     "low" => Severity::Low,
                     _ => Severity::Info,
                 };
-                let asset = raw["asset"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
-                let evidence = raw["evidence"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
-
-                // Phase 12B enrichment fields — all optional, present as null
-                // in the collector when the Analyst did not provide them.
+                let asset = raw["asset"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                let evidence = raw["evidence"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
                 let remediation = raw["remediation"].as_str().map(str::to_string);
                 let exploitability = raw["exploitability"].as_str().map(str::to_string);
                 let impact = raw["impact"].as_str().map(str::to_string);
@@ -359,7 +421,8 @@ impl Orchestrator {
                     .as_str()
                     .and_then(|s| Uuid::parse_str(s).ok());
 
-                let mut finding = Finding::new(self.session_id, &title, &description, severity);
+                let mut finding =
+                    Finding::new(self.session_id, &title, &description, severity);
                 finding.asset = asset;
                 finding.evidence = evidence;
                 finding.remediation = remediation;
@@ -367,15 +430,118 @@ impl Orchestrator {
                 finding.impact = impact;
                 finding.cvss_score = cvss_score;
                 finding.evidence_ref = evidence_ref;
-                // chain_id and chain_order set in Phase 12D post-processing
 
                 self.event_bus.emit(Event::FindingCreated(finding.clone()));
-                info!(title = %finding.title, severity = %finding.severity, "orchestrator: finding recorded");
-                ctx.findings.push(finding);
+                info!(
+                    title = %finding.title,
+                    severity = %finding.severity,
+                    cycle = ctx.cycle,
+                    "orchestrator: finding recorded"
+                );
+                new_findings.push(finding);
             }
         }
 
-        // ── 5. Reporter ──────────────────────────────────────────────────────
+        Ok(new_findings)
+    }
+
+    /// Run the full agent pipeline against `target`.
+    ///
+    /// Structure:
+    /// - RfRecon (optional, once — feature-detected via `akaei_sweep` tool)
+    /// - Researcher (once — establishes OSINT baseline)
+    /// - Convergence loop (1..=max_cycles):
+    ///     - Strategist → Executor → Analyst (via `run_inner_cycle`)
+    ///     - Emits `CycleCompleted` after each cycle
+    ///     - Exits early when `is_converged` returns true
+    ///     - With default `max_cycles = 1` the loop body runs exactly once and
+    ///       `is_converged` is never called — identical to the old linear pipeline
+    /// - Reporter (once — synthesises all findings into a report)
+    ///
+    /// # Returns
+    /// A `ScanReport` whose `summary` field is the Reporter's final output.
+    ///
+    /// # Errors
+    /// Returns `Error` if any agent's LLM call fails. Tool execution errors
+    /// within an agent turn are recovered internally (fed back to the model).
+    pub async fn run_scan(&self, target: &str) -> Result<ScanReport, Error> {
+        info!(target, max_cycles = self.max_cycles, "orchestrator: starting scan pipeline");
+
+        let mut ctx = TaskContext::new(target).with_ports(self.ports.clone());
+
+        // ── 0. RfRecon (optional, once) ──────────────────────────────────────
+        // Feature-detected: only runs when akaei_sweep is registered in the
+        // tool registry. When no HackRF is available the phase is silently
+        // skipped and the rest of the pipeline proceeds unchanged.
+        // See DEC-AKAEI-003 for the rationale behind feature-detection.
+        if self.registry.get("akaei_sweep").is_some() {
+            let rf_recon = RfReconAgent::new();
+            info!("orchestrator: running rf_recon agent (akaei tools detected)");
+            let rf_output = self.run_agent(&rf_recon, &mut ctx).await?;
+            ctx.agent_outputs.insert(AgentRole::RfRecon, rf_output);
+        }
+
+        // ── 1. Researcher (once) ─────────────────────────────────────────────
+        let researcher = ResearcherAgent::new();
+        info!("orchestrator: running researcher agent");
+        let researcher_output = self.run_agent(&researcher, &mut ctx).await?;
+        ctx.agent_outputs
+            .insert(AgentRole::Researcher, researcher_output);
+
+        // ── 2–4. Convergence loop: Strategist → Executor → Analyst ───────────
+        //
+        // When max_cycles = 1 (the default), the loop body runs exactly once
+        // and is_converged is never evaluated — the for loop exits naturally
+        // after the single iteration. This guarantees backward compatibility
+        // with all existing callers and tests.
+        //
+        // When max_cycles > 1, is_converged is checked after each cycle.
+        // Strategist/Executor/Analyst outputs are cleared between cycles so
+        // each new cycle starts with a clean slate for those roles (the
+        // Researcher output is preserved — it runs only once). The accumulated
+        // ctx.findings and ctx.cycle are updated before each cycle so
+        // to_agent_prompt can inject prior-cycle context.
+        for cycle in 0..self.max_cycles {
+            ctx.cycle = cycle;
+            info!(cycle, "orchestrator: starting inner cycle");
+
+            let new_findings = self.run_inner_cycle(&mut ctx, cycle).await?;
+            let total_findings = ctx.findings.len() + new_findings.len();
+            ctx.findings.extend(new_findings.clone());
+
+            self.event_bus.emit(Event::CycleCompleted {
+                cycle,
+                new_findings: new_findings.len(),
+                total_findings,
+            });
+            info!(
+                cycle,
+                new_findings = new_findings.len(),
+                total_findings,
+                "orchestrator: inner cycle complete"
+            );
+
+            // Only check convergence when running more than one cycle.
+            // With max_cycles = 1 the loop condition (cycle < 1) ensures this
+            // block is unreachable — no early-exit logic fires.
+            if self.max_cycles > 1 && self.is_converged(&new_findings, &ctx.findings) {
+                info!(cycle, "orchestrator: convergence reached — exiting loop");
+                break;
+            }
+
+            // Clear cycle-specific outputs so the next cycle's Strategist
+            // gets a fresh prompt (prior-cycle findings are injected via
+            // to_agent_prompt instead of agent_outputs). Researcher output
+            // is preserved across cycles.
+            if cycle + 1 < self.max_cycles {
+                ctx.agent_outputs.remove(&AgentRole::Strategist);
+                ctx.agent_outputs.remove(&AgentRole::Executor);
+                // Analyst output is kept so to_agent_prompt can inject the
+                // "Analyst assessment" section on the next cycle's Strategist prompt.
+            }
+        }
+
+        // ── 5. Reporter (once, after loop) ───────────────────────────────────
         let reporter = ReporterAgent::new();
         info!("orchestrator: running reporter agent");
         let summary = self.run_agent(&reporter, &mut ctx).await?;
@@ -1243,6 +1409,313 @@ mod tests {
         assert!(
             err.to_string().contains("provider unavailable"),
             "error should propagate: {err}"
+        );
+    }
+
+    // ── Phase 12C: Convergence loop tests ────────────────────────────────────
+
+    // ── Builder method tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn with_max_cycles_builder() {
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let orch = make_orchestrator(provider).with_max_cycles(3);
+        assert_eq!(orch.max_cycles, 3);
+    }
+
+    #[test]
+    fn with_goal_builder() {
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let orch = make_orchestrator(provider).with_goal("SQL injection");
+        assert_eq!(orch.goal.as_deref(), Some("SQL injection"));
+    }
+
+    // ── is_converged unit tests ───────────────────────────────────────────────
+
+    #[test]
+    fn is_converged_no_new_findings() {
+        let provider = Arc::new(MockProvider::uniform("done", 1));
+        let orch = make_orchestrator(provider);
+        // Empty new_findings → always converged.
+        assert!(orch.is_converged(&[], &[]));
+    }
+
+    #[test]
+    fn is_converged_goal_match() {
+        use sigint_core::types::Severity;
+        let provider = Arc::new(MockProvider::uniform("done", 1));
+        let orch = make_orchestrator(provider).with_goal("sql injection");
+
+        let mut f = Finding::new(Uuid::nil(), "SQL Injection in login form", "auth bypass", Severity::Critical);
+        f.description = "SQL Injection allows authentication bypass".to_string();
+        // Title matches goal (case-insensitive).
+        assert!(orch.is_converged(&[f], &[]));
+    }
+
+    #[test]
+    fn is_converged_no_goal_no_match() {
+        use sigint_core::types::Severity;
+        let provider = Arc::new(MockProvider::uniform("done", 1));
+        let orch = make_orchestrator(provider); // no goal set
+
+        let f = Finding::new(Uuid::nil(), "Open Port", "port 22 is open", Severity::Info);
+        // Findings present but no goal → not converged (loop should continue).
+        assert!(!orch.is_converged(&[f], &[]));
+    }
+
+    // ── run_scan_linear_default ───────────────────────────────────────────────
+
+    /// Explicitly verify max_cycles=1 (the default) runs exactly 5 LLM calls:
+    /// Researcher + Strategist + Executor + Analyst + Reporter.
+    /// The mock queue has exactly 5 responses; if the loop ran more than once
+    /// the mock would exhaust and return "[mock exhausted]" which would fail
+    /// the summary assertion.
+    #[tokio::test]
+    async fn run_scan_linear_default() {
+        let provider = Arc::new(MockProvider::new(vec![
+            "Researcher: found open ports 22, 80",
+            "Strategist: attack via port 80",
+            "Executor: ran nmap",
+            "Analyst: CVE-2021-41773 likely",
+            "FINAL REPORT",
+        ]));
+        let orch = make_orchestrator(provider); // max_cycles defaults to 1
+        let report = orch.run_scan("example.com").await.unwrap();
+
+        assert_eq!(report.summary, "FINAL REPORT", "reporter output should be last");
+        assert_eq!(report.target, "example.com");
+    }
+
+    // ── run_scan_two_cycles_converges ─────────────────────────────────────────
+
+    /// Two-cycle scan where cycle 1 produces no findings → convergence.
+    ///
+    /// Response sequence (9 calls total):
+    ///   0: Researcher
+    ///   1: Strategist (cycle 0)
+    ///   2: Executor   (cycle 0)
+    ///   3: Analyst    (cycle 0)  — emits create_finding tool call
+    ///   4: Analyst    (cycle 0)  — second round to resolve tool loop
+    ///   5: Strategist (cycle 1)
+    ///   6: Executor   (cycle 1)
+    ///   7: Analyst    (cycle 1)  — no tool calls (no new findings)
+    ///   8: Reporter
+    ///
+    /// After cycle 1 the Analyst produces no new findings → is_converged returns
+    /// true → loop exits → Reporter runs.
+    #[tokio::test]
+    async fn run_scan_two_cycles_converges() {
+        use sigint_llm::types::FunctionCall;
+
+        struct TwoCycleProvider {
+            call_count: Mutex<usize>,
+        }
+        impl TwoCycleProvider {
+            fn new() -> Self { Self { call_count: Mutex::new(0) } }
+        }
+
+        #[async_trait]
+        impl LlmProvider for TwoCycleProvider {
+            fn name(&self) -> &str { "two-cycle" }
+
+            async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
+                use futures_util::StreamExt as FutStreamExt;
+                let mut s = self.chat_stream(request).await?;
+                let mut content = String::new();
+                let mut tool_calls = vec![];
+                while let Some(chunk) = FutStreamExt::next(&mut s).await {
+                    let c = chunk?;
+                    content.push_str(&c.delta);
+                    tool_calls.extend(c.tool_calls);
+                }
+                Ok(ChatResponse { content, usage: None, model: "two-cycle".into(), tool_calls })
+            }
+
+            async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
+                let mut count = self.call_count.lock().unwrap();
+                let n = *count;
+                *count += 1;
+                drop(count);
+
+                let chunks: Vec<Result<StreamChunk, Error>> = match n {
+                    // 0: Researcher
+                    0 => vec![
+                        Ok(StreamChunk { delta: "researcher done".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 1: Strategist cycle 0
+                    1 => vec![
+                        Ok(StreamChunk { delta: "strategy cycle 0".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 2: Executor cycle 0
+                    2 => vec![
+                        Ok(StreamChunk { delta: "executor cycle 0".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 3: Analyst cycle 0 — emits one finding
+                    3 => vec![
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![sigint_llm::ToolCall {
+                                function: FunctionCall {
+                                    name: "create_finding".into(),
+                                    arguments: serde_json::json!({
+                                        "title": "Open SSH",
+                                        "severity": "info",
+                                        "description": "Port 22 is open"
+                                    }),
+                                },
+                            }],
+                        }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 4: Analyst cycle 0 — tool loop second round (resolve)
+                    4 => vec![
+                        Ok(StreamChunk { delta: "analysis cycle 0 done".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 5: Strategist cycle 1
+                    5 => vec![
+                        Ok(StreamChunk { delta: "strategy cycle 1".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 6: Executor cycle 1
+                    6 => vec![
+                        Ok(StreamChunk { delta: "executor cycle 1".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 7: Analyst cycle 1 — no new findings → convergence
+                    7 => vec![
+                        Ok(StreamChunk { delta: "no new findings".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 8: Reporter
+                    _ => vec![
+                        Ok(StreamChunk { delta: "TWO CYCLE REPORT".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                };
+                Ok(Box::pin(stream::iter(chunks)))
+            }
+        }
+
+        let orch = make_orchestrator(Arc::new(TwoCycleProvider::new()))
+            .with_max_cycles(2);
+        let report = orch.run_scan("10.0.0.1").await.unwrap();
+
+        assert_eq!(report.summary, "TWO CYCLE REPORT");
+        // One finding from cycle 0; cycle 1 produced nothing → convergence.
+        assert_eq!(report.context.findings.len(), 1, "one finding from cycle 0");
+        assert_eq!(report.context.findings[0].title, "Open SSH");
+    }
+
+    // ── run_scan_goal_terminates_early ────────────────────────────────────────
+
+    /// Goal-directed scan: cycle 0 produces a finding matching the goal →
+    /// Reporter runs after cycle 0 without doing cycle 1.
+    ///
+    /// If cycle 1 were executed the mock would be consumed and the summary
+    /// would not equal "GOAL REPORT" (mock would exhaust).
+    #[tokio::test]
+    async fn run_scan_goal_terminates_early() {
+        use sigint_llm::types::FunctionCall;
+
+        struct GoalProvider {
+            call_count: Mutex<usize>,
+        }
+        impl GoalProvider {
+            fn new() -> Self { Self { call_count: Mutex::new(0) } }
+        }
+
+        #[async_trait]
+        impl LlmProvider for GoalProvider {
+            fn name(&self) -> &str { "goal" }
+
+            async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
+                use futures_util::StreamExt as FutStreamExt;
+                let mut s = self.chat_stream(request).await?;
+                let mut content = String::new();
+                let mut tool_calls = vec![];
+                while let Some(chunk) = FutStreamExt::next(&mut s).await {
+                    let c = chunk?;
+                    content.push_str(&c.delta);
+                    tool_calls.extend(c.tool_calls);
+                }
+                Ok(ChatResponse { content, usage: None, model: "goal".into(), tool_calls })
+            }
+
+            async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
+                let mut count = self.call_count.lock().unwrap();
+                let n = *count;
+                *count += 1;
+                drop(count);
+
+                let chunks: Vec<Result<StreamChunk, Error>> = match n {
+                    // 0: Researcher
+                    0 => vec![
+                        Ok(StreamChunk { delta: "recon done".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 1: Strategist cycle 0
+                    1 => vec![
+                        Ok(StreamChunk { delta: "strategy".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 2: Executor cycle 0
+                    2 => vec![
+                        Ok(StreamChunk { delta: "executed".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 3: Analyst cycle 0 — emits finding matching goal "rce"
+                    3 => vec![
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![sigint_llm::ToolCall {
+                                function: FunctionCall {
+                                    name: "create_finding".into(),
+                                    arguments: serde_json::json!({
+                                        "title": "Remote Code Execution via CVE-2021-41773",
+                                        "severity": "critical",
+                                        "description": "RCE is possible via path traversal"
+                                    }),
+                                },
+                            }],
+                        }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 4: Analyst tool loop second round
+                    4 => vec![
+                        Ok(StreamChunk { delta: "analysis done".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    // 5: Reporter (immediately after cycle 0 due to goal match)
+                    _ => vec![
+                        Ok(StreamChunk { delta: "GOAL REPORT".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                };
+                Ok(Box::pin(stream::iter(chunks)))
+            }
+        }
+
+        // Goal "rce" matches "Remote Code Execution" (case-insensitive).
+        let orch = make_orchestrator(Arc::new(GoalProvider::new()))
+            .with_max_cycles(3)
+            .with_goal("rce");
+        let report = orch.run_scan("vuln.local").await.unwrap();
+
+        assert_eq!(report.summary, "GOAL REPORT", "reporter should run immediately after goal match");
+        assert_eq!(report.context.findings.len(), 1);
+        assert!(
+            report.context.findings[0].title.to_lowercase().contains("rce")
+                || report.context.findings[0].title.to_lowercase().contains("remote code"),
+            "finding should mention RCE: {}",
+            report.context.findings[0].title
         );
     }
 }

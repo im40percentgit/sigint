@@ -53,6 +53,14 @@ pub struct TaskContext {
     pub scan_results: Vec<ToolResult>,
     /// Text output from each agent, keyed by role.
     pub agent_outputs: HashMap<AgentRole, String>,
+    /// Current convergence loop cycle index (0-based).
+    ///
+    /// The Orchestrator increments this before each Strategist → Executor →
+    /// Analyst inner cycle. When `cycle > 0`, `to_agent_prompt` enriches the
+    /// Strategist and Executor prompts with accumulated prior-cycle findings and
+    /// the previous Analyst assessment so the model can revise its strategy.
+    /// Defaults to 0 — single-cycle scans (`max_cycles = 1`) never see cycle > 0.
+    pub cycle: usize,
 }
 
 impl TaskContext {
@@ -64,6 +72,7 @@ impl TaskContext {
             findings: Vec::new(),
             scan_results: Vec::new(),
             agent_outputs: HashMap::new(),
+            cycle: 0,
         }
     }
 
@@ -80,8 +89,11 @@ impl TaskContext {
     ///
     /// Each role receives only the context it needs:
     /// - **Researcher** — clean slate, just the target.
-    /// - **Strategist** — target + Researcher output.
-    /// - **Executor** — target + Strategist output.
+    /// - **Strategist** — target + Researcher output. On cycle > 0, also includes
+    ///   accumulated findings and previous Analyst assessment so the model can
+    ///   revise its attack strategy to focus on unexplored areas.
+    /// - **Executor** — target + Strategist output. On cycle > 0, notes that this
+    ///   is a re-execution pass with a revised strategy.
     /// - **Analyst** — target + Executor output.
     /// - **Reporter** — target + all prior agent outputs.
     pub fn to_agent_prompt(&self, agent: &dyn Agent) -> String {
@@ -115,14 +127,43 @@ impl TaskContext {
                 } else {
                     String::new()
                 };
-                format!(
+                let base = format!(
                     "Target: {}. Researcher findings:\n{}{}\n\n\
                      Based on the reconnaissance above, plan the attack strategy. \
                      Identify the most promising attack vectors (network and wireless), \
                      prioritise them by likelihood of success, and specify which tools \
                      to run and in what order.",
                     self.target, researcher_output, rf_section
-                )
+                );
+                // On cycle > 0, inject accumulated findings + prior Analyst output
+                // so the model can revise strategy rather than repeating itself.
+                if self.cycle > 0 {
+                    let findings_list = if self.findings.is_empty() {
+                        "(none yet)".to_string()
+                    } else {
+                        self.findings
+                            .iter()
+                            .map(|f| format!("- [{}] {}: {}", f.severity, f.title, f.description))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    };
+                    let analyst_output = self
+                        .agent_outputs
+                        .get(&AgentRole::Analyst)
+                        .map(String::as_str)
+                        .unwrap_or("(no prior analyst output)");
+                    format!(
+                        "{}\n\n## Previous Cycle Results\n\
+                         The following findings have been discovered so far:\n{}\n\n\
+                         Analyst assessment:\n{}\n\n\
+                         Based on these findings, revise your attack strategy. \
+                         Focus on unexplored areas or deeper exploitation of \
+                         discovered vulnerabilities.",
+                        base, findings_list, analyst_output
+                    )
+                } else {
+                    base
+                }
             }
             AgentRole::Executor => {
                 let strategist_output = self
@@ -137,6 +178,18 @@ impl TaskContext {
                      Report the raw output of each tool invocation.",
                     self.target, strategist_output
                 );
+                // On cycle > 0, note this is a re-execution pass so the model
+                // understands it should focus on the revised strategy.
+                let base = if self.cycle > 0 {
+                    format!(
+                        "{}\n\nNote: This is re-execution cycle {}. \
+                         Focus on the revised strategy above — avoid repeating \
+                         tool invocations that already yielded findings.",
+                        base, self.cycle
+                    )
+                } else {
+                    base
+                };
                 if let Some(ref ports) = self.ports {
                     format!(
                         "{}\n\nPort specification: {}. Pass this as the \"ports\" argument to nmap_scan.",

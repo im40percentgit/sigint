@@ -78,6 +78,17 @@ enum Commands {
         /// Maximum tool-call iterations per agent turn.
         #[arg(long, default_value = "10")]
         max_iterations: usize,
+        /// Maximum Strategist → Executor → Analyst cycles (convergence loop).
+        /// Defaults to 1 (linear pipeline, identical to previous behaviour).
+        /// Values > 1 enable iterative refinement until no new findings are
+        /// discovered or a goal keyword is matched.
+        #[arg(long, default_value = "1")]
+        max_cycles: usize,
+        /// Convergence goal: stop cycling as soon as any finding title or
+        /// description contains this string (case-insensitive). Only meaningful
+        /// when --max-cycles > 1.
+        #[arg(long)]
+        goal: Option<String>,
         /// Force TUI mode on (default: auto-detect via isatty).
         #[arg(long)]
         tui: bool,
@@ -217,9 +228,11 @@ async fn main() {
             ports,
             model,
             max_iterations,
+            max_cycles,
+            goal,
             tui,
             no_tui,
-        } => scan::run(core, target, ports, model, max_iterations, tui, no_tui).await,
+        } => scan::run(core, target, ports, model, max_iterations, max_cycles, goal, tui, no_tui).await,
         Commands::Campaign { action } => match action {
             CampaignAction::Run { file, model, no_tui } => {
                 campaign::run(core, file, model, no_tui).await

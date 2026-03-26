@@ -54,6 +54,8 @@ const DEFAULT_CONTEXT_WINDOW: usize = 8192;
 /// * `ports`          — Optional port specification forwarded to nmap (e.g. "80,443").
 /// * `model`          — Optional model override (uses config default if None).
 /// * `max_iterations` — Hard cap on tool-call rounds per agent turn.
+/// * `max_cycles`     — Maximum Strategist → Executor → Analyst cycles (default 1).
+/// * `goal`           — Optional convergence goal string (stops cycling on keyword match).
 /// * `force_tui`      — `--tui` flag: force TUI mode on.
 /// * `force_no_tui`   — `--no-tui` flag: force stdout mode.
 ///
@@ -67,6 +69,8 @@ pub async fn run(
     ports: Option<String>,
     model: Option<String>,
     max_iterations: usize,
+    max_cycles: usize,
+    goal: Option<String>,
     force_tui: bool,
     force_no_tui: bool,
 ) -> Result<(), Error> {
@@ -181,8 +185,13 @@ pub async fn run(
         model,
     )
     .with_max_iterations(max_iterations)
+    .with_max_cycles(max_cycles)
     .with_ports(ports)
     .with_session_id(scan_session_id);
+
+    if let Some(g) = goal {
+        orchestrator = orchestrator.with_goal(g);
+    }
 
     if let Some(memory) = memory_service {
         orchestrator = orchestrator.with_memory(memory);
@@ -432,6 +441,10 @@ mod tests {
             model: Option<String>,
             #[arg(long, default_value = "10")]
             max_iterations: usize,
+            #[arg(long, default_value = "1")]
+            max_cycles: usize,
+            #[arg(long)]
+            goal: Option<String>,
             #[arg(long)]
             tui: bool,
             #[arg(long)]
@@ -554,7 +567,7 @@ mod tests {
     #[ignore]
     async fn integration_scan_scanme_nmap_org() {
         let core = AppCore::default_for_test();
-        run(core, "scanme.nmap.org".into(), None, None, 3, false, true)
+        run(core, "scanme.nmap.org".into(), None, None, 3, 1, None, false, true)
             .await
             .expect("scan should complete without error");
     }
