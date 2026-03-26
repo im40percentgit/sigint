@@ -46,35 +46,54 @@ use tracing::warn;
 /// smaller models.
 const DEFAULT_CONTEXT_WINDOW: usize = 8192;
 
+/// Arguments for the `sigint scan` pipeline.
+///
+/// Bundled into a struct to keep `run()` under the 7-argument Clippy limit
+/// and to provide a stable API surface as new scan options are added.
+pub struct ScanArgs {
+    /// Hostname, IP, or CIDR range to scan.
+    pub target: String,
+    /// Optional port specification forwarded to nmap (e.g. "80,443").
+    pub ports: Option<String>,
+    /// Optional model override (uses config default if None).
+    pub model: Option<String>,
+    /// Hard cap on tool-call rounds per agent turn.
+    pub max_iterations: usize,
+    /// Maximum Strategist → Executor → Analyst cycles (default 1).
+    pub max_cycles: usize,
+    /// Optional convergence goal string (stops cycling on keyword match).
+    pub goal: Option<String>,
+    /// Whether to gate escalation tier transitions behind operator approval.
+    pub approval_gates: bool,
+    /// `--tui` flag: force TUI mode on.
+    pub force_tui: bool,
+    /// `--no-tui` flag: force stdout mode.
+    pub force_no_tui: bool,
+}
+
 /// Run the `sigint scan` pipeline.
 ///
 /// # Arguments
-/// * `core`           — Loaded AppCore (config + event bus).
-/// * `target`         — Hostname, IP, or CIDR range to scan.
-/// * `ports`          — Optional port specification forwarded to nmap (e.g. "80,443").
-/// * `model`          — Optional model override (uses config default if None).
-/// * `max_iterations` — Hard cap on tool-call rounds per agent turn.
-/// * `max_cycles`     — Maximum Strategist → Executor → Analyst cycles (default 1).
-/// * `goal`           — Optional convergence goal string (stops cycling on keyword match).
-/// * `force_tui`      — `--tui` flag: force TUI mode on.
-/// * `force_no_tui`   — `--no-tui` flag: force stdout mode.
+/// * `core` — Loaded AppCore (config + event bus).
+/// * `args` — Scan configuration (target, ports, model, cycles, etc.).
 ///
-/// TUI auto-detection: if neither flag is set, TUI is used when stdout is a
-/// terminal (isatty). In CI or when piped, falls back to stdout event printer.
+/// TUI auto-detection: if neither `force_tui` nor `force_no_tui` is set,
+/// TUI is used when stdout is a terminal (isatty). In CI or when piped,
+/// falls back to stdout event printer.
 ///
 /// @decision DEC-P3-003
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    core: AppCore,
-    target: String,
-    ports: Option<String>,
-    model: Option<String>,
-    max_iterations: usize,
-    max_cycles: usize,
-    goal: Option<String>,
-    force_tui: bool,
-    force_no_tui: bool,
-) -> Result<(), Error> {
+pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
+    let ScanArgs {
+        target,
+        ports,
+        model,
+        max_iterations,
+        max_cycles,
+        goal,
+        approval_gates,
+        force_tui,
+        force_no_tui,
+    } = args;
     let model = model.unwrap_or_else(|| core.config.llm.model.clone());
 
     // ── Banner ────────────────────────────────────────────────────────────────
@@ -188,7 +207,8 @@ pub async fn run(
     .with_max_iterations(max_iterations)
     .with_max_cycles(max_cycles)
     .with_ports(ports)
-    .with_session_id(scan_session_id);
+    .with_session_id(scan_session_id)
+    .with_approval_gates(approval_gates);
 
     if let Some(g) = goal {
         orchestrator = orchestrator.with_goal(g);
@@ -446,6 +466,8 @@ mod tests {
             max_cycles: usize,
             #[arg(long)]
             goal: Option<String>,
+            #[arg(long, default_value = "false")]
+            approval_gates: bool,
             #[arg(long)]
             tui: bool,
             #[arg(long)]
@@ -568,8 +590,18 @@ mod tests {
     #[ignore]
     async fn integration_scan_scanme_nmap_org() {
         let core = AppCore::default_for_test();
-        run(core, "scanme.nmap.org".into(), None, None, 3, 1, None, false, true)
-            .await
-            .expect("scan should complete without error");
+        run(core, ScanArgs {
+            target: "scanme.nmap.org".into(),
+            ports: None,
+            model: None,
+            max_iterations: 3,
+            max_cycles: 1,
+            goal: None,
+            approval_gates: false,
+            force_tui: false,
+            force_no_tui: true,
+        })
+        .await
+        .expect("scan should complete without error");
     }
 }

@@ -10,7 +10,7 @@
 //! to each receive a copy of every event without any subscriber blocking
 //! another. This decouples the UI layer from the core completely.
 
-use crate::types::{Asset, Finding, Message, Session, Task};
+use crate::types::{Asset, EscalationTier, Finding, Message, Session, Task};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -129,6 +129,39 @@ pub enum Event {
         new_findings: usize,
         /// Cumulative findings recorded across all cycles so far.
         total_findings: usize,
+    },
+    // ── Escalation gate events ────────────────────────────────────────────────
+    /// The Strategist recommended actions beyond the current escalation tier.
+    ///
+    /// Emitted when `--approval-gates` is enabled and the Strategist output
+    /// contains an `ESCALATION:` marker indicating a tier transition. Consumers
+    /// (TUI, operator UI) use this to prompt the operator for approval before
+    /// the Executor proceeds with potentially destructive actions.
+    EscalationRequested {
+        /// The current (safe) tier the scan is operating at.
+        from: EscalationTier,
+        /// The higher-risk tier the Strategist is recommending.
+        to: EscalationTier,
+        /// Zero-based cycle index when this request was raised.
+        cycle: usize,
+    },
+    /// An escalation request was approved by the operator.
+    ///
+    /// Emitted after `EscalationRequested` when the operator (or an automated
+    /// policy) approves the tier transition. The Executor will proceed with
+    /// the escalated actions.
+    EscalationApproved {
+        from: EscalationTier,
+        to: EscalationTier,
+    },
+    /// An escalation request was denied by the operator.
+    ///
+    /// Emitted when the operator denies (or a timeout fires on) an
+    /// `EscalationRequested` event. The Orchestrator skips the Executor and
+    /// Analyst for this cycle and attempts convergence with current findings.
+    EscalationDenied {
+        from: EscalationTier,
+        to: EscalationTier,
     },
 }
 

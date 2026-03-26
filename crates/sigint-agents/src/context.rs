@@ -38,7 +38,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use sigint_core::types::Finding;
+use sigint_core::types::{EscalationTier, Finding};
 use sigint_tools::result::ToolResult;
 use uuid::Uuid;
 
@@ -91,6 +91,13 @@ pub struct TaskContext {
     /// Empty when no database is attached or no executor records exist yet.
     #[serde(skip)]
     pub scan_record_refs: Vec<(Uuid, String, String)>,
+    /// Current escalation tier for this scan engagement.
+    ///
+    /// Starts at `Recon` and advances as the Strategist recommends more
+    /// invasive actions. When `--approval-gates` is enabled, the Orchestrator
+    /// pauses at each tier transition and waits for operator approval before
+    /// allowing the Executor to proceed. Defaults to `EscalationTier::Recon`.
+    pub current_tier: EscalationTier,
 }
 
 impl TaskContext {
@@ -104,6 +111,7 @@ impl TaskContext {
             agent_outputs: HashMap::new(),
             cycle: 0,
             scan_record_refs: Vec::new(),
+            current_tier: EscalationTier::Recon,
         }
     }
 

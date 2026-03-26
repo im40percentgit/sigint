@@ -57,7 +57,24 @@ impl Agent for StrategistAgent {
          \n\
          Your output is a structured attack plan. Be specific — vague plans waste the \
          Executor's time. Consider OWASP Top 10, PTES methodology, and MITRE ATT&CK \
-         when selecting attack vectors."
+         when selecting attack vectors.\n\
+         \n\
+         ## Escalation Markers\n\
+         \n\
+         When your plan includes actions beyond passive reconnaissance, you MUST emit an \
+         escalation marker on its own line to signal the required access level:\n\
+         \n\
+         - If recommending active exploitation (running exploits, attempting authentication \
+           bypass, injecting payloads, brute-forcing credentials, triggering vulnerabilities):\n\
+           emit exactly: ESCALATION: exploitation\n\
+         \n\
+         - If recommending post-exploitation actions (lateral movement, privilege escalation, \
+           data exfiltration, installing persistence, pivoting to internal networks):\n\
+           emit exactly: ESCALATION: post-exploitation\n\
+         \n\
+         Emit the highest applicable tier only. If your plan is purely reconnaissance \
+         (port scanning, service enumeration, OSINT, directory brute-force for discovery), \
+         do not emit any escalation marker."
     }
 
     fn allowed_tools(&self) -> &[String] {
@@ -106,5 +123,35 @@ mod tests {
         let b = StrategistAgent::default();
         assert_eq!(a.name(), b.name());
         assert_eq!(a.role(), b.role());
+    }
+
+    #[test]
+    fn strategist_prompt_includes_escalation_instructions() {
+        let agent = StrategistAgent::new();
+        let prompt = agent.system_prompt();
+
+        assert!(
+            prompt.contains("ESCALATION: exploitation"),
+            "prompt should contain exploitation escalation marker instruction: {prompt}"
+        );
+        assert!(
+            prompt.contains("ESCALATION: post-exploitation"),
+            "prompt should contain post-exploitation escalation marker instruction: {prompt}"
+        );
+        assert!(
+            prompt.to_lowercase().contains("escalation"),
+            "prompt should mention escalation: {prompt}"
+        );
+        // Verify the instructions distinguish the two tiers
+        assert!(
+            prompt.contains("lateral movement")
+                || prompt.contains("privilege escalation")
+                || prompt.contains("post-exploitation"),
+            "prompt should describe post-exploitation actions: {prompt}"
+        );
+        assert!(
+            prompt.contains("exploit") || prompt.contains("authentication bypass"),
+            "prompt should describe exploitation actions: {prompt}"
+        );
     }
 }

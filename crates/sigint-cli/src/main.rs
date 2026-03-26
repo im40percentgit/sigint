@@ -89,6 +89,12 @@ enum Commands {
         /// when --max-cycles > 1.
         #[arg(long)]
         goal: Option<String>,
+        /// Gate escalation tier transitions behind operator approval.
+        /// When set, the scan pauses if the Strategist recommends exploitation
+        /// or post-exploitation actions and waits for approval before proceeding.
+        /// Only meaningful when --max-cycles > 1 and the TUI/web approval UI is active.
+        #[arg(long, default_value = "false")]
+        approval_gates: bool,
         /// Force TUI mode on (default: auto-detect via isatty).
         #[arg(long)]
         tui: bool,
@@ -230,9 +236,20 @@ async fn main() {
             max_iterations,
             max_cycles,
             goal,
+            approval_gates,
             tui,
             no_tui,
-        } => scan::run(core, target, ports, model, max_iterations, max_cycles, goal, tui, no_tui).await,
+        } => scan::run(core, scan::ScanArgs {
+            target,
+            ports,
+            model,
+            max_iterations,
+            max_cycles,
+            goal,
+            approval_gates,
+            force_tui: tui,
+            force_no_tui: no_tui,
+        }).await,
         Commands::Campaign { action } => match action {
             CampaignAction::Run { file, model, no_tui } => {
                 campaign::run(core, file, model, no_tui).await
