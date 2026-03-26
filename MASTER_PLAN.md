@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 12 in progress — Iterative Convergence + Finding Intelligence
+**Current Phase:** Phase 12 completed — Iterative Convergence + Finding Intelligence
 
 ### Architecture
 
@@ -46,6 +46,7 @@ sigint/
 - Phase 7 completed — scan diff engine (7A), E2E integration tests (7B), graceful shutdown (7C)
 - Phase 8 completed — streaming reasoning (8A), interactive TUI sessions (8B), per-chunk streaming timeout
 - Phase 9 completed — session resume with auto-diff (9A), multi-target campaign mode (9B), report polish with executive summary + SVG chart (9C)
+- Phase 12 completed — iterative convergence loop, enriched findings, evidence linking, approval-gated escalation
 
 ---
 
@@ -764,16 +765,24 @@ Sub-phases:
 ---
 
 ### Phase 12: Iterative Convergence + Finding Intelligence
-**Status:** in_progress
-**Sub-phases:** 12A (Finding Model) → 12B (CreateFindingTool) → 12C (Convergence Loop) → 12D (Evidence Linking) → 12E (Approval-Gated Escalation)
+**Status:** completed
+**Sub-phases:** 12A (Finding Model) → 12B (CreateFindingTool) → 12C (Convergence Loop) → 12D (Evidence Linking) → 12E (Escalation Gates)
 **Plan:** `~/.claude/plans/bright-hopping-matsumoto.md`
 **Decision IDs:** DEC-LOOP-001, DEC-LOOP-002, DEC-LOOP-003, DEC-LOOP-004, DEC-LOOP-005, DEC-LOOP-006, DEC-FINDING-002
+**Definition of Done:**
+- Linear pipeline transformed into goal-driven convergence loop
+- `--max-cycles` and `--goal` CLI flags control iteration behavior
+- Finding model enriched with remediation, exploitability, impact, evidence_ref, CVSS score, attack chain grouping
+- CreateFindingTool schema extended with all enrichment fields + CVSS validation
+- Evidence linking: Analyst context includes scan_history record references for proof traceability
+- `--approval-gates` flag enables escalation tier detection and user approval at tier transitions
+- All non-integration tests pass
 
-- [x] Sub-Phase 12A: Enhanced Finding Model + Migration 8 — 6 new fields on Finding (remediation, exploitability, impact, evidence_ref, chain_id, chain_order), EscalationTier enum, migration 8
-- [ ] Sub-Phase 12B: Enhanced CreateFindingTool — extend tool schema with 5 enrichment fields (remediation, exploitability, impact, cvss_score, evidence_ref), CVSS validation, Analyst prompt enrichment, orchestrator drain extraction
-- [ ] Sub-Phase 12C: Convergence Loop — max_cycles, goal matching, run_inner_cycle, is_converged, CycleCompleted event
-- [ ] Sub-Phase 12D: Evidence Linking — scan_record_refs in context, get_scan_records_by_role query, evidence_ref validation
-- [ ] Sub-Phase 12E: Approval-Gated Escalation — tier detection, EscalationRequested event, ApprovalRegistry gate
+- [x] Sub-Phase 12A: Enhanced Finding model + Migration 8 — 6 new fields on Finding, EscalationTier enum, migration 8 (6 ALTER TABLE columns)
+- [x] Sub-Phase 12B: Enhanced CreateFindingTool — 5 optional enrichment properties, CVSS range validation, Analyst prompt enrichment
+- [x] Sub-Phase 12C: Convergence Loop — run_inner_cycle extraction, is_converged heuristic, CycleCompleted events, --max-cycles/--goal CLI
+- [x] Sub-Phase 12D: Evidence Linking — get_scan_records_by_role query, scan_record_refs in Analyst context, evidence_ref validation
+- [x] Sub-Phase 12E: Approval-Gated Escalation — detect_tier parsing, approval_gates toggle, EscalationRequested/Approved/Denied events, --approval-gates CLI
 
 ---
 
