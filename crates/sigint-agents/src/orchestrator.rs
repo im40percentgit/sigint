@@ -68,7 +68,7 @@ use uuid::Uuid;
 
 use sigint_core::{
     event::{Event, EventBus},
-    types::{Finding, Severity},
+    types::{EscalationTier, Finding, Severity},
     ApprovalRegistry, Error,
 };
 use sigint_llm::provider::LlmProvider;
@@ -163,6 +163,43 @@ pub struct Orchestrator {
     /// stop as soon as evidence is found, even if `max_cycles` hasn't been
     /// reached.
     goal: Option<String>,
+    /// Whether escalation approval gates are enabled (DEC-LOOP-004).
+    ///
+    /// When `true`, the Orchestrator pauses after each Strategist turn and
+    /// checks whether the output contains an `ESCALATION:` marker indicating
+    /// a tier transition. If the detected tier exceeds `ctx.current_tier` and
+    /// an `ApprovalRegistry` is configured, it emits `EscalationRequested`
+    /// and awaits the operator's decision before allowing the Executor to run.
+    ///
+    /// When `false` (the default), escalation markers are ignored — all tier
+    /// transitions proceed automatically. This preserves backward compatibility
+    /// with existing callers that do not opt in to gated escalation.
+    approval_gates: bool,
+}
+
+/// Parse Strategist output for escalation tier markers (DEC-LOOP-004).
+///
+/// Returns the highest tier detected. When both markers appear, PostExploitation
+/// wins because it is a superset of Exploitation. Defaults to `Recon` when no
+/// marker is found — pure reconnaissance plans do not emit any marker.
+///
+/// This is a standalone function (not an `Orchestrator` method) so it can be
+/// called directly in unit tests without constructing an Orchestrator.
+///
+/// @decision DEC-LOOP-004
+/// @title Escalation detected via string marker in Strategist output
+/// @status accepted
+/// @rationale Strategist is tool-free (DEC-AGENT-008); adding a dedicated
+/// tool would violate that constraint. String markers are parsed by the
+/// orchestrator after each Strategist completion to determine the tier.
+pub fn detect_tier(strategist_output: &str) -> EscalationTier {
+    if strategist_output.contains("ESCALATION: post-exploitation") {
+        EscalationTier::PostExploitation
+    } else if strategist_output.contains("ESCALATION: exploitation") {
+        EscalationTier::Exploitation
+    } else {
+        EscalationTier::Recon
+    }
 }
 
 impl Orchestrator {
@@ -197,6 +234,7 @@ impl Orchestrator {
             profile: None,
             max_cycles: 1,
             goal: None,
+            approval_gates: false,
         }
     }
 
@@ -314,6 +352,20 @@ impl Orchestrator {
         self
     }
 
+    /// Enable or disable escalation approval gates (DEC-LOOP-004).
+    ///
+    /// When `enabled` is `true`, the Orchestrator pauses at each escalation
+    /// tier transition detected in Strategist output and emits
+    /// `Event::EscalationRequested`. If an `ApprovalRegistry` is configured,
+    /// the cycle awaits operator approval before proceeding; without a registry
+    /// the event is emitted but execution continues (warning logged).
+    ///
+    /// Defaults to `false` — tier transitions proceed automatically.
+    pub fn with_approval_gates(mut self, enabled: bool) -> Self {
+        self.approval_gates = enabled;
+        self
+    }
+
     /// Check whether the convergence loop should stop after this cycle.
     ///
     /// Convergence is declared when either:
@@ -360,7 +412,89 @@ impl Orchestrator {
         info!(cycle = ctx.cycle, "orchestrator: running strategist agent");
         let strategist_output = self.run_agent(&strategist, ctx).await?;
         ctx.agent_outputs
-            .insert(AgentRole::Strategist, strategist_output);
+            .insert(AgentRole::Strategist, strategist_output.clone());
+
+        // ── Escalation gate (DEC-LOOP-004) ───────────────────────────────────
+        // Detect the tier the Strategist is recommending. If it exceeds the
+        // current tier AND approval gates are enabled, request operator approval
+        // before allowing the Executor to proceed.
+        let detected_tier = detect_tier(&strategist_output);
+        if detected_tier > ctx.current_tier {
+            if self.approval_gates {
+                info!(
+                    from = %ctx.current_tier,
+                    to = %detected_tier,
+                    cycle = ctx.cycle,
+                    "orchestrator: escalation detected — requesting approval"
+                );
+                self.event_bus.emit(Event::EscalationRequested {
+                    from: ctx.current_tier,
+                    to: detected_tier,
+                    cycle: ctx.cycle,
+                });
+
+                // If an ApprovalRegistry is configured, wait for the operator's
+                // decision (bounded by the registry timeout). Otherwise log a
+                // warning and proceed — gates without a registry are a no-op.
+                let approved = if let Some(ref registry) = self.approval_registry {
+                    let request_id = Uuid::new_v4();
+                    let rx = registry.request(request_id);
+                    let timeout = registry.timeout();
+                    match tokio::time::timeout(timeout, rx).await {
+                        Ok(Ok(decision)) => decision,
+                        Ok(Err(_)) => {
+                            // Sender dropped — treat as denial.
+                            info!("orchestrator: escalation approval sender dropped — denying");
+                            false
+                        }
+                        Err(_elapsed) => {
+                            // Timeout — treat as denial so the cycle can converge.
+                            info!(
+                                cycle = ctx.cycle,
+                                "orchestrator: escalation approval timed out — denying"
+                            );
+                            false
+                        }
+                    }
+                } else {
+                    info!(
+                        "orchestrator: approval gates enabled but no registry configured \
+                         — proceeding without gate (warning: approval gates have no effect \
+                         without an ApprovalRegistry)"
+                    );
+                    true
+                };
+
+                if !approved {
+                    self.event_bus.emit(Event::EscalationDenied {
+                        from: ctx.current_tier,
+                        to: detected_tier,
+                    });
+                    info!(
+                        from = %ctx.current_tier,
+                        to = %detected_tier,
+                        cycle = ctx.cycle,
+                        "orchestrator: escalation denied — skipping executor and analyst"
+                    );
+                    // Return empty findings so the outer loop sees no progress
+                    // and convergence is declared on the next check.
+                    return Ok(Vec::new());
+                }
+
+                self.event_bus.emit(Event::EscalationApproved {
+                    from: ctx.current_tier,
+                    to: detected_tier,
+                });
+                info!(
+                    from = %ctx.current_tier,
+                    to = %detected_tier,
+                    cycle = ctx.cycle,
+                    "orchestrator: escalation approved — proceeding"
+                );
+            }
+            // Always update the tier (whether gates are on or off).
+            ctx.current_tier = detected_tier;
+        }
 
         // ── Executor ─────────────────────────────────────────────────────────
         let executor = ExecutorAgent::new();
@@ -1716,6 +1850,123 @@ mod tests {
                 || report.context.findings[0].title.to_lowercase().contains("remote code"),
             "finding should mention RCE: {}",
             report.context.findings[0].title
+        );
+    }
+
+    // ── Phase 12E: detect_tier unit tests ────────────────────────────────────
+
+    #[test]
+    fn detect_tier_recon_no_marker() {
+        let output = "Run nmap -sV against the target. Also try gobuster for directory enum.";
+        assert_eq!(detect_tier(output), EscalationTier::Recon);
+    }
+
+    #[test]
+    fn detect_tier_recon_empty_output() {
+        assert_eq!(detect_tier(""), EscalationTier::Recon);
+    }
+
+    #[test]
+    fn detect_tier_exploitation() {
+        let output = "Plan to exploit CVE-2021-41773.\n\
+                      ESCALATION: exploitation\n\
+                      Run the exploit module against port 80.";
+        assert_eq!(detect_tier(output), EscalationTier::Exploitation);
+    }
+
+    #[test]
+    fn detect_tier_post_exploitation() {
+        let output = "Lateral movement to internal hosts.\n\
+                      ESCALATION: post-exploitation\n\
+                      Exfiltrate /etc/passwd.";
+        assert_eq!(detect_tier(output), EscalationTier::PostExploitation);
+    }
+
+    #[test]
+    fn detect_tier_both_markers_highest_wins() {
+        // When both markers appear, PostExploitation should win.
+        let output = "ESCALATION: exploitation\n\
+                      Then move laterally.\n\
+                      ESCALATION: post-exploitation";
+        assert_eq!(
+            detect_tier(output),
+            EscalationTier::PostExploitation,
+            "highest tier should win when both markers present"
+        );
+    }
+
+    #[test]
+    fn detect_tier_post_exploitation_before_exploitation_still_wins() {
+        // Order in string should not matter — PostExploitation always wins.
+        let output = "ESCALATION: post-exploitation\n\
+                      Also ESCALATION: exploitation mentioned.";
+        assert_eq!(detect_tier(output), EscalationTier::PostExploitation);
+    }
+
+    // ── Phase 12E: approval_gates builder test ────────────────────────────────
+
+    #[test]
+    fn with_approval_gates_builder_sets_field() {
+        let provider = Arc::new(MockProvider::uniform("done", 1));
+        let orch = make_orchestrator(provider).with_approval_gates(true);
+        assert!(
+            orch.approval_gates,
+            "with_approval_gates(true) should set approval_gates to true"
+        );
+    }
+
+    #[test]
+    fn with_approval_gates_defaults_to_false() {
+        let provider = Arc::new(MockProvider::uniform("done", 1));
+        let orch = make_orchestrator(provider);
+        assert!(
+            !orch.approval_gates,
+            "approval_gates should default to false"
+        );
+    }
+
+    // ── Phase 12E: approval gates off — tier transitions proceed freely ───────
+
+    #[tokio::test]
+    async fn approval_gates_off_escalation_proceeds_without_blocking() {
+        // Strategist emits an exploitation marker. With approval_gates=false
+        // (the default), the scan should complete without any pause — the
+        // Executor and Analyst run normally and the tier is updated in ctx.
+        let provider = Arc::new(MockProvider::new(vec![
+            "Researcher: found Apache 2.4 on port 80",
+            "Strategist: exploit CVE-2021-41773\nESCALATION: exploitation\nrun exploit.py",
+            "Executor: ran exploit, got shell",
+            "Analyst: confirmed RCE vulnerability",
+            "Reporter: ESCALATION_TEST_COMPLETE",
+        ]));
+
+        let orch = make_orchestrator(provider);
+        // approval_gates defaults to false — no gate should block.
+        let report = orch.run_scan("target.local").await.unwrap();
+        assert!(
+            report.summary.contains("ESCALATION_TEST_COMPLETE"),
+            "scan should complete normally when approval_gates=false: {}",
+            report.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn approval_gates_off_tier_updated_in_context() {
+        // Even with gates off, the detected tier should be written to ctx.current_tier.
+        let provider = Arc::new(MockProvider::new(vec![
+            "Researcher output",
+            "ESCALATION: post-exploitation\nLateral movement plan",
+            "Executor output",
+            "Analyst output",
+            "Reporter DONE",
+        ]));
+
+        let orch = make_orchestrator(provider);
+        let report = orch.run_scan("target.local").await.unwrap();
+        assert_eq!(
+            report.context.current_tier,
+            EscalationTier::PostExploitation,
+            "ctx.current_tier should be updated even when gates are off"
         );
     }
 }

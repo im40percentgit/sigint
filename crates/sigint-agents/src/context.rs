@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use sigint_core::types::Finding;
+use sigint_core::types::{EscalationTier, Finding};
 use sigint_tools::result::ToolResult;
 
 use crate::{agent::Agent, role::AgentRole};
@@ -61,6 +61,13 @@ pub struct TaskContext {
     /// the previous Analyst assessment so the model can revise its strategy.
     /// Defaults to 0 — single-cycle scans (`max_cycles = 1`) never see cycle > 0.
     pub cycle: usize,
+    /// Current escalation tier for this scan engagement.
+    ///
+    /// Starts at `Recon` and advances as the Strategist recommends more
+    /// invasive actions. When `--approval-gates` is enabled, the Orchestrator
+    /// pauses at each tier transition and waits for operator approval before
+    /// allowing the Executor to proceed. Defaults to `EscalationTier::Recon`.
+    pub current_tier: EscalationTier,
 }
 
 impl TaskContext {
@@ -73,6 +80,7 @@ impl TaskContext {
             scan_results: Vec::new(),
             agent_outputs: HashMap::new(),
             cycle: 0,
+            current_tier: EscalationTier::Recon,
         }
     }
 
