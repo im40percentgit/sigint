@@ -144,6 +144,49 @@ impl Database {
             Ok(records)
         })
     }
+
+    /// Return scan_history records for a session filtered by agent_role.
+    ///
+    /// Used by the Orchestrator after each Executor phase to build
+    /// `ctx.scan_record_refs` — a table of record IDs the Analyst can
+    /// reference in `evidence_ref` when raising findings.
+    ///
+    /// Only rows whose `agent_role` column exactly matches `role` are
+    /// returned. Rows with a NULL `agent_role` (created before migration 7)
+    /// are never matched.
+    ///
+    /// @decision DEC-LOOP-005
+    /// @title Evidence linking via post-processing DB query after Executor
+    /// @status accepted
+    /// @rationale Analyst needs all Executor records, not just the latest;
+    /// DB query is cleaner than plumbing IDs through the tool loop.
+    pub fn get_scan_records_by_role(
+        &self,
+        session_id: Uuid,
+        role: &str,
+    ) -> Result<Vec<ScanRecord>, Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, session_id, tool, args, output, exit_code, started_at, finished_at, agent_role
+                     FROM scan_history
+                     WHERE session_id = ?1 AND agent_role = ?2
+                     ORDER BY started_at ASC",
+                )
+                .map_err(|e| Error::Database(e.to_string()))?;
+
+            let records = stmt
+                .query_map(params![session_id.to_string(), role], |row| {
+                    Ok(row_to_scan_record(row))
+                })
+                .map_err(|e| Error::Database(e.to_string()))?
+                .filter_map(|r| r.ok())
+                .filter_map(|r| r.ok())
+                .collect();
+
+            Ok(records)
+        })
+    }
 }
 
 pub(crate) fn row_to_scan_record(row: &rusqlite::Row<'_>) -> Result<ScanRecord, Error> {
@@ -347,5 +390,89 @@ mod tests {
         let records = db.get_scan_records(session_id).unwrap();
         assert_eq!(records.len(), 1);
         assert!(records[0].agent_role.is_none());
+    }
+
+    // ── get_scan_records_by_role tests ─────────────────────────────────────────
+
+    #[test]
+    fn get_scan_records_by_role_returns_only_matching_role() {
+        let db = db();
+        let session_id = make_session(&db);
+
+        let mut executor_record = ScanRecord::new(session_id, "nmap_scan", r#"{"target":"10.0.0.1"}"#);
+        executor_record.agent_role = Some("executor".to_string());
+        executor_record.exit_code = Some(0);
+
+        let mut researcher_record = ScanRecord::new(session_id, "shell", r#"{"cmd":"whois"}"#);
+        researcher_record.agent_role = Some("researcher".to_string());
+        researcher_record.exit_code = Some(0);
+
+        db.create_scan_record(&executor_record).unwrap();
+        db.create_scan_record(&researcher_record).unwrap();
+
+        let executor_records = db.get_scan_records_by_role(session_id, "executor").unwrap();
+        assert_eq!(executor_records.len(), 1);
+        assert_eq!(executor_records[0].tool, "nmap_scan");
+        assert_eq!(executor_records[0].agent_role.as_deref(), Some("executor"));
+
+        let researcher_records = db.get_scan_records_by_role(session_id, "researcher").unwrap();
+        assert_eq!(researcher_records.len(), 1);
+        assert_eq!(researcher_records[0].tool, "shell");
+    }
+
+    #[test]
+    fn get_scan_records_by_role_excludes_null_role_rows() {
+        let db = db();
+        let session_id = make_session(&db);
+
+        // Row with no agent_role (NULL) should never match any role filter.
+        let null_role_record = ScanRecord::new(session_id, "nmap_scan", "{}");
+        db.create_scan_record(&null_role_record).unwrap();
+
+        let results = db.get_scan_records_by_role(session_id, "executor").unwrap();
+        assert!(
+            results.is_empty(),
+            "NULL agent_role rows should not match any role filter"
+        );
+    }
+
+    #[test]
+    fn get_scan_records_by_role_returns_empty_for_unknown_role() {
+        let db = db();
+        let session_id = make_session(&db);
+
+        let mut record = ScanRecord::new(session_id, "nmap_scan", "{}");
+        record.agent_role = Some("executor".to_string());
+        db.create_scan_record(&record).unwrap();
+
+        let results = db.get_scan_records_by_role(session_id, "nonexistent_role").unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn get_scan_records_by_role_isolated_by_session() {
+        let db = db();
+        let s1 = make_session(&db);
+
+        let s2_session = sigint_core::types::Session::new("session-2");
+        db.create_session(&s2_session).unwrap();
+        let s2 = s2_session.id;
+
+        let mut r1 = ScanRecord::new(s1, "nmap_scan", "{}");
+        r1.agent_role = Some("executor".to_string());
+
+        let mut r2 = ScanRecord::new(s2, "shell", "{}");
+        r2.agent_role = Some("executor".to_string());
+
+        db.create_scan_record(&r1).unwrap();
+        db.create_scan_record(&r2).unwrap();
+
+        let s1_results = db.get_scan_records_by_role(s1, "executor").unwrap();
+        assert_eq!(s1_results.len(), 1);
+        assert_eq!(s1_results[0].tool, "nmap_scan");
+
+        let s2_results = db.get_scan_records_by_role(s2, "executor").unwrap();
+        assert_eq!(s2_results.len(), 1);
+        assert_eq!(s2_results[0].tool, "shell");
     }
 }

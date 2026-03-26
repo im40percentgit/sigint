@@ -23,12 +23,24 @@
 //! Reporter needs everything). Role-aware formatting keeps each agent's initial
 //! context lean and purposeful. The tradeoff is a match arm per role, which is
 //! acceptable given the pipeline has exactly five fixed roles.
+//!
+//! @decision DEC-LOOP-005
+//! @title Evidence linking via scan_record_refs populated after Executor
+//! @status accepted
+//! @rationale The Analyst needs to know which scan_history record IDs are
+//! valid so it can set evidence_ref on findings. Rather than plumbing IDs
+//! through the tool loop (which would require ToolLoopOptions changes and
+//! cross-crate coupling), the Orchestrator queries the DB after the Executor
+//! phase and writes the refs into TaskContext. The Analyst prompt renders
+//! them as a reference table. The #[serde(skip)] annotation keeps them out
+//! of JSON serialisation — they are ephemeral per-scan data, not persisted state.
 
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use sigint_core::types::Finding;
 use sigint_tools::result::ToolResult;
+use uuid::Uuid;
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -61,6 +73,24 @@ pub struct TaskContext {
     /// the previous Analyst assessment so the model can revise its strategy.
     /// Defaults to 0 — single-cycle scans (`max_cycles = 1`) never see cycle > 0.
     pub cycle: usize,
+    /// Scan record references populated after each Executor phase.
+    ///
+    /// Each entry is `(record_id, tool_name, args_summary)` where:
+    /// - `record_id` is the UUID of the `scan_history` row
+    /// - `tool_name` is the tool that was invoked (e.g. `"nmap_scan"`)
+    /// - `args_summary` is a truncated JSON args string for display
+    ///
+    /// The Orchestrator queries `scan_history WHERE agent_role = 'executor'`
+    /// after the Executor completes and populates this field. The Analyst
+    /// prompt renders these as an EVIDENCE REFERENCES table so the LLM can
+    /// set `evidence_ref` in `create_finding` calls to a valid scan record ID.
+    ///
+    /// Validation in the orchestrator's finding drain clears any `evidence_ref`
+    /// that does not appear in this set.
+    ///
+    /// Empty when no database is attached or no executor records exist yet.
+    #[serde(skip)]
+    pub scan_record_refs: Vec<(Uuid, String, String)>,
 }
 
 impl TaskContext {
@@ -73,6 +103,7 @@ impl TaskContext {
             scan_results: Vec::new(),
             agent_outputs: HashMap::new(),
             cycle: 0,
+            scan_record_refs: Vec::new(),
         }
     }
 
@@ -205,13 +236,30 @@ impl TaskContext {
                     .get(&AgentRole::Executor)
                     .map(String::as_str)
                     .unwrap_or("(no executor output yet)");
-                format!(
+                let base = format!(
                     "Target: {}. Tool results:\n{}\n\n\
                      Analyse the tool output above. Identify security vulnerabilities, \
                      misconfigurations, and notable findings. Classify each finding by \
                      severity (critical/high/medium/low/info) and provide evidence.",
                     self.target, executor_output
-                )
+                );
+                // When the Orchestrator has populated scan_record_refs (requires DB),
+                // append an EVIDENCE REFERENCES table so the LLM can link findings to
+                // the specific tool invocation that produced the evidence.
+                if self.scan_record_refs.is_empty() {
+                    base
+                } else {
+                    let refs_table = self
+                        .scan_record_refs
+                        .iter()
+                        .map(|(id, tool, args)| format!("[{}] {}({})", id, tool, args))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!(
+                        "{}\n\nEVIDENCE REFERENCES (use the ID in the evidence_ref field of create_finding):\n{}",
+                        base, refs_table
+                    )
+                }
             }
             AgentRole::Reporter => {
                 let all_outputs = self.format_all_outputs();
@@ -331,6 +379,64 @@ mod tests {
             prompt.to_lowercase().contains("vulnerabilit")
                 || prompt.to_lowercase().contains("finding"),
             "analyst prompt should mention findings"
+        );
+    }
+
+    #[test]
+    fn analyst_prompt_includes_evidence_refs_when_populated() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs.insert(
+            AgentRole::Executor,
+            "PORT 22/tcp open ssh".to_string(),
+        );
+        let ref_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        ctx.scan_record_refs.push((
+            ref_id,
+            "nmap_scan".to_string(),
+            r#"{"target":"10.0.0.1"}"#.to_string(),
+        ));
+        let agent = AnalystAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            prompt.contains("EVIDENCE REFERENCES"),
+            "analyst prompt should contain evidence references header: {prompt}"
+        );
+        assert!(
+            prompt.contains("550e8400-e29b-41d4-a716-446655440000"),
+            "analyst prompt should contain the record UUID: {prompt}"
+        );
+        assert!(
+            prompt.contains("nmap_scan"),
+            "analyst prompt should contain the tool name: {prompt}"
+        );
+        assert!(
+            prompt.contains("evidence_ref"),
+            "analyst prompt should instruct use of evidence_ref field: {prompt}"
+        );
+    }
+
+    #[test]
+    fn analyst_prompt_omits_evidence_refs_when_empty() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs.insert(
+            AgentRole::Executor,
+            "PORT 22/tcp open ssh".to_string(),
+        );
+        // scan_record_refs is empty (no DB or no executor records).
+        let agent = AnalystAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            !prompt.contains("EVIDENCE REFERENCES"),
+            "analyst prompt should NOT contain evidence references when refs are empty: {prompt}"
+        );
+    }
+
+    #[test]
+    fn new_context_has_empty_scan_record_refs() {
+        let ctx = TaskContext::new("example.com");
+        assert!(
+            ctx.scan_record_refs.is_empty(),
+            "new context should have empty scan_record_refs"
         );
     }
 
