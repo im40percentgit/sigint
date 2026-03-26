@@ -102,7 +102,7 @@ fn time_of(ts: &str) -> &str {
         let after_t = &ts[t_pos + 1..];
         // Take up to the first '+', '-', or 'Z' after the time digits
         let end = after_t
-            .find(|c: char| c == '+' || c == 'Z')
+            .find(['+', 'Z'])
             .unwrap_or(after_t.len());
         // Return up to 8 chars (HH:MM:SS)
         let time_part = &after_t[..end.min(8)];
@@ -289,7 +289,7 @@ fn render_html(
 
 /// Capitalize each word in a snake_case or lowercase role name.
 fn capitalize_words(s: &str) -> String {
-    s.split(|c: char| c == '_' || c == ' ')
+    s.split(['_', ' '])
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {

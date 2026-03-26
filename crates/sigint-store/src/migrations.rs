@@ -216,6 +216,18 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         "scan_history: agent_role column",
         "ALTER TABLE scan_history ADD COLUMN agent_role TEXT",
     ),
+    (
+        8,
+        "findings: Phase 12A enrichment columns",
+        "
+        ALTER TABLE findings ADD COLUMN remediation TEXT;
+        ALTER TABLE findings ADD COLUMN exploitability TEXT;
+        ALTER TABLE findings ADD COLUMN impact TEXT;
+        ALTER TABLE findings ADD COLUMN evidence_ref TEXT;
+        ALTER TABLE findings ADD COLUMN chain_id TEXT;
+        ALTER TABLE findings ADD COLUMN chain_order INTEGER;
+        ",
+    ),
 ];
 
 /// Run all pending migrations against the given connection.
@@ -497,6 +509,78 @@ mod tests {
                 |row| row.get(0),
             ).unwrap();
             assert_eq!(score2, Some(9.5));
+
+            Ok(())
+        }).unwrap();
+    }
+
+    /// Migration 8 adds 6 enrichment columns to `findings`; all default to NULL.
+    #[test]
+    fn migration_8_adds_enrichment_columns_defaulting_to_null() {
+        use crate::Database;
+
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| {
+            // Insert a session (FK requirement).
+            conn.execute(
+                "INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params!["sess-m8", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+            ).unwrap();
+
+            // Insert a finding without the new columns — should work and all new cols = NULL.
+            conn.execute(
+                "INSERT INTO findings (id, session_id, title, description, severity, created_at)
+                 VALUES ('find-m8', 'sess-m8', 'Test', 'desc', 'info', '2026-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+
+            // Verify all 6 new columns default to NULL.
+            let (remediation, exploitability, impact, evidence_ref, chain_id, chain_order):
+                (Option<String>, Option<String>, Option<String>,
+                 Option<String>, Option<String>, Option<i64>) = conn.query_row(
+                "SELECT remediation, exploitability, impact, evidence_ref, chain_id, chain_order
+                 FROM findings WHERE id = 'find-m8'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,
+                           row.get(3)?, row.get(4)?, row.get(5)?)),
+            ).unwrap();
+
+            assert!(remediation.is_none(), "remediation should be NULL");
+            assert!(exploitability.is_none(), "exploitability should be NULL");
+            assert!(impact.is_none(), "impact should be NULL");
+            assert!(evidence_ref.is_none(), "evidence_ref should be NULL");
+            assert!(chain_id.is_none(), "chain_id should be NULL");
+            assert!(chain_order.is_none(), "chain_order should be NULL");
+
+            // Also verify we can write and read back non-NULL values.
+            conn.execute(
+                "INSERT INTO findings (id, session_id, title, description, severity, created_at,
+                                       remediation, exploitability, impact,
+                                       evidence_ref, chain_id, chain_order)
+                 VALUES ('find-m8b', 'sess-m8', 'Enriched', 'desc', 'high', '2026-01-01T00:00:01Z',
+                         'Patch it', 'public, no auth', 'Full DB dump',
+                         'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                         'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                         3)",
+                [],
+            ).unwrap();
+
+            let (rem, expl, imp, eref, cid, cord):
+                (Option<String>, Option<String>, Option<String>,
+                 Option<String>, Option<String>, Option<i64>) = conn.query_row(
+                "SELECT remediation, exploitability, impact, evidence_ref, chain_id, chain_order
+                 FROM findings WHERE id = 'find-m8b'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,
+                           row.get(3)?, row.get(4)?, row.get(5)?)),
+            ).unwrap();
+
+            assert_eq!(rem.as_deref(), Some("Patch it"));
+            assert_eq!(expl.as_deref(), Some("public, no auth"));
+            assert_eq!(imp.as_deref(), Some("Full DB dump"));
+            assert_eq!(eref.as_deref(), Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+            assert_eq!(cid.as_deref(), Some("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+            assert_eq!(cord, Some(3));
 
             Ok(())
         }).unwrap();

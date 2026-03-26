@@ -8,6 +8,11 @@
 //! may reference a specific asset (e.g. "10.0.0.1:443") or may be session-scoped.
 //! CASCADE DELETE on session_id means findings are automatically cleaned up when
 //! their parent session is removed.
+//!
+//! Phase 12A adds six enrichment columns: remediation, exploitability, impact
+//! (LLM-generated text), evidence_ref and chain_id (UUID FKs stored as TEXT),
+//! and chain_order (INTEGER ordering within an attack chain). All new columns
+//! are nullable and default to NULL for backward compatibility.
 
 use rusqlite::params;
 use sigint_core::{
@@ -23,8 +28,17 @@ impl Database {
     pub fn create_finding(&self, finding: &Finding) -> Result<(), Error> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO findings (id, session_id, title, description, severity, asset, evidence, created_at, cvss_score)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO findings (
+                     id, session_id, title, description, severity,
+                     asset, evidence, created_at, cvss_score,
+                     remediation, exploitability, impact,
+                     evidence_ref, chain_id, chain_order
+                 ) VALUES (
+                     ?1, ?2, ?3, ?4, ?5,
+                     ?6, ?7, ?8, ?9,
+                     ?10, ?11, ?12,
+                     ?13, ?14, ?15
+                 )",
                 params![
                     finding.id.to_string(),
                     finding.session_id.to_string(),
@@ -35,6 +49,12 @@ impl Database {
                     finding.evidence,
                     finding.created_at.to_rfc3339(),
                     finding.cvss_score,
+                    finding.remediation,
+                    finding.exploitability,
+                    finding.impact,
+                    finding.evidence_ref.map(|u| u.to_string()),
+                    finding.chain_id.map(|u| u.to_string()),
+                    finding.chain_order,
                 ],
             )
             .map_err(|e| Error::Database(format!("create_finding failed: {e}")))?;
@@ -47,7 +67,10 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, session_id, title, description, severity, asset, evidence, created_at, cvss_score
+                    "SELECT id, session_id, title, description, severity,
+                            asset, evidence, created_at, cvss_score,
+                            remediation, exploitability, impact,
+                            evidence_ref, chain_id, chain_order
                      FROM findings WHERE session_id = ?1
                      ORDER BY created_at ASC",
                 )
@@ -77,7 +100,13 @@ pub(crate) fn severity_from_str(s: &str) -> Severity {
     }
 }
 
+/// Map a SQLite row to a `Finding`.
+///
+/// Column order must match the SELECT used in `get_findings` and
+/// `FindingQuery::list`. Columns 0–8 are the original fields;
+/// columns 9–14 are the Phase 12A enrichment additions.
 pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> {
+    // ── original columns (0–8) ───────────────────────────────────────────────
     let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
     let session_id_str: String = row.get(1).map_err(|e| Error::Database(e.to_string()))?;
     let title: String = row.get(2).map_err(|e| Error::Database(e.to_string()))?;
@@ -88,6 +117,16 @@ pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> 
     let created_at_str: String = row.get(7).map_err(|e| Error::Database(e.to_string()))?;
     let cvss_score: Option<f32> = row.get(8).map_err(|e| Error::Database(e.to_string()))?;
 
+    // ── Phase 12A enrichment columns (9–14) ──────────────────────────────────
+    let remediation: Option<String> = row.get(9).map_err(|e| Error::Database(e.to_string()))?;
+    let exploitability: Option<String> = row.get(10).map_err(|e| Error::Database(e.to_string()))?;
+    let impact: Option<String> = row.get(11).map_err(|e| Error::Database(e.to_string()))?;
+    let evidence_ref_str: Option<String> =
+        row.get(12).map_err(|e| Error::Database(e.to_string()))?;
+    let chain_id_str: Option<String> = row.get(13).map_err(|e| Error::Database(e.to_string()))?;
+    let chain_order: Option<i32> = row.get(14).map_err(|e| Error::Database(e.to_string()))?;
+
+    // ── parse UUIDs ──────────────────────────────────────────────────────────
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid UUID '{id_str}': {e}")))?;
     let session_id = Uuid::parse_str(&session_id_str)
@@ -95,6 +134,22 @@ pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> 
     let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .map_err(|e| Error::Database(format!("Invalid timestamp: {e}")))?;
+
+    let evidence_ref = evidence_ref_str
+        .as_deref()
+        .map(|s| {
+            Uuid::parse_str(s)
+                .map_err(|e| Error::Database(format!("Invalid evidence_ref UUID '{s}': {e}")))
+        })
+        .transpose()?;
+
+    let chain_id = chain_id_str
+        .as_deref()
+        .map(|s| {
+            Uuid::parse_str(s)
+                .map_err(|e| Error::Database(format!("Invalid chain_id UUID '{s}': {e}")))
+        })
+        .transpose()?;
 
     Ok(Finding {
         id,
@@ -106,6 +161,12 @@ pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> 
         evidence,
         created_at,
         cvss_score,
+        remediation,
+        exploitability,
+        impact,
+        evidence_ref,
+        chain_id,
+        chain_order,
     })
 }
 
@@ -172,7 +233,8 @@ mod tests {
     fn finding_with_cvss_score_roundtrips() {
         let db = db();
         let sid = make_session(&db);
-        let mut f = Finding::new(sid, "RCE", "Remote code execution via log4j", Severity::Critical);
+        let mut f =
+            Finding::new(sid, "RCE", "Remote code execution via log4j", Severity::Critical);
         f.cvss_score = Some(7.5);
         db.create_finding(&f).unwrap();
 
@@ -192,5 +254,98 @@ mod tests {
         let findings = db.get_findings(sid).unwrap();
         assert_eq!(findings.len(), 1);
         assert!(findings[0].cvss_score.is_none());
+    }
+
+    // ── Phase 12A enrichment field tests ─────────────────────────────────────
+
+    /// All new fields default to None when not set (backward compat).
+    #[test]
+    fn finding_new_enrichment_fields_default_to_none() {
+        let db = db();
+        let sid = make_session(&db);
+        let f = Finding::new(sid, "Banner Leak", "Server header exposes version", Severity::Low);
+        db.create_finding(&f).unwrap();
+
+        let findings = db.get_findings(sid).unwrap();
+        assert_eq!(findings.len(), 1);
+        let found = &findings[0];
+        assert!(found.remediation.is_none(), "remediation should be None");
+        assert!(found.exploitability.is_none(), "exploitability should be None");
+        assert!(found.impact.is_none(), "impact should be None");
+        assert!(found.evidence_ref.is_none(), "evidence_ref should be None");
+        assert!(found.chain_id.is_none(), "chain_id should be None");
+        assert!(found.chain_order.is_none(), "chain_order should be None");
+    }
+
+    /// All enrichment fields roundtrip correctly when populated.
+    #[test]
+    fn finding_with_all_enrichment_fields_roundtrips() {
+        let db = db();
+        let sid = make_session(&db);
+        let evidence_ref = Uuid::new_v4();
+        let chain_id = Uuid::new_v4();
+
+        let mut f = Finding::new(sid, "SQLi", "Union-based SQL injection", Severity::Critical);
+        f.cvss_score = Some(9.8);
+        f.remediation = Some("Use parameterized queries; disable error reporting".to_string());
+        f.exploitability = Some("publicly accessible, no authentication required".to_string());
+        f.impact = Some("Full database exfiltration, authentication bypass".to_string());
+        f.evidence_ref = Some(evidence_ref);
+        f.chain_id = Some(chain_id);
+        f.chain_order = Some(1);
+
+        db.create_finding(&f).unwrap();
+
+        let findings = db.get_findings(sid).unwrap();
+        assert_eq!(findings.len(), 1);
+        let found = &findings[0];
+
+        assert_eq!(
+            found.remediation.as_deref(),
+            Some("Use parameterized queries; disable error reporting")
+        );
+        assert_eq!(
+            found.exploitability.as_deref(),
+            Some("publicly accessible, no authentication required")
+        );
+        assert_eq!(
+            found.impact.as_deref(),
+            Some("Full database exfiltration, authentication bypass")
+        );
+        assert_eq!(found.evidence_ref, Some(evidence_ref));
+        assert_eq!(found.chain_id, Some(chain_id));
+        assert_eq!(found.chain_order, Some(1));
+        assert_eq!(found.cvss_score, Some(9.8));
+    }
+
+    /// Multiple findings in the same chain are retrievable and ordered.
+    #[test]
+    fn finding_chain_roundtrips() {
+        let db = db();
+        let sid = make_session(&db);
+        let chain_id = Uuid::new_v4();
+
+        let mut f1 = Finding::new(sid, "Recon: open port 22", "SSH exposed", Severity::Info);
+        f1.chain_id = Some(chain_id);
+        f1.chain_order = Some(0);
+
+        let mut f2 = Finding::new(sid, "Exploit: weak SSH key", "RSA-1024 in use", Severity::High);
+        f2.chain_id = Some(chain_id);
+        f2.chain_order = Some(1);
+
+        db.create_finding(&f1).unwrap();
+        db.create_finding(&f2).unwrap();
+
+        let findings = db.get_findings(sid).unwrap();
+        assert_eq!(findings.len(), 2);
+
+        // Both share the same chain_id
+        assert_eq!(findings[0].chain_id, Some(chain_id));
+        assert_eq!(findings[1].chain_id, Some(chain_id));
+
+        // chain_order values preserved
+        let orders: Vec<_> = findings.iter().map(|f| f.chain_order).collect();
+        assert!(orders.contains(&Some(0)));
+        assert!(orders.contains(&Some(1)));
     }
 }
