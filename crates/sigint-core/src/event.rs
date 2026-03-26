@@ -116,6 +116,20 @@ pub enum Event {
     ScanDiffCompleted {
         diff: crate::diff::ScanDiff,
     },
+    // ── Convergence loop events ───────────────────────────────────────────────
+    /// One Strategist → Executor → Analyst cycle has completed.
+    ///
+    /// Emitted by the Orchestrator after each convergence cycle. Consumers
+    /// (TUI, Web) can use this to display live cycle progress and finding counts
+    /// as the iterative loop runs toward convergence.
+    CycleCompleted {
+        /// Zero-based cycle index.
+        cycle: usize,
+        /// Number of new findings discovered in this cycle.
+        new_findings: usize,
+        /// Cumulative findings recorded across all cycles so far.
+        total_findings: usize,
+    },
 }
 
 /// Handle to the broadcast event bus.
