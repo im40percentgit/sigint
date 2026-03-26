@@ -38,6 +38,20 @@
 //! `Finding` requires a `session_id` UUID that only the orchestrator knows.
 //! The raw JSON values are converted to `Finding` structs in the orchestrator
 //! after the tool loop exits.
+//!
+//! @decision DEC-FINDING-002
+//! @title Phase 12B enrichment fields are optional in both schema and execute()
+//! @status accepted
+//! @rationale All five new fields (remediation, exploitability, impact,
+//! cvss_score, evidence_ref) are optional in the JSON schema so that existing
+//! calls without them continue to work without modification. CVSS score is the
+//! only field with a validation constraint (0.0–10.0) because out-of-range
+//! values indicate a model error worth surfacing immediately. The remaining
+//! fields are free-form strings — the Analyst is trusted to produce meaningful
+//! content given the enriched system prompt. Fields missing from the call are
+//! stored as JSON null in the collector so the orchestrator drain logic can use
+//! a consistent `.as_str()` / `.as_f64()` access pattern regardless of whether
+//! the field was provided.
 
 use std::sync::{Arc, Mutex};
 
@@ -67,8 +81,9 @@ pub fn new_finding_collector() -> FindingCollector {
 /// Tool that the Analyst LLM calls to record each structured security finding.
 ///
 /// Call this once per distinct vulnerability or misconfiguration. The finding
-/// data is validated (severity enum), stored in the shared collector, and a
-/// confirmation message is returned to the model so it can continue reasoning.
+/// data is validated (severity enum, CVSS range), stored in the shared
+/// collector, and a confirmation message is returned to the model so it can
+/// continue reasoning.
 pub struct CreateFindingTool {
     /// Shared collector written by this tool, drained by the orchestrator.
     collector: FindingCollector,
@@ -119,6 +134,30 @@ impl Tool for CreateFindingTool {
                     "asset": {
                         "type": "string",
                         "description": "Affected asset (IP, hostname, URL, service name)"
+                    },
+                    "remediation": {
+                        "type": "string",
+                        "description": "Recommended fix or mitigation steps for this vulnerability"
+                    },
+                    "exploitability": {
+                        "type": "string",
+                        "description": "How easily this vulnerability can be exploited \
+                                        (e.g., requires authentication, publicly accessible, \
+                                        requires local access)"
+                    },
+                    "impact": {
+                        "type": "string",
+                        "description": "Business or technical impact if this vulnerability is exploited"
+                    },
+                    "cvss_score": {
+                        "type": "number",
+                        "description": "CVSS v3.1 base score (0.0-10.0). Provide when you can \
+                                        confidently assess the score based on the evidence."
+                    },
+                    "evidence_ref": {
+                        "type": "string",
+                        "description": "UUID of the scan_history record that produced the \
+                                        primary evidence for this finding"
                     }
                 },
                 "required": ["title", "severity", "description"]
@@ -127,7 +166,7 @@ impl Tool for CreateFindingTool {
     }
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
-        // Validate required fields.
+        // ── Required fields ───────────────────────────────────────────────────
         let title = args
             .get("title")
             .and_then(|v| v.as_str())
@@ -159,19 +198,46 @@ impl Tool for CreateFindingTool {
             }
         }
 
+        // ── Optional base fields ─────────────────────────────────────────────
         let evidence = args
             .get("evidence")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let asset = args.get("asset").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Build the raw finding value and push to the collector.
+        // ── Optional enrichment fields (Phase 12B) ───────────────────────────
+        let remediation = args.get("remediation").and_then(|v| v.as_str());
+        let exploitability = args.get("exploitability").and_then(|v| v.as_str());
+        let impact = args.get("impact").and_then(|v| v.as_str());
+        let evidence_ref = args.get("evidence_ref").and_then(|v| v.as_str());
+
+        // cvss_score: present as JSON number, validated to [0.0, 10.0].
+        let cvss_score_raw = args.get("cvss_score").and_then(|v| v.as_f64());
+        if let Some(score) = cvss_score_raw {
+            if !(0.0..=10.0).contains(&score) {
+                return Err(ToolError::InvalidArgument {
+                    name: "cvss_score".into(),
+                    expected: format!(
+                        "a number in the range 0.0-10.0, got {score}"
+                    ),
+                });
+            }
+        }
+
+        // Build the raw finding value. Enrichment fields use null when absent
+        // so the orchestrator can use a uniform access pattern on the drained
+        // values without special-casing missing keys.
         let finding_data = json!({
             "title": title,
             "severity": severity,
             "description": description,
             "evidence": evidence,
             "asset": asset,
+            "remediation": remediation,
+            "exploitability": exploitability,
+            "impact": impact,
+            "cvss_score": cvss_score_raw,
+            "evidence_ref": evidence_ref,
         });
 
         {
@@ -212,6 +278,8 @@ mod tests {
         let tool = CreateFindingTool::new(Arc::clone(&collector));
         (tool, collector)
     }
+
+    // ── Existing tests (backward compat) ─────────────────────────────────────
 
     #[tokio::test]
     async fn execute_valid_finding_returns_confirmation() {
@@ -380,5 +448,179 @@ mod tests {
         let data = result.structured_data.unwrap();
         assert_eq!(data["title"], "XSS");
         assert_eq!(data["severity"], "high");
+    }
+
+    // ── New tests: Phase 12B enrichment fields ────────────────────────────────
+
+    #[tokio::test]
+    async fn execute_with_enriched_fields() {
+        let (tool, collector) = make_tool();
+        let args = json!({
+            "title": "SQL Injection",
+            "severity": "critical",
+            "description": "Unparameterised query in login form allows authentication bypass",
+            "evidence": "' OR '1'='1 returned 200 OK with admin dashboard",
+            "asset": "10.0.0.1:443/login",
+            "remediation": "Use parameterized queries or prepared statements. Never interpolate user input into SQL.",
+            "exploitability": "publicly accessible, no authentication required",
+            "impact": "Full database access; attacker can read, modify, or delete all records",
+            "cvss_score": 9.8,
+            "evidence_ref": "550e8400-e29b-41d4-a716-446655440000"
+        });
+        let result = tool.execute(args).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("[CRITICAL]"));
+
+        let guard = collector.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        let data = &guard[0];
+        assert_eq!(
+            data["remediation"],
+            "Use parameterized queries or prepared statements. Never interpolate user input into SQL."
+        );
+        assert_eq!(data["exploitability"], "publicly accessible, no authentication required");
+        assert_eq!(
+            data["impact"],
+            "Full database access; attacker can read, modify, or delete all records"
+        );
+        assert_eq!(data["cvss_score"], 9.8);
+        assert_eq!(data["evidence_ref"], "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[tokio::test]
+    async fn execute_with_cvss_score() {
+        let (tool, collector) = make_tool();
+        let args = json!({
+            "title": "Weak TLS",
+            "severity": "medium",
+            "description": "Server accepts TLS 1.0 connections",
+            "cvss_score": 5.3
+        });
+        let result = tool.execute(args).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+
+        let guard = collector.lock().unwrap();
+        let score = guard[0]["cvss_score"].as_f64().expect("cvss_score should be a number");
+        assert!((score - 5.3).abs() < 0.001, "expected 5.3, got {score}");
+    }
+
+    #[tokio::test]
+    async fn execute_cvss_score_at_boundaries_accepted() {
+        // 0.0 and 10.0 are valid boundary values
+        for score in [0.0_f64, 10.0_f64] {
+            let (tool, _) = make_tool();
+            let args = json!({
+                "title": "Test",
+                "severity": "info",
+                "description": "boundary test",
+                "cvss_score": score
+            });
+            let result = tool.execute(args).await;
+            assert!(result.is_ok(), "cvss_score={score} should be accepted");
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_cvss_out_of_range_high_returns_error() {
+        let (tool, _) = make_tool();
+        let args = json!({
+            "title": "Test",
+            "severity": "high",
+            "description": "desc",
+            "cvss_score": 10.1
+        });
+        let err = tool.execute(args).await.unwrap_err();
+        assert!(
+            err.to_string().contains("cvss_score"),
+            "error should mention 'cvss_score': {err}"
+        );
+        assert!(
+            err.to_string().contains("10.1"),
+            "error should include the invalid value: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_cvss_out_of_range_negative_returns_error() {
+        let (tool, _) = make_tool();
+        let args = json!({
+            "title": "Test",
+            "severity": "low",
+            "description": "desc",
+            "cvss_score": -1.0
+        });
+        let err = tool.execute(args).await.unwrap_err();
+        assert!(
+            err.to_string().contains("cvss_score"),
+            "error should mention 'cvss_score': {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_with_evidence_ref() {
+        let (tool, collector) = make_tool();
+        let uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let args = json!({
+            "title": "Open Port",
+            "severity": "info",
+            "description": "Port 22 open",
+            "evidence_ref": uuid
+        });
+        let result = tool.execute(args).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+
+        let guard = collector.lock().unwrap();
+        assert_eq!(guard[0]["evidence_ref"], uuid);
+    }
+
+    #[tokio::test]
+    async fn enrichment_fields_absent_when_not_provided() {
+        // Calls without new fields must still work; absent fields are null in JSON.
+        let (tool, collector) = make_tool();
+        let args = json!({
+            "title": "Test Finding",
+            "severity": "low",
+            "description": "minimal call"
+        });
+        tool.execute(args).await.unwrap();
+
+        let guard = collector.lock().unwrap();
+        // Keys are present but their values are JSON null
+        assert!(guard[0]["remediation"].is_null());
+        assert!(guard[0]["exploitability"].is_null());
+        assert!(guard[0]["impact"].is_null());
+        assert!(guard[0]["cvss_score"].is_null());
+        assert!(guard[0]["evidence_ref"].is_null());
+    }
+
+    #[test]
+    fn tool_definition_has_enrichment_properties() {
+        let collector = new_finding_collector();
+        let tool = CreateFindingTool::new(collector);
+        let def = tool.definition();
+        let props = def
+            .function
+            .parameters
+            .get("properties")
+            .expect("properties should be present");
+        for field in ["remediation", "exploitability", "impact", "cvss_score", "evidence_ref"] {
+            assert!(
+                props.get(field).is_some(),
+                "schema should define property '{field}'"
+            );
+        }
+        // New fields must NOT appear in required — they are optional
+        let required = def
+            .function
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required should be an array");
+        for field in ["remediation", "exploitability", "impact", "cvss_score", "evidence_ref"] {
+            assert!(
+                !required.iter().any(|v| v == field),
+                "'{field}' must not be in required array"
+            );
+        }
     }
 }

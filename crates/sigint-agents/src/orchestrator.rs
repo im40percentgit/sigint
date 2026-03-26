@@ -349,9 +349,25 @@ impl Orchestrator {
                 let asset = raw["asset"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
                 let evidence = raw["evidence"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
 
+                // Phase 12B enrichment fields — all optional, present as null
+                // in the collector when the Analyst did not provide them.
+                let remediation = raw["remediation"].as_str().map(str::to_string);
+                let exploitability = raw["exploitability"].as_str().map(str::to_string);
+                let impact = raw["impact"].as_str().map(str::to_string);
+                let cvss_score = raw["cvss_score"].as_f64().map(|f| f as f32);
+                let evidence_ref = raw["evidence_ref"]
+                    .as_str()
+                    .and_then(|s| Uuid::parse_str(s).ok());
+
                 let mut finding = Finding::new(self.session_id, &title, &description, severity);
                 finding.asset = asset;
                 finding.evidence = evidence;
+                finding.remediation = remediation;
+                finding.exploitability = exploitability;
+                finding.impact = impact;
+                finding.cvss_score = cvss_score;
+                finding.evidence_ref = evidence_ref;
+                // chain_id and chain_order set in Phase 12D post-processing
 
                 self.event_bus.emit(Event::FindingCreated(finding.clone()));
                 info!(title = %finding.title, severity = %finding.severity, "orchestrator: finding recorded");
@@ -994,6 +1010,215 @@ mod tests {
         ));
         let report = orch.run_scan("infra.local").await.unwrap();
         assert_eq!(report.target, "infra.local");
+    }
+
+    // ── Phase 12B: enriched finding drain tests ──────────────────────────────
+
+    /// A provider that emits a `create_finding` tool call on the 4th LLM turn
+    /// (the Analyst), then returns text responses for all other turns.
+    ///
+    /// The 4th call (index 3, 0-based) returns a StreamChunk with a
+    /// `create_finding` tool call carrying all enrichment fields.  A 5th call
+    /// then returns a plain text "done" so the tool loop can resolve.  The 6th
+    /// call (Reporter) returns the final text summary.
+    struct FindingCallProvider {
+        call_count: Mutex<usize>,
+    }
+
+    impl FindingCallProvider {
+        fn new() -> Self {
+            Self { call_count: Mutex::new(0) }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for FindingCallProvider {
+        fn name(&self) -> &str { "finding-call" }
+
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
+            use futures_util::StreamExt as FutStreamExt;
+            let mut s = self.chat_stream(request).await?;
+            let mut content = String::new();
+            let mut tool_calls = vec![];
+            while let Some(chunk) = FutStreamExt::next(&mut s).await {
+                let c = chunk?;
+                content.push_str(&c.delta);
+                tool_calls.extend(c.tool_calls);
+            }
+            Ok(ChatResponse { content, usage: None, model: "finding-call".into(), tool_calls })
+        }
+
+        async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
+            use sigint_llm::types::FunctionCall;
+            let mut count = self.call_count.lock().unwrap();
+            let n = *count;
+            *count += 1;
+            drop(count);
+
+            let chunks: Vec<Result<StreamChunk, Error>> = match n {
+                // Turns 0-2: Researcher, Strategist, Executor — plain text
+                0 | 1 | 2 => vec![
+                    Ok(StreamChunk { delta: "done".into(), done: false, usage: None, tool_calls: vec![] }),
+                    Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                ],
+                // Turn 3: Analyst — emits create_finding tool call with enrichment
+                3 => vec![
+                    Ok(StreamChunk {
+                        delta: String::new(),
+                        done: false,
+                        usage: None,
+                        tool_calls: vec![sigint_llm::ToolCall {
+                            function: FunctionCall {
+                                name: "create_finding".into(),
+                                arguments: serde_json::json!({
+                                    "title": "SQL Injection",
+                                    "severity": "critical",
+                                    "description": "Unparameterised query allows auth bypass",
+                                    "evidence": "' OR 1=1 -> 200 OK",
+                                    "asset": "10.0.0.1:443/login",
+                                    "remediation": "Use parameterized queries",
+                                    "exploitability": "publicly accessible",
+                                    "impact": "full DB access",
+                                    "cvss_score": 9.8,
+                                    "evidence_ref": "550e8400-e29b-41d4-a716-446655440000"
+                                }),
+                            },
+                        }],
+                    }),
+                    Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                ],
+                // Turn 4: Analyst tool-loop second round — plain text to resolve loop
+                4 => vec![
+                    Ok(StreamChunk { delta: "analysis complete".into(), done: false, usage: None, tool_calls: vec![] }),
+                    Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                ],
+                // Turn 5: Reporter
+                _ => vec![
+                    Ok(StreamChunk { delta: "FINAL REPORT".into(), done: false, usage: None, tool_calls: vec![] }),
+                    Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                ],
+            };
+            Ok(Box::pin(stream::iter(chunks)))
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_extracts_enrichment_fields_from_raw_json() {
+        // Analyst emits create_finding with all Phase 12B enrichment fields.
+        // Verify the orchestrator drain sets them on the Finding struct.
+        let orch = make_orchestrator(Arc::new(FindingCallProvider::new()));
+        let report = orch.run_scan("10.0.0.1").await.unwrap();
+
+        assert_eq!(report.context.findings.len(), 1, "one finding should be recorded");
+        let f = &report.context.findings[0];
+
+        assert_eq!(f.title, "SQL Injection");
+        assert_eq!(
+            f.remediation.as_deref(),
+            Some("Use parameterized queries"),
+            "remediation should be extracted"
+        );
+        assert_eq!(
+            f.exploitability.as_deref(),
+            Some("publicly accessible"),
+            "exploitability should be extracted"
+        );
+        assert_eq!(
+            f.impact.as_deref(),
+            Some("full DB access"),
+            "impact should be extracted"
+        );
+        assert!(
+            (f.cvss_score.unwrap() - 9.8_f32).abs() < 0.01,
+            "cvss_score should be 9.8, got {:?}",
+            f.cvss_score
+        );
+        assert_eq!(
+            f.evidence_ref,
+            Some(uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
+            "evidence_ref should be parsed as UUID"
+        );
+        // chain_id/chain_order not set in 12B
+        assert!(f.chain_id.is_none());
+        assert!(f.chain_order.is_none());
+    }
+
+    #[tokio::test]
+    async fn drain_handles_missing_enrichment_fields_gracefully() {
+        // Analyst emits create_finding with only required fields (no enrichment).
+        // Verify the drain sets enrichment fields to None without panicking.
+        struct MinimalFindingProvider { call_count: Mutex<usize> }
+        impl MinimalFindingProvider { fn new() -> Self { Self { call_count: Mutex::new(0) } } }
+
+        #[async_trait]
+        impl LlmProvider for MinimalFindingProvider {
+            fn name(&self) -> &str { "minimal" }
+            async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, Error> {
+                use futures_util::StreamExt as FutStreamExt;
+                let mut s = self.chat_stream(req).await?;
+                let mut content = String::new();
+                let mut tool_calls = vec![];
+                while let Some(c) = FutStreamExt::next(&mut s).await {
+                    let c = c?;
+                    content.push_str(&c.delta);
+                    tool_calls.extend(c.tool_calls);
+                }
+                Ok(ChatResponse { content, usage: None, model: "minimal".into(), tool_calls })
+            }
+            async fn chat_stream(&self, _req: ChatRequest) -> Result<ChunkStream, Error> {
+                use sigint_llm::types::FunctionCall;
+                let mut count = self.call_count.lock().unwrap();
+                let n = *count;
+                *count += 1;
+                drop(count);
+
+                let chunks: Vec<Result<StreamChunk, Error>> = match n {
+                    0 | 1 | 2 => vec![
+                        Ok(StreamChunk { delta: "done".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    3 => vec![
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![sigint_llm::ToolCall {
+                                function: FunctionCall {
+                                    name: "create_finding".into(),
+                                    arguments: serde_json::json!({
+                                        "title": "Open Port",
+                                        "severity": "info",
+                                        "description": "Port 22 is open"
+                                    }),
+                                },
+                            }],
+                        }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    4 => vec![
+                        Ok(StreamChunk { delta: "done".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                    _ => vec![
+                        Ok(StreamChunk { delta: "report".into(), done: false, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    ],
+                };
+                Ok(Box::pin(stream::iter(chunks)))
+            }
+        }
+
+        let orch = make_orchestrator(Arc::new(MinimalFindingProvider::new()));
+        let report = orch.run_scan("10.0.0.1").await.unwrap();
+
+        assert_eq!(report.context.findings.len(), 1);
+        let f = &report.context.findings[0];
+        assert_eq!(f.title, "Open Port");
+        assert!(f.remediation.is_none(), "remediation should be None when absent");
+        assert!(f.exploitability.is_none());
+        assert!(f.impact.is_none());
+        assert!(f.cvss_score.is_none());
+        assert!(f.evidence_ref.is_none());
     }
 
     #[tokio::test]
