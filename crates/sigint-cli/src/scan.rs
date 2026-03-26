@@ -63,6 +63,7 @@ const DEFAULT_CONTEXT_WINDOW: usize = 8192;
 /// terminal (isatty). In CI or when piped, falls back to stdout event printer.
 ///
 /// @decision DEC-P3-003
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     core: AppCore,
     target: String,
