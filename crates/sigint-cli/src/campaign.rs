@@ -200,14 +200,16 @@ pub async fn run(
                     record.exit_code = Some(0);
                     record.finished_at = Some(chrono::Utc::now().to_rfc3339());
                     if let Err(e) = persist_db.create_scan_record(&record) {
-                        warn!("campaign: cannot persist scan record for {}: {e}", ct.target);
+                        warn!(
+                            "campaign: cannot persist scan record for {}: {e}",
+                            ct.target
+                        );
                     }
                 }
 
                 // Store episode summary for future recall.
                 if let Ok(mem_db) = Database::open(&db_path) {
-                    let svc =
-                        MemoryService::new_without_embeddings(mem_db, context_window / 5);
+                    let svc = MemoryService::new_without_embeddings(mem_db, context_window / 5);
                     if let Err(e) = svc.store_episode(session_id, &report.summary) {
                         warn!("Failed to store episode summary: {e}");
                     }
@@ -260,9 +262,15 @@ pub async fn status(core: AppCore, prefix: String) -> Result<(), Error> {
     if let Some(ref fp) = campaign.file_path {
         println!("  File      : {}", fp);
     }
-    println!("  Created   : {}", campaign.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!(
+        "  Created   : {}",
+        campaign.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+    );
     if let Some(completed) = campaign.completed_at {
-        println!("  Completed : {}", completed.format("%Y-%m-%d %H:%M:%S UTC"));
+        println!(
+            "  Completed : {}",
+            completed.format("%Y-%m-%d %H:%M:%S UTC")
+        );
     } else {
         println!("  Status    : in progress");
     }
@@ -393,10 +401,7 @@ mod tests {
         cf.validate().unwrap();
         assert_eq!(cf.targets.len(), 3);
         assert_eq!(cf.targets[2].profile, "default");
-        assert_eq!(
-            cf.profiles["infra"].max_iterations,
-            Some(20)
-        );
+        assert_eq!(cf.profiles["infra"].max_iterations, Some(20));
     }
 
     #[test]

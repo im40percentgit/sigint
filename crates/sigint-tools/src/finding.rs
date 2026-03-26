@@ -191,18 +191,13 @@ impl Tool for CreateFindingTool {
             other => {
                 return Err(ToolError::InvalidArgument {
                     name: "severity".into(),
-                    expected: format!(
-                        "one of critical/high/medium/low/info, got '{other}'"
-                    ),
+                    expected: format!("one of critical/high/medium/low/info, got '{other}'"),
                 });
             }
         }
 
         // ── Optional base fields ─────────────────────────────────────────────
-        let evidence = args
-            .get("evidence")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let evidence = args.get("evidence").and_then(|v| v.as_str()).unwrap_or("");
         let asset = args.get("asset").and_then(|v| v.as_str()).unwrap_or("");
 
         // ── Optional enrichment fields (Phase 12B) ───────────────────────────
@@ -217,9 +212,7 @@ impl Tool for CreateFindingTool {
             if !(0.0..=10.0).contains(&score) {
                 return Err(ToolError::InvalidArgument {
                     name: "cvss_score".into(),
-                    expected: format!(
-                        "a number in the range 0.0-10.0, got {score}"
-                    ),
+                    expected: format!("a number in the range 0.0-10.0, got {score}"),
                 });
             }
         }
@@ -250,11 +243,7 @@ impl Tool for CreateFindingTool {
         }
 
         Ok(ToolResult {
-            stdout: format!(
-                "Finding recorded: [{}] {}",
-                severity.to_uppercase(),
-                title
-            ),
+            stdout: format!("Finding recorded: [{}] {}", severity.to_uppercase(), title),
             stderr: String::new(),
             exit_code: 0,
             duration: std::time::Duration::from_millis(0),
@@ -478,7 +467,10 @@ mod tests {
             data["remediation"],
             "Use parameterized queries or prepared statements. Never interpolate user input into SQL."
         );
-        assert_eq!(data["exploitability"], "publicly accessible, no authentication required");
+        assert_eq!(
+            data["exploitability"],
+            "publicly accessible, no authentication required"
+        );
         assert_eq!(
             data["impact"],
             "Full database access; attacker can read, modify, or delete all records"
@@ -500,7 +492,9 @@ mod tests {
         assert_eq!(result.exit_code, 0);
 
         let guard = collector.lock().unwrap();
-        let score = guard[0]["cvss_score"].as_f64().expect("cvss_score should be a number");
+        let score = guard[0]["cvss_score"]
+            .as_f64()
+            .expect("cvss_score should be a number");
         assert!((score - 5.3).abs() < 0.001, "expected 5.3, got {score}");
     }
 
@@ -603,7 +597,13 @@ mod tests {
             .parameters
             .get("properties")
             .expect("properties should be present");
-        for field in ["remediation", "exploitability", "impact", "cvss_score", "evidence_ref"] {
+        for field in [
+            "remediation",
+            "exploitability",
+            "impact",
+            "cvss_score",
+            "evidence_ref",
+        ] {
             assert!(
                 props.get(field).is_some(),
                 "schema should define property '{field}'"
@@ -616,7 +616,13 @@ mod tests {
             .get("required")
             .and_then(|r| r.as_array())
             .expect("required should be an array");
-        for field in ["remediation", "exploitability", "impact", "cvss_score", "evidence_ref"] {
+        for field in [
+            "remediation",
+            "exploitability",
+            "impact",
+            "cvss_score",
+            "evidence_ref",
+        ] {
             assert!(
                 !required.iter().any(|v| v == field),
                 "'{field}' must not be in required array"

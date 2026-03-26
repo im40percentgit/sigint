@@ -326,7 +326,9 @@ mod tests {
     #[test]
     fn execute_echo_in_sandbox() {
         if !sandbox_available() {
-            eprintln!("SKIP execute_echo_in_sandbox: sandbox probe failed (user namespaces unavailable)");
+            eprintln!(
+                "SKIP execute_echo_in_sandbox: sandbox probe failed (user namespaces unavailable)"
+            );
             return;
         }
         let out = SandboxedCommand::new("/bin/echo")

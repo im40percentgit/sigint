@@ -120,13 +120,11 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
 
     let tui_handle = if use_tui {
         match sigint_tui::TuiApp::new(core.events.subscribe(), core.events.sender()) {
-            Ok(tui) => {
-                Some(tokio::spawn(async move {
-                    if let Err(e) = tui.run().await {
-                        tracing::error!("TUI error: {e}");
-                    }
-                }))
-            }
+            Ok(tui) => Some(tokio::spawn(async move {
+                if let Err(e) = tui.run().await {
+                    tracing::error!("TUI error: {e}");
+                }
+            })),
             Err(e) => {
                 warn!("TUI init failed, falling back to stdout: {e}");
                 spawn_stdout_printer(core.events.subscribe());
@@ -590,17 +588,20 @@ mod tests {
     #[ignore]
     async fn integration_scan_scanme_nmap_org() {
         let core = AppCore::default_for_test();
-        run(core, ScanArgs {
-            target: "scanme.nmap.org".into(),
-            ports: None,
-            model: None,
-            max_iterations: 3,
-            max_cycles: 1,
-            goal: None,
-            approval_gates: false,
-            force_tui: false,
-            force_no_tui: true,
-        })
+        run(
+            core,
+            ScanArgs {
+                target: "scanme.nmap.org".into(),
+                ports: None,
+                model: None,
+                max_iterations: 3,
+                max_cycles: 1,
+                goal: None,
+                approval_gates: false,
+                force_tui: false,
+                force_no_tui: true,
+            },
+        )
         .await
         .expect("scan should complete without error");
     }

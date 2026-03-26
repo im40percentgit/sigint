@@ -621,7 +621,10 @@ mod tests {
     fn escalation_tier_display() {
         assert_eq!(EscalationTier::Recon.to_string(), "recon");
         assert_eq!(EscalationTier::Exploitation.to_string(), "exploitation");
-        assert_eq!(EscalationTier::PostExploitation.to_string(), "post-exploitation");
+        assert_eq!(
+            EscalationTier::PostExploitation.to_string(),
+            "post-exploitation"
+        );
     }
 
     #[test]

@@ -107,8 +107,7 @@ mod tests {
             "prompt should mention RF/spectrum: {prompt}"
         );
         assert!(
-            prompt.to_lowercase().contains("hackrf")
-                || prompt.to_lowercase().contains("akaei"),
+            prompt.to_lowercase().contains("hackrf") || prompt.to_lowercase().contains("akaei"),
             "prompt should mention HackRF or akaei: {prompt}"
         );
     }

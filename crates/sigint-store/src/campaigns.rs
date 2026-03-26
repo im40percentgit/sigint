@@ -154,7 +154,8 @@ fn row_to_campaign(row: &rusqlite::Row<'_>) -> Result<Campaign, Error> {
     let name: String = row.get(1).map_err(|e| Error::Database(e.to_string()))?;
     let file_path: Option<String> = row.get(2).map_err(|e| Error::Database(e.to_string()))?;
     let created_at_str: String = row.get(3).map_err(|e| Error::Database(e.to_string()))?;
-    let completed_at_str: Option<String> = row.get(4).map_err(|e| Error::Database(e.to_string()))?;
+    let completed_at_str: Option<String> =
+        row.get(4).map_err(|e| Error::Database(e.to_string()))?;
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid UUID '{}': {}", id_str, e)))?;
@@ -270,7 +271,10 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let result = db.get_campaign_by_prefix("zzzzzzzz");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No campaign found"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No campaign found"));
     }
 
     #[test]

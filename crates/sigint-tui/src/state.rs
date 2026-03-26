@@ -277,7 +277,10 @@ impl AppState {
             Event::Shutdown => {
                 self.should_quit = true;
             }
-            Event::UserInput { session_id: _, text } => {
+            Event::UserInput {
+                session_id: _,
+                text,
+            } => {
                 self.messages.push(DisplayMessage {
                     role: "user".to_string(),
                     content: text,
@@ -344,13 +347,17 @@ impl AppState {
             finding.title.to_lowercase(),
             finding.asset.clone().unwrap_or_default(),
         );
-        if diff.new.iter().any(|f| {
-            (f.title.to_lowercase(), f.asset.clone().unwrap_or_default()) == key
-        }) {
+        if diff
+            .new
+            .iter()
+            .any(|f| (f.title.to_lowercase(), f.asset.clone().unwrap_or_default()) == key)
+        {
             DiffStatus::New
-        } else if diff.fixed.iter().any(|f| {
-            (f.title.to_lowercase(), f.asset.clone().unwrap_or_default()) == key
-        }) {
+        } else if diff
+            .fixed
+            .iter()
+            .any(|f| (f.title.to_lowercase(), f.asset.clone().unwrap_or_default()) == key)
+        {
             DiffStatus::Fixed
         } else {
             DiffStatus::Unchanged

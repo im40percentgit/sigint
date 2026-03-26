@@ -138,12 +138,11 @@ impl Tool for AkaeiFingerprintTool {
             .as_str()
             .ok_or_else(|| ToolError::MissingArgument("action".to_string()))?;
 
-        let action = FingerprintAction::from_str(action_str).ok_or_else(|| {
-            ToolError::InvalidArgument {
+        let action =
+            FingerprintAction::from_str(action_str).ok_or_else(|| ToolError::InvalidArgument {
                 name: "action".to_string(),
                 expected: "one of: classify, list".to_string(),
-            }
-        })?;
+            })?;
 
         let db = args["db_path"]
             .as_str()

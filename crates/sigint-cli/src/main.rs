@@ -164,7 +164,8 @@ async fn main() {
         1 => "sigint=debug,warn".to_string(),
         _ => "sigint=trace,debug".to_string(),
     };
-    let env_filter = EnvFilter::try_from_env("SIGINT_LOG").unwrap_or_else(|_| EnvFilter::new(filter));
+    let env_filter =
+        EnvFilter::try_from_env("SIGINT_LOG").unwrap_or_else(|_| EnvFilter::new(filter));
 
     // Determine whether a TUI will be active for this invocation.
     // ratatui occupies the alternate screen on stderr, so any tracing output
@@ -172,9 +173,17 @@ async fn main() {
     // redirect the subscriber to a log file instead.
     let tui_active = match &cli.command {
         Commands::Scan { tui, no_tui, .. } => {
-            if *no_tui { false } else if *tui { true } else { std::io::stderr().is_terminal() }
+            if *no_tui {
+                false
+            } else if *tui {
+                true
+            } else {
+                std::io::stderr().is_terminal()
+            }
         }
-        Commands::Campaign { action: CampaignAction::Run { no_tui, .. } } => !no_tui && std::io::stderr().is_terminal(),
+        Commands::Campaign {
+            action: CampaignAction::Run { no_tui, .. },
+        } => !no_tui && std::io::stderr().is_terminal(),
         _ => false,
     };
 
@@ -239,24 +248,30 @@ async fn main() {
             approval_gates,
             tui,
             no_tui,
-        } => scan::run(core, scan::ScanArgs {
-            target,
-            ports,
-            model,
-            max_iterations,
-            max_cycles,
-            goal,
-            approval_gates,
-            force_tui: tui,
-            force_no_tui: no_tui,
-        }).await,
+        } => {
+            scan::run(
+                core,
+                scan::ScanArgs {
+                    target,
+                    ports,
+                    model,
+                    max_iterations,
+                    max_cycles,
+                    goal,
+                    approval_gates,
+                    force_tui: tui,
+                    force_no_tui: no_tui,
+                },
+            )
+            .await
+        }
         Commands::Campaign { action } => match action {
-            CampaignAction::Run { file, model, no_tui } => {
-                campaign::run(core, file, model, no_tui).await
-            }
-            CampaignAction::Status { campaign: prefix } => {
-                campaign::status(core, prefix).await
-            }
+            CampaignAction::Run {
+                file,
+                model,
+                no_tui,
+            } => campaign::run(core, file, model, no_tui).await,
+            CampaignAction::Status { campaign: prefix } => campaign::status(core, prefix).await,
         },
         Commands::Diff(args) => diff::run(core, args).await,
         Commands::Log(args) => log::run(core, args).await,

@@ -125,12 +125,11 @@ impl Tool for AkaeiFreqdbTool {
             .as_str()
             .ok_or_else(|| ToolError::MissingArgument("action".to_string()))?;
 
-        let action = FreqdbAction::from_str(action_str).ok_or_else(|| {
-            ToolError::InvalidArgument {
+        let action =
+            FreqdbAction::from_str(action_str).ok_or_else(|| ToolError::InvalidArgument {
                 name: "action".to_string(),
                 expected: "one of: search, list, categories".to_string(),
-            }
-        })?;
+            })?;
 
         let mut cmd_args: Vec<String> = vec![action_str.to_string()];
 

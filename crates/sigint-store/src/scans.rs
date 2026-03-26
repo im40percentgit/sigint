@@ -399,7 +399,8 @@ mod tests {
         let db = db();
         let session_id = make_session(&db);
 
-        let mut executor_record = ScanRecord::new(session_id, "nmap_scan", r#"{"target":"10.0.0.1"}"#);
+        let mut executor_record =
+            ScanRecord::new(session_id, "nmap_scan", r#"{"target":"10.0.0.1"}"#);
         executor_record.agent_role = Some("executor".to_string());
         executor_record.exit_code = Some(0);
 
@@ -415,7 +416,9 @@ mod tests {
         assert_eq!(executor_records[0].tool, "nmap_scan");
         assert_eq!(executor_records[0].agent_role.as_deref(), Some("executor"));
 
-        let researcher_records = db.get_scan_records_by_role(session_id, "researcher").unwrap();
+        let researcher_records = db
+            .get_scan_records_by_role(session_id, "researcher")
+            .unwrap();
         assert_eq!(researcher_records.len(), 1);
         assert_eq!(researcher_records[0].tool, "shell");
     }
@@ -445,7 +448,9 @@ mod tests {
         record.agent_role = Some("executor".to_string());
         db.create_scan_record(&record).unwrap();
 
-        let results = db.get_scan_records_by_role(session_id, "nonexistent_role").unwrap();
+        let results = db
+            .get_scan_records_by_role(session_id, "nonexistent_role")
+            .unwrap();
         assert!(results.is_empty());
     }
 

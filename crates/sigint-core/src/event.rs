@@ -53,10 +53,7 @@ pub enum Event {
     /// Shutdown signal.
     Shutdown,
     /// User submitted text input from the TUI or web interface.
-    UserInput {
-        session_id: Uuid,
-        text: String,
-    },
+    UserInput { session_id: Uuid, text: String },
     // ── Attack Surface Mapping events ─────────────────────────────────────────
     /// A new asset was discovered during reconnaissance.
     AssetDiscovered(Asset),
@@ -80,18 +77,13 @@ pub enum Event {
     /// Emitted for each incremental token produced by `chat_stream()` while
     /// the model is reasoning before or between tool invocations. The TUI
     /// accumulates these into a live "thinking" buffer for real-time display.
-    AgentThinking {
-        agent_role: String,
-        token: String,
-    },
+    AgentThinking { agent_role: String, token: String },
     /// Agent finished a reasoning segment (stream iteration complete).
     ///
     /// Emitted after the final `done=true` chunk arrives from `chat_stream()`.
     /// The TUI flushes `reasoning_buffer` into the message list as a "thinking"
     /// role message and clears the live indicator.
-    AgentThinkingDone {
-        agent_role: String,
-    },
+    AgentThinkingDone { agent_role: String },
     // ── Approval Gate events ─────────────────────────────────────────────────
     /// A tool call is awaiting human approval before execution.
     ToolApprovalRequested {
@@ -113,9 +105,7 @@ pub enum Event {
     ///
     /// Emitted after a resumed scan completes its diff pass. The TUI and Web
     /// interfaces use this to colour-code findings as new / fixed / unchanged.
-    ScanDiffCompleted {
-        diff: crate::diff::ScanDiff,
-    },
+    ScanDiffCompleted { diff: crate::diff::ScanDiff },
     // ── Convergence loop events ───────────────────────────────────────────────
     /// One Strategist → Executor → Analyst cycle has completed.
     ///
@@ -301,7 +291,9 @@ mod tests {
         assert!(json.contains("AgentThinkingDone"));
         assert!(json.contains("Executor"));
         let back: Event = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, Event::AgentThinkingDone { agent_role } if agent_role == "Executor"));
+        assert!(
+            matches!(back, Event::AgentThinkingDone { agent_role } if agent_role == "Executor")
+        );
     }
 
     #[test]

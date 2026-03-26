@@ -233,8 +233,12 @@ mod tests {
     fn finding_with_cvss_score_roundtrips() {
         let db = db();
         let sid = make_session(&db);
-        let mut f =
-            Finding::new(sid, "RCE", "Remote code execution via log4j", Severity::Critical);
+        let mut f = Finding::new(
+            sid,
+            "RCE",
+            "Remote code execution via log4j",
+            Severity::Critical,
+        );
         f.cvss_score = Some(7.5);
         db.create_finding(&f).unwrap();
 
@@ -263,14 +267,22 @@ mod tests {
     fn finding_new_enrichment_fields_default_to_none() {
         let db = db();
         let sid = make_session(&db);
-        let f = Finding::new(sid, "Banner Leak", "Server header exposes version", Severity::Low);
+        let f = Finding::new(
+            sid,
+            "Banner Leak",
+            "Server header exposes version",
+            Severity::Low,
+        );
         db.create_finding(&f).unwrap();
 
         let findings = db.get_findings(sid).unwrap();
         assert_eq!(findings.len(), 1);
         let found = &findings[0];
         assert!(found.remediation.is_none(), "remediation should be None");
-        assert!(found.exploitability.is_none(), "exploitability should be None");
+        assert!(
+            found.exploitability.is_none(),
+            "exploitability should be None"
+        );
         assert!(found.impact.is_none(), "impact should be None");
         assert!(found.evidence_ref.is_none(), "evidence_ref should be None");
         assert!(found.chain_id.is_none(), "chain_id should be None");
@@ -329,7 +341,12 @@ mod tests {
         f1.chain_id = Some(chain_id);
         f1.chain_order = Some(0);
 
-        let mut f2 = Finding::new(sid, "Exploit: weak SSH key", "RSA-1024 in use", Severity::High);
+        let mut f2 = Finding::new(
+            sid,
+            "Exploit: weak SSH key",
+            "RSA-1024 in use",
+            Severity::High,
+        );
         f2.chain_id = Some(chain_id);
         f2.chain_order = Some(1);
 

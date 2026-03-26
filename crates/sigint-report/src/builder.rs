@@ -185,9 +185,7 @@ fn render_severity_chart(findings: &[FindingSummary]) -> String {
     }
 
     // Multiple segments: draw pie wedge arcs with a legend to the right.
-    let mut svg = String::from(
-        "<svg width=\"320\" height=\"200\" viewBox=\"0 0 320 200\">\n",
-    );
+    let mut svg = String::from("<svg width=\"320\" height=\"200\" viewBox=\"0 0 320 200\">\n");
     let mut start_angle = -90.0_f64; // 12 o'clock
 
     for (_label, count, color) in &segments {
@@ -239,10 +237,26 @@ fn render_severity_chart(findings: &[FindingSummary]) -> String {
 fn render_executive_summary(data: &ReportData) -> String {
     let total = data.findings.len();
     let asset_count = data.assets.len();
-    let critical = data.findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("critical")).count();
-    let high = data.findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("high")).count();
-    let medium = data.findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("medium")).count();
-    let low = data.findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("low")).count();
+    let critical = data
+        .findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("critical"))
+        .count();
+    let high = data
+        .findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("high"))
+        .count();
+    let medium = data
+        .findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("medium"))
+        .count();
+    let low = data
+        .findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("low"))
+        .count();
 
     let mut out = String::from("## Executive Summary\n\n");
     out.push_str(&format!(
@@ -252,13 +266,11 @@ fn render_executive_summary(data: &ReportData) -> String {
     ));
 
     // Highest-risk finding
-    if let Some(highest) = data.findings.iter()
-        .max_by(|a, b| {
-            let sa = a.risk_score.unwrap_or(0.0);
-            let sb = b.risk_score.unwrap_or(0.0);
-            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
-        })
-    {
+    if let Some(highest) = data.findings.iter().max_by(|a, b| {
+        let sa = a.risk_score.unwrap_or(0.0);
+        let sb = b.risk_score.unwrap_or(0.0);
+        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         out.push_str(&format!(
             "The highest-risk finding is \"{}\" ({}) affecting {}.\n\n",
             highest.title,
@@ -268,7 +280,9 @@ fn render_executive_summary(data: &ReportData) -> String {
     }
 
     if critical > 0 || high > 0 {
-        out.push_str("Immediate remediation is recommended for all critical and high findings.\n\n");
+        out.push_str(
+            "Immediate remediation is recommended for all critical and high findings.\n\n",
+        );
     }
 
     out.push_str(&render_severity_chart(&data.findings));
@@ -493,10 +507,22 @@ pub struct CampaignReportData {
 
 /// Count critical / high / medium / low findings (case-insensitive).
 fn count_severities(findings: &[FindingSummary]) -> (usize, usize, usize, usize) {
-    let c = findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("critical")).count();
-    let h = findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("high")).count();
-    let m = findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("medium")).count();
-    let l = findings.iter().filter(|f| f.severity.eq_ignore_ascii_case("low")).count();
+    let c = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("critical"))
+        .count();
+    let h = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("high"))
+        .count();
+    let m = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("medium"))
+        .count();
+    let l = findings
+        .iter()
+        .filter(|f| f.severity.eq_ignore_ascii_case("low"))
+        .count();
     (c, h, m, l)
 }
 
@@ -725,10 +751,8 @@ mod tests {
             ReportTemplate::Detailed,
             ReportTemplate::Technical,
         ] {
-            let bytes =
-                build_report(&sample_data(), template, ReportFormat::Html);
-            let html =
-                String::from_utf8(bytes).expect("HTML must be valid UTF-8");
+            let bytes = build_report(&sample_data(), template, ReportFormat::Html);
+            let html = String::from_utf8(bytes).expect("HTML must be valid UTF-8");
 
             assert!(
                 html.contains("<!DOCTYPE html>"),
@@ -911,7 +935,11 @@ mod tests {
                 );
             }
             // All templates must produce non-empty output without panicking.
-            assert!(!md.is_empty(), "template {:?}: output must not be empty", template);
+            assert!(
+                !md.is_empty(),
+                "template {:?}: output must not be empty",
+                template
+            );
         }
     }
 
@@ -967,7 +995,10 @@ mod tests {
         };
         let md = build_campaign_markdown(&data, ReportTemplate::Executive);
         // 3 + 2 = 5 total findings
-        assert!(md.contains("Total findings:** 5"), "wrong total findings count");
+        assert!(
+            md.contains("Total findings:** 5"),
+            "wrong total findings count"
+        );
     }
 
     #[test]
@@ -1007,9 +1038,15 @@ mod tests {
         let md = build_campaign_markdown(&data, ReportTemplate::Detailed);
 
         // The severity table must exist
-        assert!(md.contains("| Target | Findings |"), "missing severity table header");
+        assert!(
+            md.contains("| Target | Findings |"),
+            "missing severity table header"
+        );
         // mixed-host row: 3 findings, 1 critical, 1 high, 1 medium, 0 low
-        assert!(md.contains("| mixed-host | 3 | 1 | 1 | 1 | 0 |"), "wrong severity row");
+        assert!(
+            md.contains("| mixed-host | 3 | 1 | 1 | 1 | 0 |"),
+            "wrong severity row"
+        );
     }
 
     #[test]
@@ -1033,9 +1070,18 @@ mod tests {
             ],
         };
         let md = build_campaign_markdown(&data, ReportTemplate::Detailed);
-        assert!(md.contains("## Per-Target Details"), "missing per-target section");
-        assert!(md.contains("### 1. first.host"), "missing first target heading");
-        assert!(md.contains("### 2. second.host"), "missing second target heading");
+        assert!(
+            md.contains("## Per-Target Details"),
+            "missing per-target section"
+        );
+        assert!(
+            md.contains("### 1. first.host"),
+            "missing first target heading"
+        );
+        assert!(
+            md.contains("### 2. second.host"),
+            "missing second target heading"
+        );
     }
 
     /// `target: None` must not panic and must produce a valid header without
@@ -1093,8 +1139,16 @@ mod tests {
                 })
                 .collect(),
             assets: vec![
-                AssetSummary { kind: "host".into(), value: "api.example.com".into(), services_count: 2 },
-                AssetSummary { kind: "host".into(), value: "web.example.com".into(), services_count: 1 },
+                AssetSummary {
+                    kind: "host".into(),
+                    value: "api.example.com".into(),
+                    services_count: 2,
+                },
+                AssetSummary {
+                    kind: "host".into(),
+                    value: "web.example.com".into(),
+                    services_count: 1,
+                },
             ],
             scan_count: 3,
         }
@@ -1103,28 +1157,45 @@ mod tests {
     #[test]
     fn executive_summary_in_executive_template() {
         let data = make_report_data_with_findings(vec![
-            ("SQL Injection", "critical", Some("api.example.com"), Some(9.5)),
+            (
+                "SQL Injection",
+                "critical",
+                Some("api.example.com"),
+                Some(9.5),
+            ),
             ("XSS", "medium", Some("web.example.com"), Some(5.5)),
         ]);
         let md = build_markdown(&data, ReportTemplate::Executive);
-        assert!(md.contains("Executive Summary"), "missing Executive Summary section");
+        assert!(
+            md.contains("Executive Summary"),
+            "missing Executive Summary section"
+        );
         assert!(md.contains("2** findings"), "wrong finding count");
         assert!(md.contains("1** critical"), "wrong critical count");
-        assert!(md.contains("SQL Injection"), "missing highest-risk finding title");
+        assert!(
+            md.contains("SQL Injection"),
+            "missing highest-risk finding title"
+        );
     }
 
     #[test]
     fn executive_summary_in_detailed_template() {
         let data = make_report_data_with_findings(vec![("Test", "high", None, None)]);
         let md = build_markdown(&data, ReportTemplate::Detailed);
-        assert!(md.contains("Executive Summary"), "Detailed template missing Executive Summary");
+        assert!(
+            md.contains("Executive Summary"),
+            "Detailed template missing Executive Summary"
+        );
     }
 
     #[test]
     fn executive_summary_empty_findings() {
         let data = make_report_data_with_findings(vec![]);
         let md = build_markdown(&data, ReportTemplate::Executive);
-        assert!(md.contains("Executive Summary"), "missing Executive Summary section");
+        assert!(
+            md.contains("Executive Summary"),
+            "missing Executive Summary section"
+        );
         assert!(md.contains("0** findings"), "wrong zero finding count");
     }
 
@@ -1132,13 +1203,20 @@ mod tests {
     fn risk_score_displayed_in_detailed() {
         let data = make_report_data_with_findings(vec![("Vuln", "high", None, Some(8.0))]);
         let md = build_markdown(&data, ReportTemplate::Detailed);
-        assert!(md.contains("8.0"), "risk score 8.0 not rendered in Detailed template");
+        assert!(
+            md.contains("8.0"),
+            "risk score 8.0 not rendered in Detailed template"
+        );
     }
 
     // ── SVG severity pie chart tests ─────────────────────────────────────────
 
     /// Build a minimal FindingSummary for chart tests.
-    fn make_finding_summary(title: &str, severity: &str, risk_score: Option<f32>) -> FindingSummary {
+    fn make_finding_summary(
+        title: &str,
+        severity: &str,
+        risk_score: Option<f32>,
+    ) -> FindingSummary {
         FindingSummary {
             title: title.into(),
             severity: severity.into(),
@@ -1173,7 +1251,10 @@ mod tests {
     fn severity_chart_single_severity() {
         let findings = vec![make_finding_summary("Only", "critical", None)];
         let svg = render_severity_chart(&findings);
-        assert!(svg.contains("<circle"), "single severity must use full circle, not arcs");
+        assert!(
+            svg.contains("<circle"),
+            "single severity must use full circle, not arcs"
+        );
         assert!(svg.contains("Critical: 1"), "must show label and count");
     }
 
@@ -1189,15 +1270,19 @@ mod tests {
         assert!(svg.contains("High: 1"), "legend must show High");
         assert!(svg.contains("Low: 1"), "legend must show Low");
         // Medium and Info have zero counts — must NOT appear in legend.
-        assert!(!svg.contains("Medium:"), "legend must not show zero-count Medium");
-        assert!(!svg.contains("Info:"), "legend must not show zero-count Info");
+        assert!(
+            !svg.contains("Medium:"),
+            "legend must not show zero-count Medium"
+        );
+        assert!(
+            !svg.contains("Info:"),
+            "legend must not show zero-count Info"
+        );
     }
 
     #[test]
     fn executive_summary_includes_chart_in_html() {
-        let data = make_report_data_with_findings(vec![
-            ("Vuln", "critical", None, Some(9.5)),
-        ]);
+        let data = make_report_data_with_findings(vec![("Vuln", "critical", None, Some(9.5))]);
         let md = build_markdown(&data, ReportTemplate::Executive);
         assert!(
             md.contains("<svg"),

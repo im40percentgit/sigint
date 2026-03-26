@@ -236,18 +236,16 @@ impl InteractiveSession {
                                 match self.orchestrator.run_scan(&target).await {
                                     Ok(report) => {
                                         // Auto-diff prior findings vs new findings
-                                        if let (Ok(prior_findings), Ok(new_findings)) = (
-                                            db.get_findings(prior.id),
-                                            db.get_findings(child_id),
-                                        ) {
+                                        if let (Ok(prior_findings), Ok(new_findings)) =
+                                            (db.get_findings(prior.id), db.get_findings(child_id))
+                                        {
                                             let diff = diff_findings(
                                                 prior.id,
                                                 &prior_findings,
                                                 child_id,
                                                 &new_findings,
                                             );
-                                            self.event_bus
-                                                .emit(Event::ScanDiffCompleted { diff });
+                                            self.event_bus.emit(Event::ScanDiffCompleted { diff });
                                         }
                                         self.event_bus.emit(Event::Status(format!(
                                             "Resume scan complete. {}",
@@ -255,9 +253,8 @@ impl InteractiveSession {
                                         )));
                                     }
                                     Err(e) => {
-                                        self.event_bus.emit(Event::Status(format!(
-                                            "Resume failed: {e}"
-                                        )));
+                                        self.event_bus
+                                            .emit(Event::Status(format!("Resume failed: {e}")));
                                     }
                                 }
                             } else {

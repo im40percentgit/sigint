@@ -784,7 +784,12 @@ mod tests {
         let sid = Uuid::new_v4();
 
         // Three findings: one new, one fixed, one unchanged.
-        let new_finding = Finding::new(sid, "SQL Injection", "unparameterised query", Severity::High);
+        let new_finding = Finding::new(
+            sid,
+            "SQL Injection",
+            "unparameterised query",
+            Severity::High,
+        );
         let fixed_finding = Finding::new(sid, "Open Redirect", "was fixed", Severity::Medium);
         let unchanged_finding = Finding::new(sid, "XSS", "still open", Severity::Low);
 
@@ -796,7 +801,11 @@ mod tests {
         let diff = ScanDiff {
             scan_a: Uuid::new_v4(),
             scan_b: Uuid::new_v4(),
-            summary: DiffSummary { new: 1, fixed: 1, unchanged: 1 },
+            summary: DiffSummary {
+                new: 1,
+                fixed: 1,
+                unchanged: 1,
+            },
             new: vec![new_finding],
             fixed: vec![fixed_finding],
             unchanged: vec![unchanged_finding],

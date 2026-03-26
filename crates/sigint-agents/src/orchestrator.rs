@@ -550,8 +550,7 @@ impl Orchestrator {
         let analyst_output = self
             .run_agent_with_extras(&analyst, ctx, &[&create_finding_tool as &dyn Tool])
             .await?;
-        ctx.agent_outputs
-            .insert(AgentRole::Analyst, analyst_output);
+        ctx.agent_outputs.insert(AgentRole::Analyst, analyst_output);
 
         // Drain the collector: convert raw JSON into Finding structs and emit
         // FindingCreated events. Identical logic to the original single-cycle
@@ -611,8 +610,7 @@ impl Orchestrator {
                         }
                     });
 
-                let mut finding =
-                    Finding::new(self.session_id, &title, &description, severity);
+                let mut finding = Finding::new(self.session_id, &title, &description, severity);
                 finding.asset = asset;
                 finding.evidence = evidence;
                 finding.remediation = remediation;
@@ -655,7 +653,11 @@ impl Orchestrator {
     /// Returns `Error` if any agent's LLM call fails. Tool execution errors
     /// within an agent turn are recovered internally (fed back to the model).
     pub async fn run_scan(&self, target: &str) -> Result<ScanReport, Error> {
-        info!(target, max_cycles = self.max_cycles, "orchestrator: starting scan pipeline");
+        info!(
+            target,
+            max_cycles = self.max_cycles,
+            "orchestrator: starting scan pipeline"
+        );
 
         let mut ctx = TaskContext::new(target).with_ports(self.ports.clone());
 
@@ -778,9 +780,7 @@ impl Orchestrator {
                 ));
             }
         }
-        state.add_message(sigint_llm::types::ChatMessage::system(
-            &system_prompt,
-        ));
+        state.add_message(sigint_llm::types::ChatMessage::system(&system_prompt));
 
         // Inject memory context as a second system message, immediately after
         // the agent's own system prompt and before the user prompt. This gives
@@ -1161,12 +1161,7 @@ mod tests {
     #[test]
     fn with_profile_no_overrides_preserves_defaults() {
         let provider = Arc::new(MockProvider::uniform("done", 5));
-        let orch = make_orchestrator(provider).with_profile(make_profile(
-            "",
-            vec![],
-            None,
-            None,
-        ));
+        let orch = make_orchestrator(provider).with_profile(make_profile("", vec![], None, None));
 
         assert!(orch.profile.is_some());
         assert_eq!(orch.max_iterations, DEFAULT_MAX_ITERATIONS);
@@ -1189,18 +1184,25 @@ mod tests {
         let _ = orch.run_agent(&agent, &mut ctx).await.unwrap();
 
         let captured = provider_ref.captured();
-        assert!(!captured.is_empty(), "should have captured at least one request");
+        assert!(
+            !captured.is_empty(),
+            "should have captured at least one request"
+        );
 
         // First message should be system prompt with focus appended.
         let system_msg = &captured[0].messages[0];
         assert_eq!(system_msg.role, "system");
         assert!(
-            system_msg.content.contains("ENGAGEMENT FOCUS: web application security"),
+            system_msg
+                .content
+                .contains("ENGAGEMENT FOCUS: web application security"),
             "system prompt should contain focus: {}",
             system_msg.content
         );
         assert!(
-            system_msg.content.contains("Prioritize analysis and tool usage"),
+            system_msg
+                .content
+                .contains("Prioritize analysis and tool usage"),
             "system prompt should contain prioritization instruction"
         );
     }
@@ -1209,12 +1211,7 @@ mod tests {
     async fn empty_focus_not_injected_into_system_prompt() {
         let provider = Arc::new(RecordingProvider::new());
         let provider_ref = provider.clone();
-        let orch = make_orchestrator(provider).with_profile(make_profile(
-            "",
-            vec![],
-            None,
-            None,
-        ));
+        let orch = make_orchestrator(provider).with_profile(make_profile("", vec![], None, None));
 
         let agent = ResearcherAgent::new();
         let mut ctx = TaskContext::new("example.com");
@@ -1232,21 +1229,38 @@ mod tests {
     #[tokio::test]
     async fn profile_tools_filter_restricts_tool_defs() {
         // Register two tools, profile only allows one.
-        use sigint_llm::ToolDefinition;
         use serde_json::json;
+        use sigint_llm::ToolDefinition;
 
-        struct FakeTool { tool_name: String }
+        struct FakeTool {
+            tool_name: String,
+        }
         impl FakeTool {
-            fn new(name: &str) -> Self { Self { tool_name: name.into() } }
+            fn new(name: &str) -> Self {
+                Self {
+                    tool_name: name.into(),
+                }
+            }
         }
         #[async_trait]
         impl sigint_tools::tool::Tool for FakeTool {
-            fn name(&self) -> &str { &self.tool_name }
-            fn description(&self) -> &str { "fake" }
-            fn definition(&self) -> ToolDefinition {
-                ToolDefinition::function(self.tool_name.clone(), "fake", json!({"type": "object", "properties": {}}))
+            fn name(&self) -> &str {
+                &self.tool_name
             }
-            async fn execute(&self, _args: serde_json::Value) -> sigint_tools::error::Result<sigint_tools::result::ToolResult> {
+            fn description(&self) -> &str {
+                "fake"
+            }
+            fn definition(&self) -> ToolDefinition {
+                ToolDefinition::function(
+                    self.tool_name.clone(),
+                    "fake",
+                    json!({"type": "object", "properties": {}}),
+                )
+            }
+            async fn execute(
+                &self,
+                _args: serde_json::Value,
+            ) -> sigint_tools::error::Result<sigint_tools::result::ToolResult> {
                 Ok(sigint_tools::result::ToolResult {
                     stdout: "ok".into(),
                     stderr: String::new(),
@@ -1300,21 +1314,38 @@ mod tests {
     #[tokio::test]
     async fn profile_empty_tools_allows_all() {
         // Empty tools list means no restriction — all ACL-allowed tools pass through.
-        use sigint_llm::ToolDefinition;
         use serde_json::json;
+        use sigint_llm::ToolDefinition;
 
-        struct FakeTool2 { tool_name: String }
+        struct FakeTool2 {
+            tool_name: String,
+        }
         impl FakeTool2 {
-            fn new(name: &str) -> Self { Self { tool_name: name.into() } }
+            fn new(name: &str) -> Self {
+                Self {
+                    tool_name: name.into(),
+                }
+            }
         }
         #[async_trait]
         impl sigint_tools::tool::Tool for FakeTool2 {
-            fn name(&self) -> &str { &self.tool_name }
-            fn description(&self) -> &str { "fake" }
-            fn definition(&self) -> ToolDefinition {
-                ToolDefinition::function(self.tool_name.clone(), "fake", json!({"type": "object", "properties": {}}))
+            fn name(&self) -> &str {
+                &self.tool_name
             }
-            async fn execute(&self, _args: serde_json::Value) -> sigint_tools::error::Result<sigint_tools::result::ToolResult> {
+            fn description(&self) -> &str {
+                "fake"
+            }
+            fn definition(&self) -> ToolDefinition {
+                ToolDefinition::function(
+                    self.tool_name.clone(),
+                    "fake",
+                    json!({"type": "object", "properties": {}}),
+                )
+            }
+            async fn execute(
+                &self,
+                _args: serde_json::Value,
+            ) -> sigint_tools::error::Result<sigint_tools::result::ToolResult> {
                 Ok(sigint_tools::result::ToolResult {
                     stdout: "ok".into(),
                     stderr: String::new(),
@@ -1351,7 +1382,11 @@ mod tests {
             .iter()
             .map(|d| d.function.name.as_str())
             .collect();
-        assert_eq!(tool_names.len(), 2, "empty tools list should allow all ACL tools: {tool_names:?}");
+        assert_eq!(
+            tool_names.len(),
+            2,
+            "empty tools list should allow all ACL tools: {tool_names:?}"
+        );
     }
 
     #[tokio::test]
@@ -1383,13 +1418,17 @@ mod tests {
 
     impl FindingCallProvider {
         fn new() -> Self {
-            Self { call_count: Mutex::new(0) }
+            Self {
+                call_count: Mutex::new(0),
+            }
         }
     }
 
     #[async_trait]
     impl LlmProvider for FindingCallProvider {
-        fn name(&self) -> &str { "finding-call" }
+        fn name(&self) -> &str {
+            "finding-call"
+        }
 
         async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
             use futures_util::StreamExt as FutStreamExt;
@@ -1401,7 +1440,12 @@ mod tests {
                 content.push_str(&c.delta);
                 tool_calls.extend(c.tool_calls);
             }
-            Ok(ChatResponse { content, usage: None, model: "finding-call".into(), tool_calls })
+            Ok(ChatResponse {
+                content,
+                usage: None,
+                model: "finding-call".into(),
+                tool_calls,
+            })
         }
 
         async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
@@ -1414,8 +1458,18 @@ mod tests {
             let chunks: Vec<Result<StreamChunk, Error>> = match n {
                 // Turns 0-2: Researcher, Strategist, Executor — plain text
                 0 | 1 | 2 => vec![
-                    Ok(StreamChunk { delta: "done".into(), done: false, usage: None, tool_calls: vec![] }),
-                    Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    Ok(StreamChunk {
+                        delta: "done".into(),
+                        done: false,
+                        usage: None,
+                        tool_calls: vec![],
+                    }),
+                    Ok(StreamChunk {
+                        delta: String::new(),
+                        done: true,
+                        usage: None,
+                        tool_calls: vec![],
+                    }),
                 ],
                 // Turn 3: Analyst — emits create_finding tool call with enrichment
                 3 => vec![
@@ -1441,17 +1495,42 @@ mod tests {
                             },
                         }],
                     }),
-                    Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    Ok(StreamChunk {
+                        delta: String::new(),
+                        done: true,
+                        usage: None,
+                        tool_calls: vec![],
+                    }),
                 ],
                 // Turn 4: Analyst tool-loop second round — plain text to resolve loop
                 4 => vec![
-                    Ok(StreamChunk { delta: "analysis complete".into(), done: false, usage: None, tool_calls: vec![] }),
-                    Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    Ok(StreamChunk {
+                        delta: "analysis complete".into(),
+                        done: false,
+                        usage: None,
+                        tool_calls: vec![],
+                    }),
+                    Ok(StreamChunk {
+                        delta: String::new(),
+                        done: true,
+                        usage: None,
+                        tool_calls: vec![],
+                    }),
                 ],
                 // Turn 5: Reporter
                 _ => vec![
-                    Ok(StreamChunk { delta: "FINAL REPORT".into(), done: false, usage: None, tool_calls: vec![] }),
-                    Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                    Ok(StreamChunk {
+                        delta: "FINAL REPORT".into(),
+                        done: false,
+                        usage: None,
+                        tool_calls: vec![],
+                    }),
+                    Ok(StreamChunk {
+                        delta: String::new(),
+                        done: true,
+                        usage: None,
+                        tool_calls: vec![],
+                    }),
                 ],
             };
             Ok(Box::pin(stream::iter(chunks)))
@@ -1465,7 +1544,11 @@ mod tests {
         let orch = make_orchestrator(Arc::new(FindingCallProvider::new()));
         let report = orch.run_scan("10.0.0.1").await.unwrap();
 
-        assert_eq!(report.context.findings.len(), 1, "one finding should be recorded");
+        assert_eq!(
+            report.context.findings.len(),
+            1,
+            "one finding should be recorded"
+        );
         let f = &report.context.findings[0];
 
         assert_eq!(f.title, "SQL Injection");
@@ -1503,12 +1586,22 @@ mod tests {
     async fn drain_handles_missing_enrichment_fields_gracefully() {
         // Analyst emits create_finding with only required fields (no enrichment).
         // Verify the drain sets enrichment fields to None without panicking.
-        struct MinimalFindingProvider { call_count: Mutex<usize> }
-        impl MinimalFindingProvider { fn new() -> Self { Self { call_count: Mutex::new(0) } } }
+        struct MinimalFindingProvider {
+            call_count: Mutex<usize>,
+        }
+        impl MinimalFindingProvider {
+            fn new() -> Self {
+                Self {
+                    call_count: Mutex::new(0),
+                }
+            }
+        }
 
         #[async_trait]
         impl LlmProvider for MinimalFindingProvider {
-            fn name(&self) -> &str { "minimal" }
+            fn name(&self) -> &str {
+                "minimal"
+            }
             async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, Error> {
                 use futures_util::StreamExt as FutStreamExt;
                 let mut s = self.chat_stream(req).await?;
@@ -1519,7 +1612,12 @@ mod tests {
                     content.push_str(&c.delta);
                     tool_calls.extend(c.tool_calls);
                 }
-                Ok(ChatResponse { content, usage: None, model: "minimal".into(), tool_calls })
+                Ok(ChatResponse {
+                    content,
+                    usage: None,
+                    model: "minimal".into(),
+                    tool_calls,
+                })
             }
             async fn chat_stream(&self, _req: ChatRequest) -> Result<ChunkStream, Error> {
                 use sigint_llm::types::FunctionCall;
@@ -1530,8 +1628,18 @@ mod tests {
 
                 let chunks: Vec<Result<StreamChunk, Error>> = match n {
                     0 | 1 | 2 => vec![
-                        Ok(StreamChunk { delta: "done".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "done".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     3 => vec![
                         Ok(StreamChunk {
@@ -1549,15 +1657,40 @@ mod tests {
                                 },
                             }],
                         }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     4 => vec![
-                        Ok(StreamChunk { delta: "done".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "done".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     _ => vec![
-                        Ok(StreamChunk { delta: "report".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "report".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                 };
                 Ok(Box::pin(stream::iter(chunks)))
@@ -1570,7 +1703,10 @@ mod tests {
         assert_eq!(report.context.findings.len(), 1);
         let f = &report.context.findings[0];
         assert_eq!(f.title, "Open Port");
-        assert!(f.remediation.is_none(), "remediation should be None when absent");
+        assert!(
+            f.remediation.is_none(),
+            "remediation should be None when absent"
+        );
         assert!(f.exploitability.is_none());
         assert!(f.impact.is_none());
         assert!(f.cvss_score.is_none());
@@ -1636,7 +1772,12 @@ mod tests {
         let provider = Arc::new(MockProvider::uniform("done", 1));
         let orch = make_orchestrator(provider).with_goal("sql injection");
 
-        let mut f = Finding::new(Uuid::nil(), "SQL Injection in login form", "auth bypass", Severity::Critical);
+        let mut f = Finding::new(
+            Uuid::nil(),
+            "SQL Injection in login form",
+            "auth bypass",
+            Severity::Critical,
+        );
         f.description = "SQL Injection allows authentication bypass".to_string();
         // Title matches goal (case-insensitive).
         assert!(orch.is_converged(&[f], &[]));
@@ -1672,7 +1813,10 @@ mod tests {
         let orch = make_orchestrator(provider); // max_cycles defaults to 1
         let report = orch.run_scan("example.com").await.unwrap();
 
-        assert_eq!(report.summary, "FINAL REPORT", "reporter output should be last");
+        assert_eq!(
+            report.summary, "FINAL REPORT",
+            "reporter output should be last"
+        );
         assert_eq!(report.target, "example.com");
     }
 
@@ -1701,12 +1845,18 @@ mod tests {
             call_count: Mutex<usize>,
         }
         impl TwoCycleProvider {
-            fn new() -> Self { Self { call_count: Mutex::new(0) } }
+            fn new() -> Self {
+                Self {
+                    call_count: Mutex::new(0),
+                }
+            }
         }
 
         #[async_trait]
         impl LlmProvider for TwoCycleProvider {
-            fn name(&self) -> &str { "two-cycle" }
+            fn name(&self) -> &str {
+                "two-cycle"
+            }
 
             async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
                 use futures_util::StreamExt as FutStreamExt;
@@ -1718,7 +1868,12 @@ mod tests {
                     content.push_str(&c.delta);
                     tool_calls.extend(c.tool_calls);
                 }
-                Ok(ChatResponse { content, usage: None, model: "two-cycle".into(), tool_calls })
+                Ok(ChatResponse {
+                    content,
+                    usage: None,
+                    model: "two-cycle".into(),
+                    tool_calls,
+                })
             }
 
             async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
@@ -1730,18 +1885,48 @@ mod tests {
                 let chunks: Vec<Result<StreamChunk, Error>> = match n {
                     // 0: Researcher
                     0 => vec![
-                        Ok(StreamChunk { delta: "researcher done".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "researcher done".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 1: Strategist cycle 0
                     1 => vec![
-                        Ok(StreamChunk { delta: "strategy cycle 0".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "strategy cycle 0".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 2: Executor cycle 0
                     2 => vec![
-                        Ok(StreamChunk { delta: "executor cycle 0".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "executor cycle 0".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 3: Analyst cycle 0 — emits one finding
                     3 => vec![
@@ -1760,40 +1945,94 @@ mod tests {
                                 },
                             }],
                         }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 4: Analyst cycle 0 — tool loop second round (resolve)
                     4 => vec![
-                        Ok(StreamChunk { delta: "analysis cycle 0 done".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "analysis cycle 0 done".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 5: Strategist cycle 1
                     5 => vec![
-                        Ok(StreamChunk { delta: "strategy cycle 1".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "strategy cycle 1".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 6: Executor cycle 1
                     6 => vec![
-                        Ok(StreamChunk { delta: "executor cycle 1".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "executor cycle 1".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 7: Analyst cycle 1 — no new findings → convergence
                     7 => vec![
-                        Ok(StreamChunk { delta: "no new findings".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "no new findings".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 8: Reporter
                     _ => vec![
-                        Ok(StreamChunk { delta: "TWO CYCLE REPORT".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "TWO CYCLE REPORT".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                 };
                 Ok(Box::pin(stream::iter(chunks)))
             }
         }
 
-        let orch = make_orchestrator(Arc::new(TwoCycleProvider::new()))
-            .with_max_cycles(2);
+        let orch = make_orchestrator(Arc::new(TwoCycleProvider::new())).with_max_cycles(2);
         let report = orch.run_scan("10.0.0.1").await.unwrap();
 
         assert_eq!(report.summary, "TWO CYCLE REPORT");
@@ -1817,12 +2056,18 @@ mod tests {
             call_count: Mutex<usize>,
         }
         impl GoalProvider {
-            fn new() -> Self { Self { call_count: Mutex::new(0) } }
+            fn new() -> Self {
+                Self {
+                    call_count: Mutex::new(0),
+                }
+            }
         }
 
         #[async_trait]
         impl LlmProvider for GoalProvider {
-            fn name(&self) -> &str { "goal" }
+            fn name(&self) -> &str {
+                "goal"
+            }
 
             async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
                 use futures_util::StreamExt as FutStreamExt;
@@ -1834,7 +2079,12 @@ mod tests {
                     content.push_str(&c.delta);
                     tool_calls.extend(c.tool_calls);
                 }
-                Ok(ChatResponse { content, usage: None, model: "goal".into(), tool_calls })
+                Ok(ChatResponse {
+                    content,
+                    usage: None,
+                    model: "goal".into(),
+                    tool_calls,
+                })
             }
 
             async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
@@ -1846,18 +2096,48 @@ mod tests {
                 let chunks: Vec<Result<StreamChunk, Error>> = match n {
                     // 0: Researcher
                     0 => vec![
-                        Ok(StreamChunk { delta: "recon done".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "recon done".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 1: Strategist cycle 0
                     1 => vec![
-                        Ok(StreamChunk { delta: "strategy".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "strategy".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 2: Executor cycle 0
                     2 => vec![
-                        Ok(StreamChunk { delta: "executed".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "executed".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 3: Analyst cycle 0 — emits finding matching goal "rce"
                     3 => vec![
@@ -1876,17 +2156,42 @@ mod tests {
                                 },
                             }],
                         }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 4: Analyst tool loop second round
                     4 => vec![
-                        Ok(StreamChunk { delta: "analysis done".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "analysis done".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                     // 5: Reporter (immediately after cycle 0 due to goal match)
                     _ => vec![
-                        Ok(StreamChunk { delta: "GOAL REPORT".into(), done: false, usage: None, tool_calls: vec![] }),
-                        Ok(StreamChunk { delta: String::new(), done: true, usage: None, tool_calls: vec![] }),
+                        Ok(StreamChunk {
+                            delta: "GOAL REPORT".into(),
+                            done: false,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
+                        Ok(StreamChunk {
+                            delta: String::new(),
+                            done: true,
+                            usage: None,
+                            tool_calls: vec![],
+                        }),
                     ],
                 };
                 Ok(Box::pin(stream::iter(chunks)))
@@ -1899,11 +2204,20 @@ mod tests {
             .with_goal("rce");
         let report = orch.run_scan("vuln.local").await.unwrap();
 
-        assert_eq!(report.summary, "GOAL REPORT", "reporter should run immediately after goal match");
+        assert_eq!(
+            report.summary, "GOAL REPORT",
+            "reporter should run immediately after goal match"
+        );
         assert_eq!(report.context.findings.len(), 1);
         assert!(
-            report.context.findings[0].title.to_lowercase().contains("rce")
-                || report.context.findings[0].title.to_lowercase().contains("remote code"),
+            report.context.findings[0]
+                .title
+                .to_lowercase()
+                .contains("rce")
+                || report.context.findings[0]
+                    .title
+                    .to_lowercase()
+                    .contains("remote code"),
             "finding should mention RCE: {}",
             report.context.findings[0].title
         );
@@ -1957,7 +2271,8 @@ mod tests {
         assert_ne!(known_id, unknown_id);
 
         let mut ctx = TaskContext::new("example.com");
-        ctx.scan_record_refs.push((known_id, "nmap_scan".to_string(), "{}".to_string()));
+        ctx.scan_record_refs
+            .push((known_id, "nmap_scan".to_string(), "{}".to_string()));
 
         // Simulate what the drain validation does: an evidence_ref that is NOT
         // in scan_record_refs should be cleared.

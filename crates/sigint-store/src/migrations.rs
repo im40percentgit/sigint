@@ -524,15 +524,22 @@ mod tests {
             // Insert a session (FK requirement).
             conn.execute(
                 "INSERT INTO sessions (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params!["sess-m8", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
-            ).unwrap();
+                rusqlite::params![
+                    "sess-m8",
+                    "test",
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:00:00Z"
+                ],
+            )
+            .unwrap();
 
             // Insert a finding without the new columns — should work and all new cols = NULL.
             conn.execute(
                 "INSERT INTO findings (id, session_id, title, description, severity, created_at)
                  VALUES ('find-m8', 'sess-m8', 'Test', 'desc', 'info', '2026-01-01T00:00:00Z')",
                 [],
-            ).unwrap();
+            )
+            .unwrap();
 
             // Verify all 6 new columns default to NULL.
             let (remediation, exploitability, impact, evidence_ref, chain_id, chain_order):
@@ -563,7 +570,8 @@ mod tests {
                          'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
                          3)",
                 [],
-            ).unwrap();
+            )
+            .unwrap();
 
             let (rem, expl, imp, eref, cid, cord):
                 (Option<String>, Option<String>, Option<String>,
@@ -578,11 +586,15 @@ mod tests {
             assert_eq!(rem.as_deref(), Some("Patch it"));
             assert_eq!(expl.as_deref(), Some("public, no auth"));
             assert_eq!(imp.as_deref(), Some("Full DB dump"));
-            assert_eq!(eref.as_deref(), Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+            assert_eq!(
+                eref.as_deref(),
+                Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+            );
             assert_eq!(cid.as_deref(), Some("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
             assert_eq!(cord, Some(3));
 
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 }

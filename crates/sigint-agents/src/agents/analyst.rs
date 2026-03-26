@@ -161,7 +161,11 @@ mod tests {
             !tools.contains(&"nmap_scan".to_string()),
             "analyst must not have nmap_scan"
         );
-        assert_eq!(tools.len(), 2, "analyst should have exactly 2 tools: shell + create_finding");
+        assert_eq!(
+            tools.len(),
+            2,
+            "analyst should have exactly 2 tools: shell + create_finding"
+        );
     }
 
     #[test]

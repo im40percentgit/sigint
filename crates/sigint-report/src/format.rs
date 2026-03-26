@@ -174,10 +174,7 @@ mod tests {
         let html = markdown_to_html("# Test");
         assert!(html.contains("<head>"), "must have <head>");
         assert!(html.contains("charset=\"UTF-8\""), "must set charset");
-        assert!(
-            html.contains("name=\"viewport\""),
-            "must set viewport meta"
-        );
+        assert!(html.contains("name=\"viewport\""), "must set viewport meta");
     }
 
     /// A very long Markdown paragraph (10 000 chars) must survive conversion

@@ -17,7 +17,10 @@
 
 use std::io::Write as _;
 
-use sigint_core::{types::{Finding, Session}, AppCore, Error};
+use sigint_core::{
+    types::{Finding, Session},
+    AppCore, Error,
+};
 use sigint_store::{Database, ScanRecord};
 use uuid::Uuid;
 
@@ -59,10 +62,7 @@ pub fn parse_format(s: &str) -> Result<LogFormat, String> {
 // ── Session lookup (prefix or exact UUID) ─────────────────────────────────────
 
 /// Find a session by exact UUID or by a prefix of its UUID string.
-fn find_session_by_id_or_prefix(
-    db: &Database,
-    id_str: &str,
-) -> Result<Session, Error> {
+fn find_session_by_id_or_prefix(db: &Database, id_str: &str) -> Result<Session, Error> {
     if let Ok(id) = Uuid::parse_str(id_str) {
         return db
             .get_session(id)?
@@ -101,9 +101,7 @@ fn time_of(ts: &str) -> &str {
     if let Some(t_pos) = ts.find('T') {
         let after_t = &ts[t_pos + 1..];
         // Take up to the first '+', '-', or 'Z' after the time digits
-        let end = after_t
-            .find(['+', 'Z'])
-            .unwrap_or(after_t.len());
+        let end = after_t.find(['+', 'Z']).unwrap_or(after_t.len());
         // Return up to 8 chars (HH:MM:SS)
         let time_part = &after_t[..end.min(8)];
         if !time_part.is_empty() {
@@ -138,11 +136,7 @@ fn duration_str(started: &str, finished: Option<&str>) -> String {
 // ── Markdown rendering ─────────────────────────────────────────────────────────
 
 /// Render the engagement log as Markdown bytes.
-fn render_markdown(
-    session: &Session,
-    records: &[ScanRecord],
-    findings: &[Finding],
-) -> Vec<u8> {
+fn render_markdown(session: &Session, records: &[ScanRecord], findings: &[Finding]) -> Vec<u8> {
     let mut out = String::new();
 
     // Header
@@ -151,7 +145,10 @@ fn render_markdown(
     if let Some(ref target) = session.target {
         out.push_str(&format!("**Target:** {}\n", target));
     }
-    out.push_str(&format!("**Date:** {}\n", session.created_at.format("%Y-%m-%d")));
+    out.push_str(&format!(
+        "**Date:** {}\n",
+        session.created_at.format("%Y-%m-%d")
+    ));
     out.push_str(&format!("**Session ID:** {}\n\n", session.id));
 
     // Timeline
@@ -233,20 +230,14 @@ fn render_markdown(
 // ── HTML rendering ─────────────────────────────────────────────────────────────
 
 /// Render the engagement log as HTML bytes.
-fn render_html(
-    session: &Session,
-    records: &[ScanRecord],
-    findings: &[Finding],
-) -> Vec<u8> {
+fn render_html(session: &Session, records: &[ScanRecord], findings: &[Finding]) -> Vec<u8> {
     // Render markdown first, then wrap in minimal HTML.
-    let md = String::from_utf8(render_markdown(session, records, findings))
-        .unwrap_or_default();
+    let md = String::from_utf8(render_markdown(session, records, findings)).unwrap_or_default();
 
     // Use pulldown-cmark for Markdown -> HTML conversion.
     let parser = pulldown_cmark::Parser::new_ext(
         &md,
-        pulldown_cmark::Options::ENABLE_TABLES
-            | pulldown_cmark::Options::ENABLE_STRIKETHROUGH,
+        pulldown_cmark::Options::ENABLE_TABLES | pulldown_cmark::Options::ENABLE_STRIKETHROUGH,
     );
     let mut html_content = String::new();
     pulldown_cmark::html::push_html(&mut html_content, parser);
@@ -416,8 +407,10 @@ mod tests {
             Some("2026-03-25T06:25:03.500+00:00"),
         );
         // 500ms — should be reported as milliseconds.
-        assert!(dur.contains("ms") || dur.contains("0.5s") || dur == "unknown",
-            "unexpected duration: {dur}");
+        assert!(
+            dur.contains("ms") || dur.contains("0.5s") || dur == "unknown",
+            "unexpected duration: {dur}"
+        );
     }
 
     #[test]

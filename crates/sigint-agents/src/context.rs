@@ -393,10 +393,8 @@ mod tests {
     #[test]
     fn analyst_prompt_includes_evidence_refs_when_populated() {
         let mut ctx = TaskContext::new("example.com");
-        ctx.agent_outputs.insert(
-            AgentRole::Executor,
-            "PORT 22/tcp open ssh".to_string(),
-        );
+        ctx.agent_outputs
+            .insert(AgentRole::Executor, "PORT 22/tcp open ssh".to_string());
         let ref_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         ctx.scan_record_refs.push((
             ref_id,
@@ -426,10 +424,8 @@ mod tests {
     #[test]
     fn analyst_prompt_omits_evidence_refs_when_empty() {
         let mut ctx = TaskContext::new("example.com");
-        ctx.agent_outputs.insert(
-            AgentRole::Executor,
-            "PORT 22/tcp open ssh".to_string(),
-        );
+        ctx.agent_outputs
+            .insert(AgentRole::Executor, "PORT 22/tcp open ssh".to_string());
         // scan_record_refs is empty (no DB or no executor records).
         let agent = AnalystAgent::new();
         let prompt = ctx.to_agent_prompt(&agent);
@@ -536,8 +532,7 @@ mod tests {
             "rf_recon prompt missing target: {prompt}"
         );
         assert!(
-            prompt.to_lowercase().contains("rf")
-                || prompt.to_lowercase().contains("spectrum"),
+            prompt.to_lowercase().contains("rf") || prompt.to_lowercase().contains("spectrum"),
             "rf_recon prompt should mention RF or spectrum: {prompt}"
         );
     }
