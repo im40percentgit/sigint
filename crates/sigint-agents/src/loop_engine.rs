@@ -661,6 +661,8 @@ mod tests {
                     exit_code: 0,
                     duration: Duration::from_millis(10),
                     structured_data: None,
+                    status: Default::default(),
+                    truncation: None,
                 }),
                 None => Err(ToolError::Sandbox("mock tool failure".into())),
             }
@@ -1014,6 +1016,8 @@ mod tests {
                 exit_code: 0,
                 duration: Duration::from_millis(10),
                 structured_data: None,
+                status: Default::default(),
+                truncation: None,
             })
         }
     }

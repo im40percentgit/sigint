@@ -100,6 +100,8 @@ pub(crate) async fn run_akaei(
         exit_code,
         duration,
         structured_data: None,
+        status: Default::default(),
+        truncation: None,
     })
 }
 

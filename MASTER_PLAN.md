@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 12 completed — Iterative Convergence + Finding Intelligence
+**Current Phase:** Phase 13 in progress — Live Target Hardening
 
 ### Architecture
 
@@ -752,6 +752,9 @@ Sub-phases:
 | DEC-LOOP-005 | Evidence linking via post-processing DB query after Executor | accepted | Analyst needs all Executor records, not just the latest; DB query is cleaner than plumbing IDs through the tool loop. Phase 12D. |
 | DEC-LOOP-006 | Per-cycle agent_output clearing for Strategist/Executor/Analyst; Researcher preserved | accepted | Prevents stale context from polluting re-planning; Researcher output is stable across cycles. Phase 12C. |
 | DEC-FINDING-002 | Phase 12B enrichment fields are optional in both schema and execute() | accepted | All five new fields (remediation, exploitability, impact, cvss_score, evidence_ref) are optional so existing calls without them continue to work; CVSS score is the only field with a validation constraint (0.0–10.0) because out-of-range values indicate a model error worth surfacing immediately. Phase 12B. |
+| DEC-AGENT-017 | Convergence loop uses max_cycles=1 default to preserve backward compatibility | accepted | The iterative Strategist→Executor→Analyst loop must not change behavior for existing callers; max_cycles=1 preserves single-pass behavior; iterative mode opt-in via --max-cycles N. Phase 12C. |
+| DEC-P13-001 | Three-state scan status (Complete/TimedOut/Partial) provides tool-agnostic completion metadata | accepted | Agents can reason about coverage gaps without tool-specific logic; TimedOut preserves partial output; Partial carries human-readable reason; default Complete requires no change at existing construction sites. Phase 13D-prereq. |
+| DEC-P13-002 | 1MB default output cap prevents OOM from unbounded tool output while preserving enough data for meaningful analysis | accepted | Sandbox-level cap applied after capture; TruncationInfo records original_bytes and kept_bytes so the agent knows how much was dropped; 1MB chosen as sufficient for most tool output while bounding memory use. Phase 13D-prereq. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -803,6 +806,22 @@ Sub-phases:
 - [x] Sub-Phase 11B: Analyst agent updated (allowed_tools + system prompt); Orchestrator wires collector into `run_scan`, drains findings into `ctx.findings`, emits `FindingCreated` events
 - [x] Sub-Phase 11C: `persist_scan()` in sigint-cli persists `ctx.findings` to the database
 - [x] Sub-Phase 11D: `sigint log <session-id>` command — migration 7 adds `agent_role` to scan_history; CLI renders chronological engagement log (Markdown/HTML) with per-agent tool attribution and findings summary
+
+---
+
+### Phase 13: Live Target Hardening
+**Status:** in-progress
+**Sub-phases:** 13D-prereq (Foundation Types) → 13A (nmap) → 13B (gobuster) → 13C (other tools)
+**Decision IDs:** DEC-P13-001, DEC-P13-002
+**Definition of Done:**
+- `ScanStatus` enum (Complete/TimedOut/Partial) added to `sigint-tools`
+- `TruncationInfo` struct added to `sigint-tools`
+- `ToolResult` carries `status` and `truncation` fields with backward-compatible defaults
+- Sandbox output cap (`max_output_bytes`) wired through `SandboxedCommand` → `SandboxOutput` → `ToolResult.truncation`
+- All existing tests pass; new unit tests cover each status variant and truncation path
+- Tool-specific hardening (timeout recovery, real-target robustness) addressed in subsequent sub-phases
+
+- [ ] Sub-Phase 13D-prereq: Foundation types — ScanStatus, TruncationInfo, ToolResult new fields, sandbox output cap, timeout investigation
 
 ---
 

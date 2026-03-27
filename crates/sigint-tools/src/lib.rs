@@ -43,7 +43,7 @@ pub use gobuster::GobusterTool;
 pub use nikto::NiktoTool;
 pub use nmap::NmapTool;
 pub use nuclei::NucleiTool;
-pub use result::ToolResult;
+pub use result::{ScanStatus, ToolResult, TruncationInfo};
 pub use shell::ShellTool;
 pub use tool::Tool;
 

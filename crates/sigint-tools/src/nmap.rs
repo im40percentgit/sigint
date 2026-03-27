@@ -23,7 +23,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::ToolResult;
+use crate::result::{TruncationInfo, ToolResult};
 use crate::tool::Tool;
 
 /// Parse nmap XML output (`-oX -`) into structured JSON.
@@ -357,12 +357,18 @@ impl Tool for NmapTool {
         // Parse the XML output into structured JSON for the agent layer.
         let structured_data = parse_nmap_xml(&output.stdout);
 
+        let truncation = output.was_truncated.then(|| TruncationInfo {
+            original_bytes: output.original_stdout_len,
+            kept_bytes: output.stdout.len(),
+        });
         Ok(ToolResult {
             stdout: output.stdout,
             stderr: output.stderr,
             exit_code: output.exit_code,
             duration: output.duration,
             structured_data,
+            status: Default::default(),
+            truncation,
         })
     }
 }
