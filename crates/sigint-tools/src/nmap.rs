@@ -220,7 +220,9 @@ fn parse_nmap_text_fallback(stdout: &str) -> Option<Value> {
     // Groups: (port)(protocol)(state)(service)
     // The service field captures the first non-whitespace word; the rest is
     // version info which is in stdout for LLM consumption.
-    let re = Regex::new(r"(\d+)/(tcp|udp)\s+(open|closed|filtered)\s+(\S+)").ok()?;
+    // Uses ASCII classes ([0-9], [ \t], [^ \t]) because the workspace regex
+    // crate is configured without unicode-perl (\d, \s, \S require it).
+    let re = Regex::new(r"([0-9]+)/(tcp|udp)[ \t]+(open|closed|filtered)[ \t]+([^ \t]+)").ok()?;
 
     let mut ports: Vec<Value> = Vec::new();
     for caps in re.captures_iter(stdout) {
