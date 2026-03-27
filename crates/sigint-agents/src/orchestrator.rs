@@ -1461,7 +1461,7 @@ mod tests {
 
             let chunks: Vec<Result<StreamChunk, Error>> = match n {
                 // Turns 0-2: Researcher, Strategist, Executor — plain text
-                0 | 1 | 2 => vec![
+                0..=2 => vec![
                     Ok(StreamChunk {
                         delta: "done".into(),
                         done: false,
@@ -1631,7 +1631,7 @@ mod tests {
                 drop(count);
 
                 let chunks: Vec<Result<StreamChunk, Error>> = match n {
-                    0 | 1 | 2 => vec![
+                    0..=2 => vec![
                         Ok(StreamChunk {
                             delta: "done".into(),
                             done: false,
@@ -2281,9 +2281,7 @@ mod tests {
         // Simulate what the drain validation does: an evidence_ref that is NOT
         // in scan_record_refs should be cleared.
         let validate = |uid: Uuid, refs: &[(Uuid, String, String)]| -> Option<Uuid> {
-            if refs.is_empty() {
-                Some(uid)
-            } else if refs.iter().any(|(id, _, _)| *id == uid) {
+            if refs.is_empty() || refs.iter().any(|(id, _, _)| *id == uid) {
                 Some(uid)
             } else {
                 None

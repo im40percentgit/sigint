@@ -82,7 +82,14 @@ impl Agent for ExecutorAgent {
             less useful than complete ones.\n\
          \n\
          All commands run in a sandboxed environment. You cannot break out of it. \
-         Focus on the task."
+         Focus on the task.\
+         \n\n\
+         Handling real-world tool output:\n\
+         - If a tool result reports its output was truncated or the scan timed out, \
+           note this explicitly in your analysis so the Analyst knows about coverage gaps \
+           (e.g. 'nmap scan timed out after 300s — ports above X may be unscanned').\n\
+         - If structured_data is null but raw stdout is available, analyse the raw text \
+           output directly — it still contains useful information."
     }
 
     fn allowed_tools(&self) -> &[String] {

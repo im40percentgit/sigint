@@ -25,20 +25,15 @@ use serde_json::Value;
 /// timeout. A Partial result carries a human-readable reason so the agent knows
 /// why the scan ended early (e.g., "max results reached", "connection refused").
 /// Default is Complete so existing construction sites require no change.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum ScanStatus {
     /// The tool ran to completion without interruption.
+    #[default]
     Complete,
     /// The tool was killed because it exceeded its configured timeout.
     TimedOut,
     /// The tool stopped early for a tool-specific reason.
     Partial(String),
-}
-
-impl Default for ScanStatus {
-    fn default() -> Self {
-        ScanStatus::Complete
-    }
 }
 
 /// Byte-count metadata for a truncated output field.
