@@ -1267,6 +1267,8 @@ mod tests {
                     exit_code: 0,
                     duration: std::time::Duration::from_millis(1),
                     structured_data: None,
+                    status: Default::default(),
+                    truncation: None,
                 })
             }
         }
@@ -1352,6 +1354,8 @@ mod tests {
                     exit_code: 0,
                     duration: std::time::Duration::from_millis(1),
                     structured_data: None,
+                    status: Default::default(),
+                    truncation: None,
                 })
             }
         }

@@ -17,7 +17,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::ToolResult;
+use crate::result::{TruncationInfo, ToolResult};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -161,12 +161,18 @@ impl Tool for GobusterTool {
                 }
             })?;
 
+        let truncation = output.was_truncated.then(|| TruncationInfo {
+            original_bytes: output.original_stdout_len,
+            kept_bytes: output.stdout.len(),
+        });
         Ok(ToolResult {
             stdout: output.stdout,
             stderr: output.stderr,
             exit_code: output.exit_code,
             duration: output.duration,
             structured_data: None,
+            status: Default::default(),
+            truncation,
         })
     }
 }

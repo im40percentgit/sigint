@@ -248,6 +248,8 @@ impl Tool for CreateFindingTool {
             exit_code: 0,
             duration: std::time::Duration::from_millis(0),
             structured_data: Some(finding_data),
+            status: Default::default(),
+            truncation: None,
         })
     }
 
