@@ -145,7 +145,7 @@ impl Tool for FeroxbusterTool {
                 }
             })?;
 
-        let truncation = output.was_truncated.then(|| TruncationInfo {
+        let truncation = output.was_truncated.then_some(TruncationInfo {
             original_bytes: output.original_stdout_len,
             kept_bytes: output.stdout.len(),
         });

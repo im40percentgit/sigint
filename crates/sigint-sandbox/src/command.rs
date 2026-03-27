@@ -15,6 +15,17 @@
 //! nmap require write access to /dev/null. rootfs("/") handles this automatically
 //! for the None branch, but the Pasta branch mounts directories individually and
 //! must explicitly include /dev.
+//!
+//! @decision DEC-P13-004
+//! @title Detect systemd-resolved stub (127.0.0.53) and resolve to upstream nameservers
+//! @status accepted
+//! @rationale On systems using systemd-resolved, /etc/resolv.conf points to the stub
+//! resolver at 127.0.0.53. Inside a new network namespace (Pasta mode), 127.0.0.53
+//! does not exist — DNS resolution fails silently. resolve_dns_content() detects the
+//! stub by scanning for "127.0.0.53" in the existing resolv.conf and substitutes the
+//! real upstream resolvers from /run/systemd/resolve/resolv.conf. If that file is
+//! absent, public fallbacks (8.8.8.8 / 1.1.1.1) are used so scans can always resolve
+//! hostnames. The logic is extracted into a pure function for testability.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -49,6 +60,37 @@ fn resolve_program(program: &str) -> String {
     }
     // Fall through — let hakoniwa's execve produce the ENOENT error.
     program.to_string()
+}
+
+/// Determine the resolv.conf content to write inside a Pasta network namespace.
+///
+/// @decision DEC-P13-004
+///
+/// On systemd-resolved systems `/etc/resolv.conf` contains `nameserver 127.0.0.53`
+/// (the stub resolver). That address does not exist inside a new network namespace,
+/// so DNS resolution fails for tools like nmap that rely on `/etc/resolv.conf`.
+///
+/// Resolution strategy (in priority order):
+/// 1. If the existing resolv.conf does **not** contain `127.0.0.53`, use it as-is —
+///    it already has real upstream nameservers.
+/// 2. If it does contain `127.0.0.53`, try reading the real upstream resolvers from
+///    `/run/systemd/resolve/resolv.conf`.
+/// 3. If that file is absent or unreadable, fall back to public DNS:
+///    `nameserver 8.8.8.8\nnameserver 1.1.1.1`
+///
+/// The `upstream_resolv_conf` parameter is the content of
+/// `/run/systemd/resolve/resolv.conf` (or `None` when the file is absent/unreadable).
+/// This is injected rather than read inside the function to keep it pure and testable.
+pub(crate) fn resolve_dns_content(existing: &str, upstream: Option<&str>) -> String {
+    if !existing.contains("127.0.0.53") {
+        // Not a systemd-resolved stub — use the existing content unchanged.
+        return existing.to_string();
+    }
+    // Stub detected. Use upstream if available, else fall back to public DNS.
+    match upstream {
+        Some(content) if !content.trim().is_empty() => content.to_string(),
+        _ => "nameserver 8.8.8.8\nnameserver 1.1.1.1\n".to_string(),
+    }
 }
 
 /// Network isolation mode for a sandboxed command.
@@ -212,10 +254,13 @@ impl SandboxedCommand {
                 // Remove the symlink first (cp -a preserves symlinks).
                 let resolv_dst = etc_tmp.join("resolv.conf");
                 let _ = std::fs::remove_file(&resolv_dst);
-                let resolv_path = "/run/systemd/resolve/resolv.conf";
-                if let Ok(contents) = std::fs::read_to_string(resolv_path) {
-                    let _ = std::fs::write(&resolv_dst, contents);
-                }
+                // Read existing resolv.conf (may be a symlink to the stub).
+                let existing = std::fs::read_to_string(&resolv_dst).unwrap_or_default();
+                // Read real upstream resolvers if systemd-resolved is in use.
+                let upstream_path = "/run/systemd/resolve/resolv.conf";
+                let upstream = std::fs::read_to_string(upstream_path).ok();
+                let dns_content = resolve_dns_content(&existing, upstream.as_deref());
+                let _ = std::fs::write(&resolv_dst, dns_content);
                 // Mount our modified /etc instead of the host's
                 container.bindmount_ro(&etc_tmp.to_string_lossy(), "/etc");
             } else {
@@ -554,5 +599,60 @@ mod tests {
             Ok(out) => assert!(!out.success, "sleep should not have succeeded"),
             Err(other) => panic!("unexpected error variant: {other}"),
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // resolve_dns_content tests  (@decision DEC-P13-004)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// When resolv.conf does not contain the systemd-resolved stub address,
+    /// the existing content is returned unchanged — no substitution needed.
+    #[test]
+    fn dns_non_stub_resolv_conf_unchanged() {
+        let existing = "nameserver 192.168.1.1\nnameserver 8.8.8.8\n";
+        let result = resolve_dns_content(existing, None);
+        assert_eq!(result, existing, "non-stub resolv.conf should be returned as-is");
+    }
+
+    /// When resolv.conf contains 127.0.0.53 (systemd-resolved stub) and the
+    /// upstream resolvers file is available, its content is used.
+    #[test]
+    fn dns_stub_replaced_with_upstream_resolvers() {
+        let existing = "# Generated by systemd-resolved\nnameserver 127.0.0.53\noptions edns0 trust-ad\n";
+        let upstream = "nameserver 1.1.1.1\nnameserver 8.8.8.8\n";
+        let result = resolve_dns_content(existing, Some(upstream));
+        assert_eq!(result, upstream, "stub should be replaced with upstream resolvers");
+        assert!(
+            !result.contains("127.0.0.53"),
+            "result must not contain stub address"
+        );
+    }
+
+    /// When resolv.conf contains 127.0.0.53 but the upstream resolvers file is
+    /// absent (None), fall back to the hardcoded public DNS servers.
+    #[test]
+    fn dns_stub_falls_back_to_public_dns_when_upstream_absent() {
+        let existing = "nameserver 127.0.0.53\n";
+        let result = resolve_dns_content(existing, None);
+        assert!(
+            result.contains("8.8.8.8") || result.contains("1.1.1.1"),
+            "fallback should contain public DNS: {result}"
+        );
+        assert!(
+            !result.contains("127.0.0.53"),
+            "result must not contain stub address: {result}"
+        );
+    }
+
+    /// When resolv.conf contains 127.0.0.53 but the upstream file content is
+    /// empty/whitespace-only, fall back to public DNS rather than writing empty content.
+    #[test]
+    fn dns_stub_falls_back_when_upstream_is_empty() {
+        let existing = "nameserver 127.0.0.53\n";
+        let result = resolve_dns_content(existing, Some("   \n"));
+        assert!(
+            result.contains("8.8.8.8") || result.contains("1.1.1.1"),
+            "empty upstream should trigger public DNS fallback: {result}"
+        );
     }
 }

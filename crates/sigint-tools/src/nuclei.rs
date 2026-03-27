@@ -147,7 +147,7 @@ impl Tool for NucleiTool {
 
         let structured_data = parse_nuclei_jsonl(&output.stdout);
 
-        let truncation = output.was_truncated.then(|| TruncationInfo {
+        let truncation = output.was_truncated.then_some(TruncationInfo {
             original_bytes: output.original_stdout_len,
             kept_bytes: output.stdout.len(),
         });

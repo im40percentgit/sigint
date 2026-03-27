@@ -77,7 +77,14 @@ impl Agent for ResearcherAgent {
          5. Note every open port, service banner, and technology indicator.\n\
          6. Summarise your findings clearly so the Strategist can plan the next phase.\n\
          \n\
-         Be methodical. Document every discovery with the exact command used and its raw output."
+         Be methodical. Document every discovery with the exact command used and its raw output.\
+         \n\n\
+         Handling real-world tool output:\n\
+         - If a tool result reports its output was truncated or the scan timed out, \
+           note this explicitly in your findings so the Strategist knows about coverage gaps \
+           (e.g. 'nmap scan timed out after 300s — ports above X may be unscanned').\n\
+         - If structured_data is null but raw stdout is available, analyse the raw text \
+           output directly — it still contains useful information."
     }
 
     fn allowed_tools(&self) -> &[String] {

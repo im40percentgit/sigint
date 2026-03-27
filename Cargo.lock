@@ -3270,6 +3270,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "quick-xml",
+ "regex",
  "serde",
  "serde_json",
  "sigint-core",

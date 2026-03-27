@@ -1411,7 +1411,7 @@ mod tests {
             .find(|m| m.role == "assistant")
             .expect("assistant message missing");
         assert!(
-            asst.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()),
+            asst.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()),
             "assistant message should carry tool_calls"
         );
 

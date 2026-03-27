@@ -13,10 +13,22 @@
 //! state, service, version) for structured_data. Raw XML is preserved in stdout for
 //! LLM consumption. quick-xml event-based parsing is used to avoid materialising a
 //! DOM tree, keeping memory overhead minimal for large scan outputs.
+//!
+//! @decision DEC-P13-003
+//! @title Regex-based text fallback when XML parsing fails
+//! @status accepted
+//! @rationale When nmap is killed mid-scan (timeout, OOM, truncation) the XML output
+//! is often unclosed — the event parser hits EOF or an unexpected token and stops.
+//! parse_nmap_xml() now breaks (rather than return None) on error, preserving any
+//! fully-committed hosts. For cases where XML fails entirely (no <nmaprun> or deeply
+//! broken), parse_nmap_text_fallback() extracts port/state/service from nmap's standard
+//! text output using a simple regex. This is less structured than XML but far better
+//! than discarding all data on parse failure.
 
 use async_trait::async_trait;
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use regex::Regex;
 use serde_json::{json, Value};
 use sigint_llm::ToolDefinition;
 use sigint_sandbox::profile::SandboxProfile;
@@ -25,6 +37,10 @@ use tracing::info;
 use crate::error::{Result, ToolError};
 use crate::result::{TruncationInfo, ToolResult};
 use crate::tool::Tool;
+
+/// 1 MB output cap for nmap. Scans against large CIDR ranges can produce many
+/// megabytes of XML; this keeps sandbox memory usage bounded.
+const NMAP_MAX_OUTPUT_BYTES: usize = 1_048_576;
 
 /// Parse nmap XML output (`-oX -`) into structured JSON.
 ///
@@ -49,6 +65,12 @@ use crate::tool::Tool;
 /// ```
 ///
 /// Uses quick-xml event-based parsing so no DOM tree is materialised.
+///
+/// **Partial-output resilience:** When the XML parser encounters an error (e.g.
+/// unclosed tags from a timed-out scan), the loop `break`s instead of
+/// `return None`. Any hosts that were fully committed before the error are
+/// returned. This means a scan truncated mid-`<host>` still returns the
+/// complete hosts that were parsed before the truncation point.
 fn parse_nmap_xml(xml: &str) -> Option<Value> {
     // Require the input to contain the nmap XML root element as a basic sanity check
     // before spending time on full parsing.
@@ -156,13 +178,74 @@ fn parse_nmap_xml(xml: &str) -> Option<Value> {
                 }
             }
             Ok(Event::Eof) => break,
-            Err(_) => return None,
+            // On XML parse error (unclosed tags, unexpected EOF after truncation),
+            // break instead of returning None. Any hosts already committed to
+            // `hosts` via a closing </host> tag are preserved and returned.
+            Err(_) => break,
             _ => {}
         }
         buf.clear();
     }
 
     Some(json!({ "hosts": hosts }))
+}
+
+/// Regex-based fallback parser for nmap text output.
+///
+/// @decision DEC-P13-003
+/// Used when XML parsing fails entirely (no `<nmaprun>` marker or irreparably
+/// broken XML). Extracts port/state/service tuples from nmap's standard
+/// human-readable output lines. Less structured than XML but better than
+/// discarding all data on parse failure.
+///
+/// Matched pattern: `(\d+)/(tcp|udp)\s+(open|closed|filtered)\s+(\S+)`
+///
+/// Example input line:
+///   `80/tcp  open  http  nginx 1.25.3`
+///
+/// Returns `Some(json)` with shape:
+/// ```json
+/// {
+///   "hosts": [{ "ports": [{ "port": 80, "protocol": "tcp", "state": "open", "service": "http" }] }],
+///   "parse_method": "text_fallback"
+/// }
+/// ```
+/// Returns `None` if no port lines are found (input is empty or not nmap output).
+fn parse_nmap_text_fallback(stdout: &str) -> Option<Value> {
+    if stdout.is_empty() {
+        return None;
+    }
+
+    // Matches lines like: "80/tcp   open   http   Apache httpd 2.4"
+    // Groups: (port)(protocol)(state)(service)
+    // The service field captures the first non-whitespace word; the rest is
+    // version info which is in stdout for LLM consumption.
+    // Uses ASCII classes ([0-9], [ \t], [^ \t]) because the workspace regex
+    // crate is configured without unicode-perl (\d, \s, \S require it).
+    let re = Regex::new(r"([0-9]+)/(tcp|udp)[ \t]+(open|closed|filtered)[ \t]+([^ \t]+)").ok()?;
+
+    let mut ports: Vec<Value> = Vec::new();
+    for caps in re.captures_iter(stdout) {
+        let port: u16 = caps[1].parse().unwrap_or(0);
+        let protocol = caps[2].to_string();
+        let state = caps[3].to_string();
+        let service = caps[4].to_string();
+        ports.push(json!({
+            "port":     port,
+            "protocol": protocol,
+            "state":    state,
+            "service":  service,
+        }));
+    }
+
+    if ports.is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "hosts": [{ "ports": ports }],
+        "parse_method": "text_fallback"
+    }))
 }
 
 /// Per-host accumulator used while parsing nmap XML.
@@ -321,8 +404,11 @@ impl Tool for NmapTool {
             "executing nmap scan"
         );
 
-        // Build the sandboxed command.
-        let mut cmd = SandboxProfile::nmap().apply("nmap");
+        // Build the sandboxed command. Cap output at 1 MB to prevent OOM from
+        // large CIDR scans; truncation metadata is surfaced via ToolResult::truncation.
+        let mut cmd = SandboxProfile::nmap()
+            .apply("nmap")
+            .max_output(NMAP_MAX_OUTPUT_BYTES);
 
         // Apply scan-type flags.
         for flag in scan_type.flags() {
@@ -354,10 +440,14 @@ impl Tool for NmapTool {
                 }
             })?;
 
-        // Parse the XML output into structured JSON for the agent layer.
-        let structured_data = parse_nmap_xml(&output.stdout);
+        // Try XML parse first. On partial output the parser breaks at the error
+        // point and returns whatever hosts were fully committed before it.
+        // If XML parse returns None (no <nmaprun> marker at all) and we have
+        // stdout content, try the regex-based text fallback.
+        let structured_data = parse_nmap_xml(&output.stdout)
+            .or_else(|| parse_nmap_text_fallback(&output.stdout));
 
-        let truncation = output.was_truncated.then(|| TruncationInfo {
+        let truncation = output.was_truncated.then_some(TruncationInfo {
             original_bytes: output.original_stdout_len,
             kept_bytes: output.stdout.len(),
         });
@@ -498,6 +588,37 @@ mod tests {
 <runstats><finished time="1709000010" elapsed="10.0"/></runstats>
 </nmaprun>"#;
 
+    /// XML truncated after the first complete host's </host> but before the
+    /// second host closes. The first host should be returned, the incomplete
+    /// second host discarded.
+    const NMAP_XML_TRUNCATED_MID_HOST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -T4 -F -oX - 10.0.0.0/30" start="1709000000" version="7.94">
+<host starttime="1709000001" endtime="1709000005">
+<status state="up" reason="echo-reply"/>
+<address addr="10.0.0.1" addrtype="ipv4"/>
+<ports>
+<port protocol="tcp" portid="22">
+<state state="open" reason="syn-ack"/>
+<service name="ssh"/>
+</port>
+</ports>
+</host>
+<host starttime="1709000006" endtime="1709000"#;
+
+    /// XML truncated mid-`<port>` inside the first host. The host element
+    /// itself never closes, so no hosts should be committed. Confirms we
+    /// return an empty host list (not None) — the caller still gets Some(json).
+    const NMAP_XML_TRUNCATED_MID_PORT: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -T4 -F -oX - 10.0.0.1" start="1709000000" version="7.94">
+<host starttime="1709000001" endtime="1709000010">
+<status state="up" reason="echo-reply"/>
+<address addr="10.0.0.1" addrtype="ipv4"/>
+<ports>
+<port protocol="tcp" portid="80">
+<state state="open" reason="syn-ack"#;
+
     #[test]
     fn parse_nmap_xml_single_host() {
         let result = parse_nmap_xml(NMAP_XML_SINGLE_HOST).expect("should parse valid nmap XML");
@@ -547,8 +668,12 @@ mod tests {
 
     #[test]
     fn parse_nmap_xml_malformed_returns_none() {
+        // No <nmaprun> marker — the early sanity check returns None before
+        // the parser even runs. This covers truly-garbage input.
         assert!(parse_nmap_xml("this is not xml at all").is_none());
         assert!(parse_nmap_xml("").is_none());
+        // <broken> has no <nmaprun>, so None is returned by the sanity check,
+        // not by the parser error path.
         assert!(parse_nmap_xml("<broken>").is_none());
     }
 
@@ -561,6 +686,102 @@ mod tests {
             .as_array()
             .expect("hosts should be an array");
         assert_eq!(hosts.len(), 0, "expected empty hosts array");
+    }
+
+    /// XML truncated mid-`<host>`: the first host is complete and committed,
+    /// the second host is incomplete (never reaches </host>) and is discarded.
+    /// parse_nmap_xml() should return Some with 1 host, not None.
+    #[test]
+    fn parse_nmap_xml_truncated_mid_host_returns_complete_hosts() {
+        let result = parse_nmap_xml(NMAP_XML_TRUNCATED_MID_HOST)
+            .expect("should return Some even for truncated XML");
+
+        let hosts = result["hosts"]
+            .as_array()
+            .expect("hosts should be an array");
+        assert_eq!(
+            hosts.len(),
+            1,
+            "only the first complete host should be returned"
+        );
+
+        let host = &hosts[0];
+        assert_eq!(host["address"], "10.0.0.1");
+        let ports = host["ports"].as_array().expect("ports array");
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0]["port"], 22);
+        assert_eq!(ports[0]["service"], "ssh");
+    }
+
+    /// XML truncated mid-`<port>` (inside the only host). The host element
+    /// never closes so it is not committed. We should get Some with 0 hosts
+    /// (not None — the <nmaprun> marker was found and Some is the invariant).
+    #[test]
+    fn parse_nmap_xml_truncated_mid_port_returns_some_empty() {
+        let result = parse_nmap_xml(NMAP_XML_TRUNCATED_MID_PORT)
+            .expect("should return Some even for truncated XML with no committed hosts");
+
+        let hosts = result["hosts"]
+            .as_array()
+            .expect("hosts should be an array");
+        assert_eq!(
+            hosts.len(),
+            0,
+            "incomplete host should not be committed to hosts array"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // parse_nmap_text_fallback tests
+    // ──────────────────────────────────────────────────────────────────────
+
+    const NMAP_TEXT_OUTPUT: &str = r#"Starting Nmap 7.94 ( https://nmap.org ) at 2024-03-01 00:00 UTC
+Nmap scan report for example.com (93.184.216.34)
+Host is up (0.010s latency).
+Not shown: 998 filtered tcp ports (no-response)
+PORT    STATE SERVICE  VERSION
+80/tcp  open  http     nginx 1.25.3
+443/tcp open  https    nginx 1.25.3
+8080/tcp filtered http
+
+Nmap done: 1 IP address (1 host up) scanned in 5.00 seconds
+"#;
+
+    #[test]
+    fn parse_nmap_text_fallback_extracts_ports() {
+        let result = parse_nmap_text_fallback(NMAP_TEXT_OUTPUT)
+            .expect("should extract ports from text output");
+
+        assert_eq!(result["parse_method"], "text_fallback");
+
+        let hosts = result["hosts"].as_array().expect("hosts array");
+        assert_eq!(hosts.len(), 1);
+
+        let ports = hosts[0]["ports"].as_array().expect("ports array");
+        // 80/tcp open, 443/tcp open, 8080/tcp filtered
+        assert_eq!(ports.len(), 3, "expected 3 port lines: {ports:?}");
+
+        let p80 = ports.iter().find(|p| p["port"] == 80).expect("port 80");
+        assert_eq!(p80["protocol"], "tcp");
+        assert_eq!(p80["state"], "open");
+        assert_eq!(p80["service"], "http");
+
+        let p443 = ports.iter().find(|p| p["port"] == 443).expect("port 443");
+        assert_eq!(p443["state"], "open");
+
+        let p8080 = ports.iter().find(|p| p["port"] == 8080).expect("port 8080");
+        assert_eq!(p8080["state"], "filtered");
+    }
+
+    #[test]
+    fn parse_nmap_text_fallback_empty_returns_none() {
+        assert!(parse_nmap_text_fallback("").is_none());
+    }
+
+    #[test]
+    fn parse_nmap_text_fallback_garbage_returns_none() {
+        assert!(parse_nmap_text_fallback("not nmap output at all").is_none());
+        assert!(parse_nmap_text_fallback("Starting Nmap 7.94\nHost is up.").is_none());
     }
 
     /// Requires nmap + passt + newuidmap. Run with: cargo test -p sigint-tools -- --ignored
