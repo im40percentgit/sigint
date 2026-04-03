@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 15D completed — Post-Exploitation Tool Expansion
+**Current Phase:** Phase 15E in-progress — Cloud/Container Security Tool Expansion
 
 ### Architecture
 
@@ -53,6 +53,7 @@ sigint/
 - Phase 15B completed — auth/exploitation tools: hydra (brute-force), wpscan (WordPress), testssl (TLS analysis), hashcat (hash cracking)
 - Phase 15C completed — network/infrastructure tools: masscan (fast port scanning), tshark (packet capture), responder (LLMNR/NBT-NS credential capture)
 - Phase 15D completed — post-exploitation tools: msfconsole (Metasploit Framework), linpeas (privilege escalation enumeration), enum4linux-ng (SMB enumeration)
+- Phase 15E in-progress — cloud/container security tools: trivy (vulnerability scanning), ScoutSuite (cloud auditing), CloudSploit (cloud misconfigurations)
 
 ---
 
@@ -778,7 +779,16 @@ Sub-phases:
 | DEC-P15-010 | Responder defaults to analyze-only mode (passive) for safety; active poisoning requires explicit opt-in | accepted | LLMNR/NBT-NS poisoning is high-impact; --analyze flag makes passive the default; active mode requires explicit poison=true parameter; SandboxProfile::nmap() for raw network; captured credentials parsed from Responder-Session.log format. Phase 15C. |
 | DEC-P15-011 | MsfconsoleTool uses inline -x commands and web_scanner profile | accepted | msfconsole is invoked with inline resource commands via -x rather than RPC/REST (msfrpcd). Simpler to sandbox: no daemon process, no auth tokens, no TCP ports inside the namespace. web_scanner profile provides pasta networking (needed for reverse shells) and 600s timeout (exploits can take several minutes). Risk is High. Phase 15D. |
 | DEC-P15-012 | LinpeasTool uses offline profile; runs in sandbox for enumeration of local system or parses pre-captured output | accepted | linpeas is a local privilege escalation enumeration script requiring no network access; offline profile enforces no-network constraint and provides 60s timeout. Supports two modes: run linpeas.sh directly or parse existing output file. Risk is Medium. Phase 15D. |
+| DEC-P13-003 | Regex-based text fallback parser when nmap XML is truncated or unclosed | accepted | When nmap is killed mid-scan the XML is often unclosed; the event parser hits EOF and stops. A regex fallback over nmap's human-readable text output extracts port/state/service tuples — less structured than XML but better than discarding all data. ASCII character classes used to avoid PCRE Unicode issues. Phase 13A. |
+| DEC-P13-004 | Detect systemd-resolved stub (127.0.0.53) and resolve to upstream nameservers | accepted | On systemd-resolved systems /etc/resolv.conf points to 127.0.0.53 which does not exist inside a new network namespace (Pasta mode); resolve_dns_content() detects the stub and substitutes real upstream nameservers from /run/systemd/resolve/resolv.conf or falls back to 8.8.8.8. Phase 13A. |
+| DEC-P13-005 | Best-effort structured parsing of gobuster quiet-mode output | accepted | Extracts path/status/size from gobuster -q lines matching the format "[STATUS] /path (Size: N)"; lines that don't match are silently skipped; returns None on empty output. Phase 13B. |
+| DEC-P13-006 | Best-effort structured parsing of feroxbuster quiet-mode output | accepted | Feroxbuster -q --no-state emits one result per line in the format "STATUS METHOD LINES WORDS CHARS URL"; parser extracts these fields and builds a structured findings list with total count and status code aggregates. Phase 13B. |
+| DEC-P13-007 | Best-effort structured parsing of nikto findings from text output | accepted | Nikto text lines beginning with "+" are findings; parser extracts finding text and OSVDB references (e.g. OSVDB-3092) into a structured list; lines not matching the pattern are silently skipped. Phase 13B. |
+| DEC-P14-TOOLS-001 | Per-tool output caps in ToolsConfig with output_cap_for() lookup | accepted | Allows noisy tools (e.g. nuclei, feroxbuster) to have larger caps while keeping the global default tight; output_cap_for() returns the tool-specific override when configured, falling back to the global default. Phase 14E. |
 | DEC-P15-013 | enum4linux-ng (Python rewrite) preferred over original enum4linux; JSON output via -oJ | accepted | enum4linux-ng is the maintained Python rewrite of the original Perl tool; -oJ /dev/stdout emits structured JSON covering shares/users/groups/policies; bruteforce profile provides pasta networking for SMB access with 300s timeout. Risk is Medium. Phase 15D. |
+| DEC-P15-014 | TrivyTool uses SandboxProfile::recon() — pasta networking, 60s timeout, Risk Low | accepted | trivy scans container images, filesystems, and repos for CVEs; image scans need network for registry pulls (pasta); read-only scan never modifies target so Risk Low; --format json --quiet provides structured output; parse_trivy_output extracts per-target vulns, severity counts, and total. Phase 15E. |
+| DEC-P15-015 | ScoutSuiteTool uses SandboxProfile::web_scanner() — pasta networking, 600s timeout, Risk Medium | accepted | ScoutSuite calls cloud provider APIs which are slow (up to 10 min for large accounts); web_scanner profile provides 600s timeout; --report-format json --no-browser for headless structured output; findings extracted from JSON report by service/rule/severity/item count. Phase 15E. |
+| DEC-P15-016 | CloudsploitTool uses SandboxProfile::web_scanner() — pasta networking, 600s timeout, Risk Medium | accepted | CloudSploit calls cloud provider APIs; web_scanner profile provides 600s timeout; --json for structured output; findings extracted as plugin/category/status/message tuples with PASS/FAIL/WARN aggregates. Phase 15E. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -938,6 +948,23 @@ Sub-phases:
 - [x] msf_exploit: Metasploit Framework wrapper, SandboxProfile::web_scanner(), inline -x command execution, session/marker parser
 - [x] linpeas_enum: linpeas privilege escalation enumeration, SandboxProfile::offline(), section/high-priority finding parser
 - [x] enum4linux_scan: SMB enumeration via enum4linux-ng, SandboxProfile::bruteforce(), JSON output parser with shares/users/groups
+
+---
+
+### Phase 15E: Cloud/Container Security Tool Expansion
+**Status:** in-progress
+**Branch:** feature/phase15e-cloud-tools
+**Decision IDs:** DEC-P15-014, DEC-P15-015, DEC-P15-016
+**Definition of Done:**
+- 3 new tools (trivy_scan, scout_suite_scan, cloudsploit_scan) with structured JSON parsers
+- All tools registered in sigint-tools/src/lib.rs with sandbox profiles
+- Agent ACLs updated: Executor has all 3 (22 total); Researcher gets trivy_scan (10 total)
+- Doctor checks added for trivy, scout, cloudsploit binaries
+- All sigint-tools and sigint-agents tests pass, cargo check clean
+
+- [ ] trivy_scan: container image/filesystem/repo vulnerability scanner, SandboxProfile::recon(), JSON Results parser with per-target CVE list
+- [ ] scout_suite_scan: cloud infrastructure auditor (AWS/Azure/GCP), SandboxProfile::web_scanner(), JSON report parser with service/rule/severity findings
+- [ ] cloudsploit_scan: cloud misconfiguration detector, SandboxProfile::web_scanner(), JSON findings parser with PASS/FAIL/WARN aggregates
 
 ---
 
