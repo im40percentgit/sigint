@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 13 completed — Live Target Hardening
+**Current Phase:** Phase 14 completed — Agent Intelligence
 
 ### Architecture
 
@@ -48,6 +48,7 @@ sigint/
 - Phase 9 completed — session resume with auto-diff (9A), multi-target campaign mode (9B), report polish with executive summary + SVG chart (9C)
 - Phase 12 completed — iterative convergence loop, enriched findings, evidence linking, approval-gated escalation
 - Phase 13 completed — live target hardening: ScanStatus/TruncationInfo foundation types, sandbox output cap, nmap/gobuster/feroxbuster/nikto/nuclei/shell hardening
+- Phase 14 completed — agent intelligence: memory wiring, Strategist overhaul with MITRE ATT&CK, recon integration, asset-finding linking, configurable output caps
 
 ---
 
@@ -756,6 +757,11 @@ Sub-phases:
 | DEC-AGENT-017 | Convergence loop uses max_cycles=1 default to preserve backward compatibility | accepted | The iterative Strategist→Executor→Analyst loop must not change behavior for existing callers; max_cycles=1 preserves single-pass behavior; iterative mode opt-in via --max-cycles N. Phase 12C. |
 | DEC-P13-001 | Three-state scan status (Complete/TimedOut/Partial) provides tool-agnostic completion metadata | accepted | Agents can reason about coverage gaps without tool-specific logic; TimedOut preserves partial output; Partial carries human-readable reason; default Complete requires no change at existing construction sites. Phase 13D-prereq. |
 | DEC-P13-002 | 1MB default output cap prevents OOM from unbounded tool output while preserving enough data for meaningful analysis | accepted | Sandbox-level cap applied after capture; TruncationInfo records original_bytes and kept_bytes so the agent knows how much was dropped; 1MB chosen as sufficient for most tool output while bounding memory use. Phase 13D-prereq. |
+| DEC-P14-001 | MemoryService gated by --memory flag and config.memory.enabled | accepted | Memory retrieval adds latency and token cost; opt-in prevents regression for users who don't need episodic context; flag and config are independent toggles. Phase 14A. |
+| DEC-P14-002 | Strategist uses CreateAttackPlanTool with MITRE ATT&CK-enriched system prompt | accepted | Structured tool call captures attack plans as machine-parseable JSON via Arc<Mutex<Vec>> collector; MITRE ATT&CK framework provides standardized tactic/technique vocabulary for the LLM. Phase 14B. |
+| DEC-P14-003 | ReconEngine pre-step injects asset context into Orchestrator TaskContext | accepted | Running recon before the agent loop provides up-to-date asset inventory; injecting into TaskContext makes asset data available to all downstream agents without coupling them to ReconEngine. Phase 14C. |
+| DEC-P14-004 | Migration 9 adds asset_id FK to findings table with FindingQuery::by_asset_id | accepted | Foreign key links findings to discovered assets; nullable column preserves backward compatibility for findings without asset association; query method enables per-asset finding retrieval for reports and analysis. Phase 14D. |
+| DEC-P14-005 | ToolsConfig with per-tool max_output overrides for all 6 tools | accepted | Global default (1MB from DEC-P13-002) may be too large or small for specific tools; per-tool config in sigint.toml [tools.<name>] allows operators to tune output caps without code changes. Phase 14E. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -826,6 +832,26 @@ Sub-phases:
 - [x] Sub-Phase 13A: nmap hardening — DNS resolution fix, text fallback parser, ASCII regex classes, agent prompt tuning
 - [x] Sub-Phase 13B: Web scanner hardening — feroxbuster/gobuster/nikto parser integration, merge conflict resolution
 - [x] Sub-Phase 13C: Remaining tools — 1MB max_output cap added to nuclei and shell
+
+---
+
+### Phase 14: Agent Intelligence
+**Status:** completed
+**Sub-phases:** 14A (Memory Wiring) → 14B (Strategist Overhaul) → 14C (Recon Integration) → 14D (Asset-Finding Linking) → 14E (Configurable Output Caps)
+**Decision IDs:** DEC-P14-001, DEC-P14-002, DEC-P14-003, DEC-P14-004, DEC-P14-005
+**Definition of Done:**
+- `--memory` flag and `config.memory.enabled` gate MemoryService injection into agent context
+- Strategist uses CreateAttackPlanTool with MITRE ATT&CK-enriched system prompt; plans collected via Arc<Mutex<Vec>>
+- `--recon` flag triggers ReconEngine pre-step; asset context injected into Orchestrator TaskContext
+- Migration 9 adds `asset_id` FK to findings table; `FindingQuery::by_asset_id` enables per-asset finding queries
+- ToolsConfig with per-tool `max_output` overrides wired through all 6 tools (nmap, gobuster, feroxbuster, nikto, nuclei, shell)
+- 874 tests pass, 0 failures
+
+- [x] Sub-Phase 14A: Memory wiring — --memory flag, config toggle, MemoryService gating
+- [x] Sub-Phase 14B: Strategist overhaul — CreateAttackPlanTool, MITRE ATT&CK prompt, plan collector
+- [x] Sub-Phase 14C: Recon integration — --recon flag, ReconEngine pre-step, asset context injection
+- [x] Sub-Phase 14D: Asset-finding linking — migration 9 (asset_id FK), FindingQuery::by_asset_id
+- [x] Sub-Phase 14E: Configurable output caps — ToolsConfig, per-tool overrides, all 6 tools updated
 
 ---
 
