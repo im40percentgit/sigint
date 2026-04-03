@@ -1,7 +1,7 @@
 //! ResearcherAgent — OSINT and initial reconnaissance specialist.
 //!
 //! @decision DEC-AGENT-007
-//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei
+//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei + whatweb + testssl
 //! @status accepted
 //! @rationale The Researcher phase focuses on information gathering, not
 //! exploitation. nmap covers port/service enumeration; shell covers DNS, WHOIS,
@@ -10,6 +10,8 @@
 //! enumerate web surfaces without stepping into active exploitation territory.
 //! nikto and feroxbuster are reserved for the Executor — they are more aggressive
 //! and belong in the structured attack phase, not initial reconnaissance.
+//! Phase 15B adds testssl_scan: passive TLS/SSL analysis is reconnaissance,
+//! not exploitation, making it appropriate for the Researcher phase.
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -31,6 +33,7 @@ impl ResearcherAgent {
                 "gobuster_scan".to_string(),
                 "nuclei_scan".to_string(),
                 "whatweb_scan".to_string(),
+                "testssl_scan".to_string(),
             ],
         }
     }
@@ -145,7 +148,11 @@ mod tests {
             tools.contains(&"whatweb_scan".to_string()),
             "researcher must have whatweb_scan"
         );
-        assert_eq!(tools.len(), 5, "researcher should have exactly 5 tools");
+        assert!(
+            tools.contains(&"testssl_scan".to_string()),
+            "researcher must have testssl_scan"
+        );
+        assert_eq!(tools.len(), 6, "researcher should have exactly 6 tools");
     }
 
     #[test]

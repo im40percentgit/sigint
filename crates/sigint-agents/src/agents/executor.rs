@@ -1,7 +1,7 @@
 //! ExecutorAgent — sandboxed tool execution specialist.
 //!
 //! @decision DEC-AGENT-009
-//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster
+//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster, hydra, wpscan, testssl, hashcat
 //! @status accepted
 //! @rationale The Executor is the only agent that runs tools against the target.
 //! It receives a concrete plan from the Strategist and is trusted to execute it
@@ -9,6 +9,8 @@
 //! so broad tool access here is safe — the sandbox enforces the security boundary,
 //! not the ACL. Sub-Phase 4C adds gobuster, nikto, nuclei, and feroxbuster so
 //! the Executor can perform web enumeration and vulnerability scanning as directed.
+//! Phase 15B adds hydra (credential brute-forcing), wpscan (WordPress enum),
+//! testssl (TLS analysis), and hashcat (offline hash cracking).
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -34,6 +36,10 @@ impl ExecutorAgent {
                 "sqlmap_scan".to_string(),
                 "ffuf_scan".to_string(),
                 "whatweb_scan".to_string(),
+                "hydra_scan".to_string(),
+                "wpscan_scan".to_string(),
+                "testssl_scan".to_string(),
+                "hashcat_crack".to_string(),
             ],
         }
     }
@@ -166,7 +172,23 @@ mod tests {
             tools.contains(&"whatweb_scan".to_string()),
             "executor must have whatweb_scan"
         );
-        assert_eq!(tools.len(), 9, "executor should have exactly 9 tools");
+        assert!(
+            tools.contains(&"hydra_scan".to_string()),
+            "executor must have hydra_scan"
+        );
+        assert!(
+            tools.contains(&"wpscan_scan".to_string()),
+            "executor must have wpscan_scan"
+        );
+        assert!(
+            tools.contains(&"testssl_scan".to_string()),
+            "executor must have testssl_scan"
+        );
+        assert!(
+            tools.contains(&"hashcat_crack".to_string()),
+            "executor must have hashcat_crack"
+        );
+        assert_eq!(tools.len(), 13, "executor should have exactly 13 tools");
     }
 
     #[test]

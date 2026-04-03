@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 15A completed — Tool Expansion
+**Current Phase:** Phase 15B completed — Auth/Exploitation Tool Expansion
 
 ### Architecture
 
@@ -50,6 +50,7 @@ sigint/
 - Phase 13 completed — live target hardening: ScanStatus/TruncationInfo foundation types, sandbox output cap, nmap/gobuster/feroxbuster/nikto/nuclei/shell hardening
 - Phase 14 completed — agent intelligence: memory wiring, Strategist overhaul with MITRE ATT&CK, recon integration, asset-finding linking, configurable output caps
 - Phase 15A completed — tool expansion: sqlmap (SQL injection), ffuf (web fuzzing), whatweb (tech fingerprinting)
+- Phase 15B completed — auth/exploitation tools: hydra (brute-force), wpscan (WordPress), testssl (TLS analysis), hashcat (hash cracking)
 
 ---
 
@@ -766,6 +767,10 @@ Sub-phases:
 | DEC-P15-001 | sqlmap runs with --batch flag for non-interactive automated execution | accepted | sqlmap prompts interactively by default which blocks the agent tool loop; --batch selects safe defaults automatically; combined with --forms and risk/level params for coverage control. Phase 15A. |
 | DEC-P15-002 | ffuf uses -json flag for structured JSON output parsing | accepted | ffuf's default output is human-readable text; -json emits one JSON object per result line enabling reliable structured parsing without fragile regex; results array built from line-delimited JSON. Phase 15A. |
 | DEC-P15-003 | whatweb uses --log-json with Recon aggression profile | accepted | Recon profile (aggression level 1) is passive and safe for authorized testing; --log-json produces machine-parseable output; higher aggression levels available via parameter override. Phase 15A. |
+| DEC-P15-004 | HydraTool uses SandboxProfile::bruteforce() for credential brute-forcing | accepted | bruteforce profile provides pasta networking with 300s timeout; -l/-L flags for single username or list; -P for password wordlist; target as service://host; -o /dev/stdout captures found credentials; Risk High because successful attacks yield direct auth access. Phase 15B. |
+| DEC-P15-005 | WpscanTool uses JSON output format for reliable structured parsing | accepted | wpscan --format json provides stable machine-readable output; --no-banner --random-user-agent suppress noise and avoid WAF detection; plugin vulnerabilities counted from array length; users extracted by slug field. Phase 15B. |
+| DEC-P15-006 | TestsslTool uses SandboxProfile::recon() for passive TLS analysis | accepted | recon profile provides 60s timeout sufficient for single-host TLS checks; --jsonfile /dev/stdout emits JSON array; --quiet --color 0 suppress banner/ANSI; OK findings filtered out; protocol entries separated into protocols map. Phase 15B. |
+| DEC-P15-007 | HashcatTool uses SandboxProfile::offline() — no network, 60s timeout | accepted | hash cracking requires no network access; offline profile enforces no-network constraint; --force bypasses hardware warnings; --outfile-format=2 outputs plaintext-only for line parsing; -o /dev/stdout captures cracked pairs inline. Phase 15B. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -873,6 +878,24 @@ Sub-phases:
 - [x] Sub-Phase sqlmap_scan: sqlmap wrapper with --batch mode, SQL injection parameter support, structured finding parser
 - [x] Sub-Phase ffuf_scan: ffuf wrapper with -json output, wordlist/URL/method params, result parser
 - [x] Sub-Phase whatweb_scan: whatweb wrapper with --log-json, Recon aggression profile, technology fingerprint parser
+
+---
+
+### Phase 15B: Auth/Exploitation Tool Expansion
+**Status:** completed
+**Branch:** feature/phase15b-auth-tools
+**Decision IDs:** DEC-P15-004, DEC-P15-005, DEC-P15-006, DEC-P15-007
+**Definition of Done:**
+- 4 new tools (hydra_scan, wpscan_scan, testssl_scan, hashcat_crack) with structured parsers
+- All tools registered in sigint-tools/src/lib.rs with sandbox profiles
+- Agent ACLs updated: Executor has all 4; Researcher gets testssl_scan
+- Doctor checks added for hydra, wpscan, testssl, hashcat binaries
+- All sigint-tools and sigint-agents tests pass, cargo check clean
+
+- [x] hydra_scan: online credential brute-forcer, SandboxProfile::bruteforce(), credential line parser
+- [x] wpscan_scan: WordPress enumeration, SandboxProfile::web_scanner(), JSON output parser
+- [x] testssl_scan: TLS/SSL analysis, SandboxProfile::recon(), JSON array findings parser
+- [x] hashcat_crack: offline hash cracking, SandboxProfile::offline(), cracked line parser
 
 ---
 
