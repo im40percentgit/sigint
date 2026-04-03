@@ -319,6 +319,12 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
             "sudo apt install testssl.sh  OR  git clone https://github.com/drwetter/testssl.sh",
         ),
         ("hashcat", "sudo apt install hashcat"),
+        ("masscan", "sudo apt install masscan"),
+        ("tshark", "sudo apt install tshark"),
+        (
+            "responder",
+            "sudo apt install responder OR git clone https://github.com/lgandx/Responder",
+        ),
         ("dig", "sudo apt install dnsutils"),
         ("whois", "sudo apt install whois"),
         ("curl", "sudo apt install curl"),

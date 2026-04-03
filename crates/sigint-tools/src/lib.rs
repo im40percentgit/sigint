@@ -2,8 +2,8 @@
 //!
 //! Provides the `Tool` trait and concrete implementations for nmap, shell,
 //! gobuster, nikto, nuclei, feroxbuster, sqlmap, ffuf, whatweb, hydra, wpscan,
-//! testssl, hashcat, and seven akaei SDR tools that the agent layer uses to
-//! give LLMs controlled access to external tools.
+//! testssl, hashcat, masscan, tshark, responder, and seven akaei SDR tools that
+//! the agent layer uses to give LLMs controlled access to external tools.
 //!
 //! # Architecture
 //!
@@ -27,14 +27,17 @@ pub mod finding;
 pub mod gobuster;
 pub mod hashcat;
 pub mod hydra;
+pub mod masscan;
 pub mod nikto;
 pub mod nmap;
 pub mod nuclei;
+pub mod responder;
 pub mod result;
 pub mod shell;
 pub mod sqlmap;
 pub mod ffuf;
 pub mod testssl;
+pub mod tshark;
 pub mod whatweb;
 pub mod wpscan;
 pub mod tool;
@@ -54,14 +57,17 @@ pub use finding::{new_finding_collector, CreateFindingTool, FindingCollector};
 pub use gobuster::GobusterTool;
 pub use hashcat::HashcatTool;
 pub use hydra::HydraTool;
+pub use masscan::MasscanTool;
 pub use nikto::NiktoTool;
 pub use nmap::NmapTool;
 pub use nuclei::NucleiTool;
+pub use responder::ResponderTool;
 pub use result::{ScanStatus, ToolResult, TruncationInfo};
 pub use shell::ShellTool;
 pub use sqlmap::SqlmapTool;
 pub use ffuf::FfufTool;
 pub use testssl::TestsslTool;
+pub use tshark::TsharkTool;
 pub use whatweb::WhatwebTool;
 pub use wpscan::WpscanTool;
 pub use tool::Tool;
@@ -96,6 +102,10 @@ pub fn all_executor_tools_with_config(
         Box::new(WpscanTool::new().with_output_cap(tools_config.output_cap_for("wpscan"))),
         Box::new(TestsslTool::new().with_output_cap(tools_config.output_cap_for("testssl"))),
         Box::new(HashcatTool::new().with_output_cap(tools_config.output_cap_for("hashcat"))),
+        // Phase 15C network analysis tools
+        Box::new(MasscanTool::new().with_output_cap(tools_config.output_cap_for("masscan"))),
+        Box::new(TsharkTool::new().with_output_cap(tools_config.output_cap_for("tshark"))),
+        Box::new(ResponderTool::new().with_output_cap(tools_config.output_cap_for("responder"))),
         // akaei SDR tools (direct process — USB device access required, no sandbox output caps)
         Box::new(AkaeiSweepTool),
         Box::new(AkaeiScanTool),
@@ -120,9 +130,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_executor_tools_returns_twenty_tools() {
+    fn all_executor_tools_returns_twenty_three_tools() {
         let tools = all_executor_tools();
-        assert_eq!(tools.len(), 20);
+        assert_eq!(tools.len(), 23);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         // Network pentest tools
         assert!(names.contains(&"nmap_scan"));
@@ -139,6 +149,10 @@ mod tests {
         assert!(names.contains(&"wpscan_scan"));
         assert!(names.contains(&"testssl_scan"));
         assert!(names.contains(&"hashcat_crack"));
+        // Phase 15C network analysis tools
+        assert!(names.contains(&"masscan_scan"));
+        assert!(names.contains(&"tshark_capture"));
+        assert!(names.contains(&"responder_poison"));
         // akaei SDR tools
         assert!(names.contains(&"akaei_sweep"));
         assert!(names.contains(&"akaei_scan"));

@@ -182,7 +182,7 @@ impl Tool for HydraTool {
 
         // Optional port.
         if let Some(p) = port {
-            cmd = cmd.arg("-s").arg(&p.to_string());
+            cmd = cmd.arg("-s").arg(p.to_string());
         }
 
         // Threads.
@@ -190,7 +190,7 @@ impl Tool for HydraTool {
         cmd = cmd.arg("-t").arg(&thread_str);
 
         // Target and service in protocol://host format.
-        cmd = cmd.arg(&format!("{}://{}", service, target));
+        cmd = cmd.arg(format!("{}://{}", service, target));
 
         // Machine-readable output.
         cmd = cmd.arg("-o").arg("/dev/stdout");

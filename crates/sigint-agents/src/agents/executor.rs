@@ -1,7 +1,7 @@
 //! ExecutorAgent — sandboxed tool execution specialist.
 //!
 //! @decision DEC-AGENT-009
-//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster, hydra, wpscan, testssl, hashcat
+//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster, hydra, wpscan, testssl, hashcat, masscan, tshark, responder
 //! @status accepted
 //! @rationale The Executor is the only agent that runs tools against the target.
 //! It receives a concrete plan from the Strategist and is trusted to execute it
@@ -11,6 +11,8 @@
 //! the Executor can perform web enumeration and vulnerability scanning as directed.
 //! Phase 15B adds hydra (credential brute-forcing), wpscan (WordPress enum),
 //! testssl (TLS analysis), and hashcat (offline hash cracking).
+//! Phase 15C adds masscan (large-scale port scanning), tshark (traffic capture),
+//! and responder (LLMNR/NBT-NS/MDNS poisoning and credential capture).
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -40,6 +42,9 @@ impl ExecutorAgent {
                 "wpscan_scan".to_string(),
                 "testssl_scan".to_string(),
                 "hashcat_crack".to_string(),
+                "masscan_scan".to_string(),
+                "tshark_capture".to_string(),
+                "responder_poison".to_string(),
             ],
         }
     }
@@ -188,7 +193,19 @@ mod tests {
             tools.contains(&"hashcat_crack".to_string()),
             "executor must have hashcat_crack"
         );
-        assert_eq!(tools.len(), 13, "executor should have exactly 13 tools");
+        assert!(
+            tools.contains(&"masscan_scan".to_string()),
+            "executor must have masscan_scan"
+        );
+        assert!(
+            tools.contains(&"tshark_capture".to_string()),
+            "executor must have tshark_capture"
+        );
+        assert!(
+            tools.contains(&"responder_poison".to_string()),
+            "executor must have responder_poison"
+        );
+        assert_eq!(tools.len(), 16, "executor should have exactly 16 tools");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! ResearcherAgent — OSINT and initial reconnaissance specialist.
 //!
 //! @decision DEC-AGENT-007
-//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei + whatweb + testssl
+//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei + whatweb + testssl + masscan + tshark
 //! @status accepted
 //! @rationale The Researcher phase focuses on information gathering, not
 //! exploitation. nmap covers port/service enumeration; shell covers DNS, WHOIS,
@@ -12,6 +12,9 @@
 //! and belong in the structured attack phase, not initial reconnaissance.
 //! Phase 15B adds testssl_scan: passive TLS/SSL analysis is reconnaissance,
 //! not exploitation, making it appropriate for the Researcher phase.
+//! Phase 15C adds masscan (fast large-scale port enumeration across IP ranges)
+//! and tshark (passive traffic capture and protocol analysis). responder is
+//! NOT included — active poisoning belongs in the Executor phase only.
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -34,6 +37,8 @@ impl ResearcherAgent {
                 "nuclei_scan".to_string(),
                 "whatweb_scan".to_string(),
                 "testssl_scan".to_string(),
+                "masscan_scan".to_string(),
+                "tshark_capture".to_string(),
             ],
         }
     }
@@ -152,7 +157,15 @@ mod tests {
             tools.contains(&"testssl_scan".to_string()),
             "researcher must have testssl_scan"
         );
-        assert_eq!(tools.len(), 6, "researcher should have exactly 6 tools");
+        assert!(
+            tools.contains(&"masscan_scan".to_string()),
+            "researcher must have masscan_scan"
+        );
+        assert!(
+            tools.contains(&"tshark_capture".to_string()),
+            "researcher must have tshark_capture"
+        );
+        assert_eq!(tools.len(), 8, "researcher should have exactly 8 tools");
     }
 
     #[test]
