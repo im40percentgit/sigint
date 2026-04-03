@@ -9,8 +9,18 @@
 //! full scans. The `-Format txt -output -` flags stream plain-text results to
 //! stdout, making output easy for the LLM to parse. Tuning codes narrow the
 //! test categories when a focused scan is preferred.
+//!
+//! @decision DEC-P13-007
+//! @title Best-effort structured parsing of nikto findings
+//! @status accepted
+//! @rationale Nikto text output lines beginning with `+` are findings. This
+//! parser extracts finding text, OSVDB references (e.g. `OSVDB-3092`), and
+//! the URL path from each `+`-prefixed line. Lines that don't start with `+`
+//! (headers, summary lines, blank lines) are silently skipped. OSVDB refs may
+//! be absent on some finding lines — those are captured without the ref field.
 
 use async_trait::async_trait;
+use regex::Regex;
 use serde_json::{json, Value};
 use sigint_llm::ToolDefinition;
 use sigint_sandbox::profile::SandboxProfile;
@@ -85,6 +95,7 @@ impl Tool for NiktoTool {
         );
 
         let mut cmd = SandboxProfile::web_scanner().apply("nikto");
+        cmd = cmd.max_output(1_048_576);
         cmd = cmd.arg("-h").arg(&target);
 
         // Stream plain-text output to stdout for LLM consumption.
@@ -109,6 +120,7 @@ impl Tool for NiktoTool {
                 }
             })?;
 
+        let structured_data = parse_nikto_output(&output.stdout);
         let truncation = output.was_truncated.then_some(TruncationInfo {
             original_bytes: output.original_stdout_len,
             kept_bytes: output.stdout.len(),
@@ -118,11 +130,88 @@ impl Tool for NiktoTool {
             stderr: output.stderr,
             exit_code: output.exit_code,
             duration: output.duration,
-            structured_data: None,
+            structured_data,
             status: Default::default(),
             truncation,
         })
     }
+}
+
+/// Parse nikto plain-text output into a structured findings summary.
+///
+/// Nikto findings lines begin with `+`. The common formats are:
+///
+///   `+ /admin/: Directory indexing found.`
+///   `+ OSVDB-3092: /test/: This might be interesting...`
+///   `+ OSVDB-3268: /icons/: Directory indexing found.`
+///
+/// This parser handles both the with-OSVDB and without-OSVDB forms. The path
+/// is extracted from the first `/…/` or `/…` token after the OSVDB ref (or
+/// after the `+` if no OSVDB ref). Lines that don't start with `+` (headers,
+/// summary stats, blank lines) are silently skipped. Returns `None` when no
+/// `+`-prefixed finding lines exist.
+///
+/// Output shape:
+/// ```json
+/// {
+///   "findings": [
+///     {"text": "Directory indexing found.", "osvdb": "OSVDB-3092", "path": "/test/"},
+///     {"text": "Something else.", "path": "/admin/"}
+///   ],
+///   "total": 2
+/// }
+/// ```
+pub(crate) fn parse_nikto_output(stdout: &str) -> Option<Value> {
+    // Pattern for an OSVDB reference at the start of a finding body.
+    // e.g.  `OSVDB-3092: /test/: Some finding text.`
+    // Uses ASCII classes ([0-9], [ \t], [^ \t]) because the workspace regex
+    // crate is configured without unicode-perl (\d, \s, \S require it).
+    let re_osvdb = Regex::new(r#"^(OSVDB-[0-9]+):[ \t]+(/[^ \t]*?):[ \t]+(.+)$"#)
+        .expect("nikto OSVDB regex is valid");
+
+    // Pattern for a finding without an OSVDB ref.
+    // e.g.  `/admin/: Directory indexing found.`
+    //       `Retrieved x-powered-by header: PHP/7.4`
+    let re_path = Regex::new(r#"^(/[^ \t]*?):[ \t]+(.+)$"#)
+        .expect("nikto path regex is valid");
+
+    let mut findings: Vec<Value> = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+
+        // Only process finding lines — those beginning with `+`.
+        let body = match line.strip_prefix("+ ") {
+            Some(b) => b.trim(),
+            None => continue,
+        };
+
+        if let Some(caps) = re_osvdb.captures(body) {
+            let osvdb = caps.get(1).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
+            let path = caps.get(2).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
+            let text = caps.get(3).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
+            findings.push(json!({"text": text, "osvdb": osvdb, "path": path}));
+        } else if let Some(caps) = re_path.captures(body) {
+            let path = caps.get(1).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
+            let text = caps.get(2).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
+            findings.push(json!({"text": text, "path": path}));
+        } else {
+            // Finding line without a parseable path — store the full body as text.
+            if !body.is_empty() {
+                findings.push(json!({"text": body}));
+            }
+        }
+    }
+
+    if findings.is_empty() {
+        return None;
+    }
+
+    let total = findings.len() as u64;
+    Some(json!({
+        "findings": findings,
+        "total": total,
+    }))
 }
 
 #[cfg(test)]
@@ -198,6 +287,97 @@ mod tests {
             params["properties"]["tuning"]["type"], "string",
             "tuning should be a string property"
         );
+    }
+
+    // --- parser unit tests ---
+
+    #[test]
+    fn parse_nikto_finding_with_osvdb() {
+        let input = "+ OSVDB-3092: /test/: This might be interesting...";
+        let result = parse_nikto_output(input).expect("should return Some");
+        let findings = result["findings"].as_array().expect("findings should be array");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(result["total"], 1);
+        assert_eq!(findings[0]["osvdb"], "OSVDB-3092");
+        assert_eq!(findings[0]["path"], "/test/");
+        assert_eq!(findings[0]["text"], "This might be interesting...");
+    }
+
+    #[test]
+    fn parse_nikto_finding_without_osvdb() {
+        let input = "+ /admin/: Directory indexing found.";
+        let result = parse_nikto_output(input).expect("should return Some");
+        let findings = result["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["path"], "/admin/");
+        assert_eq!(findings[0]["text"], "Directory indexing found.");
+        // no osvdb key when not present
+        assert!(findings[0].get("osvdb").is_none(), "osvdb key should be absent");
+    }
+
+    #[test]
+    fn parse_nikto_multiple_findings_mixed() {
+        // The input below has 8 lines beginning with `+`:
+        //   + Target IP, + Target Hostname, + Target Port  (3 metadata lines)
+        //   + Server                                       (1 server header)
+        //   + OSVDB-3092 finding, + /admin/ finding,
+        //   + OSVDB-3268 finding                           (3 structured findings)
+        //   + 1 host(s) tested                            (1 summary line)
+        // Lines beginning with `-` are skipped entirely.
+        let input = r#"- Nikto v2.1.6
+---------------------------------------------------------------------------
++ Target IP:          127.0.0.1
++ Target Hostname:    127.0.0.1
++ Target Port:        80
+---------------------------------------------------------------------------
++ Server: Apache/2.4.41
++ OSVDB-3092: /test/: This might be interesting.
++ /admin/: Directory indexing found.
++ OSVDB-3268: /icons/: Directory indexing found.
++ 1 host(s) tested"#;
+        let result = parse_nikto_output(input).expect("should return Some");
+        let findings = result["findings"].as_array().unwrap();
+        // All 8 `+`-prefixed lines become findings (parser is best-effort).
+        assert_eq!(findings.len(), 8, "should have 8 findings from + lines");
+        assert_eq!(result["total"], 8);
+        // The two OSVDB findings should carry the osvdb key.
+        let osvdb_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.get("osvdb").is_some())
+            .collect();
+        assert_eq!(osvdb_findings.len(), 2, "should have 2 OSVDB findings");
+    }
+
+    #[test]
+    fn parse_nikto_empty_output_returns_none() {
+        assert!(
+            parse_nikto_output("").is_none(),
+            "empty output should return None"
+        );
+    }
+
+    #[test]
+    fn parse_nikto_no_plus_lines_returns_none() {
+        let input = r#"- Nikto v2.1.6
+- Target IP: 127.0.0.1
+- 0 host(s) tested"#;
+        assert!(
+            parse_nikto_output(input).is_none(),
+            "output with no + lines should return None"
+        );
+    }
+
+    #[test]
+    fn parse_nikto_finding_no_path_stores_text() {
+        // Some nikto lines start with `+` but don't follow the path: text pattern.
+        let input = "+ Retrieved x-powered-by header: PHP/7.4.3";
+        let result = parse_nikto_output(input).expect("should return Some");
+        let findings = result["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1);
+        // Should store full body as text, no path or osvdb
+        assert!(findings[0]["text"].as_str().unwrap().contains("PHP/7.4.3"));
+        assert!(findings[0].get("path").is_none());
+        assert!(findings[0].get("osvdb").is_none());
     }
 
     /// Requires nikto + passt + newuidmap. Run with: cargo test -p sigint-tools -- --ignored

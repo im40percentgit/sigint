@@ -10,8 +10,19 @@
 //! progress bar, keeping stdout clean for the LLM. Thread count is user-tunable
 //! to balance speed against target rate-limiting. Extension filtering lets the
 //! agent focus on specific file types (php, html, js) rather than all paths.
+//!
+//! @decision DEC-P13-006
+//! @title Best-effort structured parsing of feroxbuster output
+//! @status accepted
+//! @rationale Feroxbuster quiet-mode (`-q --no-state`) emits one result per line
+//! in the format: `STATUS METHOD LINES WORDS CHARS URL`. Lines that don't match
+//! the expected format are silently skipped so the parser is resilient to
+//! version-specific variations (e.g. extra fields, wildcard entries). A
+//! rate-limit heuristic sets `possibly_rate_limited: true` when zero URLs are
+//! parsed, giving agents a low-cost signal to retry with fewer threads.
 
 use async_trait::async_trait;
+use regex::Regex;
 use serde_json::{json, Value};
 use sigint_llm::ToolDefinition;
 use sigint_sandbox::profile::SandboxProfile;
@@ -114,6 +125,7 @@ impl Tool for FeroxbusterTool {
         );
 
         let mut cmd = SandboxProfile::bruteforce().apply("feroxbuster");
+        cmd = cmd.max_output(1_048_576);
         cmd = cmd.arg("-u").arg(&target);
         cmd = cmd.arg("-w").arg(&wordlist);
 
@@ -145,6 +157,7 @@ impl Tool for FeroxbusterTool {
                 }
             })?;
 
+        let structured_data = parse_feroxbuster_output(&output.stdout);
         let truncation = output.was_truncated.then_some(TruncationInfo {
             original_bytes: output.original_stdout_len,
             kept_bytes: output.stdout.len(),
@@ -154,11 +167,83 @@ impl Tool for FeroxbusterTool {
             stderr: output.stderr,
             exit_code: output.exit_code,
             duration: output.duration,
-            structured_data: None,
+            structured_data,
             status: Default::default(),
             truncation,
         })
     }
+}
+
+/// Parse feroxbuster quiet-mode output into a structured summary.
+///
+/// Feroxbuster with `-q --no-state` emits one result per line in the format:
+///
+///   `200      GET      123l      456w     7890c http://target/path`
+///   `301      GET        0l        0w        0c http://target/path/ => http://target/path/`
+///
+/// Columns (space-separated):
+///   STATUS  METHOD  LINESl  WORDSw  CHARSc  URL  [=> REDIRECT_URL]
+///
+/// The `l`, `w`, `c` suffixes on the numeric columns are part of feroxbuster's
+/// output format (lines, words, chars). Lines that don't match are silently
+/// skipped. Returns `None` when no valid URLs are found.
+///
+/// Output shape:
+/// ```json
+/// {
+///   "urls": [{"status": 200, "method": "GET", "url": "http://target/path"}, ...],
+///   "total": 1,
+///   "possibly_rate_limited": false
+/// }
+/// ```
+pub(crate) fn parse_feroxbuster_output(stdout: &str) -> Option<Value> {
+    // Pattern: STATUS  METHOD  NUMl  NUMw  NUMc  URL [=> ANYTHING]
+    // The numeric columns have l/w/c suffixes. URL must start with http:// or https://.
+    // Uses ASCII classes ([0-9], [ \t], [^ \t], [a-zA-Z0-9_]) because the
+    // workspace regex crate is configured without unicode-perl.
+    let re = Regex::new(
+        r#"^([0-9]{3})[ \t]+([a-zA-Z0-9_]+)[ \t]+[0-9]+l[ \t]+[0-9]+w[ \t]+[0-9]+c[ \t]+(https?://[^ \t]+)"#,
+    )
+    .expect("feroxbuster output regex is valid");
+
+    let mut urls: Vec<Value> = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(caps) = re.captures(line) {
+            let status: u64 = caps
+                .get(1)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(0);
+            let method = caps
+                .get(2)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            // URL may have a " => REDIRECT" suffix appended; strip it by
+            // taking only the capture group (which stops at first whitespace).
+            let url = caps
+                .get(3)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+
+            urls.push(json!({"status": status, "method": method, "url": url}));
+        }
+        // Lines that don't match are silently skipped.
+    }
+
+    let total = urls.len() as u64;
+    // Rate-limit heuristic: zero parsed URLs on a live target is suspicious.
+    let possibly_rate_limited = total == 0;
+
+    Some(json!({
+        "urls": urls,
+        "total": total,
+        "possibly_rate_limited": possibly_rate_limited,
+    }))
 }
 
 #[cfg(test)]
@@ -242,6 +327,63 @@ mod tests {
     fn feroxbuster_default_threads() {
         // Verify the constant is a sensible default
         assert_eq!(DEFAULT_THREADS, 50);
+    }
+
+    // --- parser unit tests ---
+
+    #[test]
+    fn parse_feroxbuster_typical_output() {
+        let input = r#"200      GET      123l      456w     7890c http://target/admin
+301      GET        0l        0w        0c http://target/static => http://target/static/
+403      GET       10l       20w      300c http://target/secret"#;
+        let result = parse_feroxbuster_output(input).expect("should return Some");
+        let urls = result["urls"].as_array().expect("urls should be array");
+        assert_eq!(urls.len(), 3);
+        assert_eq!(result["total"], 3);
+        assert_eq!(urls[0]["status"], 200);
+        assert_eq!(urls[0]["method"], "GET");
+        assert_eq!(urls[0]["url"], "http://target/admin");
+        assert_eq!(urls[1]["status"], 301);
+        // URL should be the base URL without the redirect suffix
+        assert_eq!(urls[1]["url"], "http://target/static");
+        assert_eq!(result["possibly_rate_limited"], false);
+    }
+
+    #[test]
+    fn parse_feroxbuster_empty_output_returns_some_with_zero() {
+        let result =
+            parse_feroxbuster_output("").expect("should return Some even for empty input");
+        assert_eq!(result["total"], 0);
+        assert_eq!(result["possibly_rate_limited"], true);
+    }
+
+    #[test]
+    fn parse_feroxbuster_malformed_lines_skipped() {
+        let input = r#"this is not feroxbuster output
+200      GET      10l       20w      300c http://target/valid
+[####################] - 0s         0/0       0/s http://target
+WLD      GET      10l       20w      300c Got 200 for http://target/FUZZ"#;
+        let result = parse_feroxbuster_output(input).expect("should return Some");
+        let urls = result["urls"].as_array().unwrap();
+        // Only the valid line with proper format should be parsed.
+        // The WLD line doesn't start with a 3-digit status code.
+        assert_eq!(urls.len(), 1, "only one parseable line");
+        assert_eq!(urls[0]["url"], "http://target/valid");
+    }
+
+    #[test]
+    fn parse_feroxbuster_https_urls() {
+        let input = r#"200      GET       5l       15w      200c https://secure.example.com/api"#;
+        let result = parse_feroxbuster_output(input).expect("should return Some");
+        let urls = result["urls"].as_array().unwrap();
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0]["url"], "https://secure.example.com/api");
+    }
+
+    #[test]
+    fn parse_feroxbuster_rate_limit_heuristic() {
+        let result = parse_feroxbuster_output("   ").expect("should return Some");
+        assert_eq!(result["possibly_rate_limited"], true);
     }
 
     /// Requires feroxbuster + passt + newuidmap. Run with: cargo test -p sigint-tools -- --ignored
