@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 15C completed — Network/Infrastructure Tool Expansion
+**Current Phase:** Phase 15D completed — Post-Exploitation Tool Expansion
 
 ### Architecture
 
@@ -52,6 +52,7 @@ sigint/
 - Phase 15A completed — tool expansion: sqlmap (SQL injection), ffuf (web fuzzing), whatweb (tech fingerprinting)
 - Phase 15B completed — auth/exploitation tools: hydra (brute-force), wpscan (WordPress), testssl (TLS analysis), hashcat (hash cracking)
 - Phase 15C completed — network/infrastructure tools: masscan (fast port scanning), tshark (packet capture), responder (LLMNR/NBT-NS credential capture)
+- Phase 15D completed — post-exploitation tools: msfconsole (Metasploit Framework), linpeas (privilege escalation enumeration), enum4linux-ng (SMB enumeration)
 
 ---
 
@@ -775,6 +776,9 @@ Sub-phases:
 | DEC-P15-008 | MasscanTool uses SandboxProfile::nmap() for pasta networking | accepted | masscan needs raw socket access like nmap; nmap profile provides pasta networking with 120s timeout; --rate parameter controls scan speed; -oJ /dev/stdout for JSON output; banners parsed from service array. Phase 15C. |
 | DEC-P15-009 | TsharkTool uses SandboxProfile::nmap() for raw network access; JSON output for structured analysis | accepted | tshark requires raw network access for packet capture; nmap profile provides pasta networking; -T json for structured output; -c packet count limit prevents unbounded capture; protocol hierarchy and conversation stats parsed from JSON layers. Phase 15C. |
 | DEC-P15-010 | Responder defaults to analyze-only mode (passive) for safety; active poisoning requires explicit opt-in | accepted | LLMNR/NBT-NS poisoning is high-impact; --analyze flag makes passive the default; active mode requires explicit poison=true parameter; SandboxProfile::nmap() for raw network; captured credentials parsed from Responder-Session.log format. Phase 15C. |
+| DEC-P15-011 | MsfconsoleTool uses inline -x commands and web_scanner profile | accepted | msfconsole is invoked with inline resource commands via -x rather than RPC/REST (msfrpcd). Simpler to sandbox: no daemon process, no auth tokens, no TCP ports inside the namespace. web_scanner profile provides pasta networking (needed for reverse shells) and 600s timeout (exploits can take several minutes). Risk is High. Phase 15D. |
+| DEC-P15-012 | LinpeasTool uses offline profile; runs in sandbox for enumeration of local system or parses pre-captured output | accepted | linpeas is a local privilege escalation enumeration script requiring no network access; offline profile enforces no-network constraint and provides 60s timeout. Supports two modes: run linpeas.sh directly or parse existing output file. Risk is Medium. Phase 15D. |
+| DEC-P15-013 | enum4linux-ng (Python rewrite) preferred over original enum4linux; JSON output via -oJ | accepted | enum4linux-ng is the maintained Python rewrite of the original Perl tool; -oJ /dev/stdout emits structured JSON covering shares/users/groups/policies; bruteforce profile provides pasta networking for SMB access with 300s timeout. Risk is Medium. Phase 15D. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -917,6 +921,23 @@ Sub-phases:
 - [x] masscan_scan: fast large-scale port scanner, SandboxProfile::nmap(), JSON output parser with banner extraction
 - [x] tshark_capture: packet capture and traffic analysis, SandboxProfile::nmap(), JSON layer parser with protocol hierarchy
 - [x] responder_poison: LLMNR/NBT-NS credential capture, SandboxProfile::nmap(), passive by default (--analyze), session log parser
+
+---
+
+### Phase 15D: Post-Exploitation Tool Expansion
+**Status:** completed
+**Branch:** feature/phase15d-postexploit
+**Decision IDs:** DEC-P15-011, DEC-P15-012, DEC-P15-013
+**Definition of Done:**
+- 3 new tools (msf_exploit, linpeas_enum, enum4linux_scan) with structured parsers
+- All tools registered in sigint-tools/src/lib.rs with sandbox profiles
+- Agent ACLs updated: Executor has all 3 (19 total); Researcher gets enum4linux_scan (9 total)
+- Doctor checks added for msfconsole, linpeas.sh, enum4linux-ng binaries
+- All sigint-tools and sigint-agents tests pass, cargo check clean
+
+- [x] msf_exploit: Metasploit Framework wrapper, SandboxProfile::web_scanner(), inline -x command execution, session/marker parser
+- [x] linpeas_enum: linpeas privilege escalation enumeration, SandboxProfile::offline(), section/high-priority finding parser
+- [x] enum4linux_scan: SMB enumeration via enum4linux-ng, SandboxProfile::bruteforce(), JSON output parser with shares/users/groups
 
 ---
 
