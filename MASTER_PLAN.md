@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 13 in progress — Live Target Hardening
+**Current Phase:** Phase 13 completed — Live Target Hardening
 
 ### Architecture
 
@@ -47,6 +47,7 @@ sigint/
 - Phase 8 completed — streaming reasoning (8A), interactive TUI sessions (8B), per-chunk streaming timeout
 - Phase 9 completed — session resume with auto-diff (9A), multi-target campaign mode (9B), report polish with executive summary + SVG chart (9C)
 - Phase 12 completed — iterative convergence loop, enriched findings, evidence linking, approval-gated escalation
+- Phase 13 completed — live target hardening: ScanStatus/TruncationInfo foundation types, sandbox output cap, nmap/gobuster/feroxbuster/nikto/nuclei/shell hardening
 
 ---
 
@@ -810,7 +811,7 @@ Sub-phases:
 ---
 
 ### Phase 13: Live Target Hardening
-**Status:** in-progress
+**Status:** completed
 **Sub-phases:** 13D-prereq (Foundation Types) → 13A (nmap) → 13B (gobuster) → 13C (other tools)
 **Decision IDs:** DEC-P13-001, DEC-P13-002
 **Definition of Done:**
@@ -821,7 +822,10 @@ Sub-phases:
 - All existing tests pass; new unit tests cover each status variant and truncation path
 - Tool-specific hardening (timeout recovery, real-target robustness) addressed in subsequent sub-phases
 
-- [ ] Sub-Phase 13D-prereq: Foundation types — ScanStatus, TruncationInfo, ToolResult new fields, sandbox output cap, timeout investigation
+- [x] Sub-Phase 13D-prereq: Foundation types — ScanStatus, TruncationInfo, ToolResult new fields, sandbox output cap, timeout investigation
+- [x] Sub-Phase 13A: nmap hardening — DNS resolution fix, text fallback parser, ASCII regex classes, agent prompt tuning
+- [x] Sub-Phase 13B: Web scanner hardening — feroxbuster/gobuster/nikto parser integration, merge conflict resolution
+- [x] Sub-Phase 13C: Remaining tools — 1MB max_output cap added to nuclei and shell
 
 ---
 
