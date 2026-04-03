@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 15E completed — Cloud/Container Security Tool Expansion
+**Current Phase:** Phase 16 completed — Web UI Rebuild (Preact + TypeScript + esbuild)
 
 ### Architecture
 
@@ -54,6 +54,7 @@ sigint/
 - Phase 15C completed — network/infrastructure tools: masscan (fast port scanning), tshark (packet capture), responder (LLMNR/NBT-NS credential capture)
 - Phase 15D completed — post-exploitation tools: msfconsole (Metasploit Framework), linpeas (privilege escalation enumeration), enum4linux-ng (SMB enumeration)
 - Phase 15E completed — cloud/container security tools: trivy (vulnerability scanning), ScoutSuite (cloud auditing), CloudSploit (cloud misconfigurations)
+- Phase 16 completed — Web UI rebuild: Preact + TypeScript + esbuild, 9 pages, 8 components, 62KB JS + 5KB CSS bundle
 
 ---
 
@@ -789,6 +790,21 @@ Sub-phases:
 | DEC-P15-014 | TrivyTool uses SandboxProfile::recon() — pasta networking, 60s timeout, Risk Low | accepted | trivy scans container images, filesystems, and repos for CVEs; image scans need network for registry pulls (pasta); read-only scan never modifies target so Risk Low; --format json --quiet provides structured output; parse_trivy_output extracts per-target vulns, severity counts, and total. Phase 15E. |
 | DEC-P15-015 | ScoutSuiteTool uses SandboxProfile::web_scanner() — pasta networking, 600s timeout, Risk Medium | accepted | ScoutSuite calls cloud provider APIs which are slow (up to 10 min for large accounts); web_scanner profile provides 600s timeout; --report-format json --no-browser for headless structured output; findings extracted from JSON report by service/rule/severity/item count. Phase 15E. |
 | DEC-P15-016 | CloudsploitTool uses SandboxProfile::web_scanner() — pasta networking, 600s timeout, Risk Medium | accepted | CloudSploit calls cloud provider APIs; web_scanner profile provides 600s timeout; --json for structured output; findings extracted as plugin/category/status/message tuples with PASS/FAIL/WARN aggregates. Phase 15E. |
+| DEC-WEB-020 | GitHub Dark palette as the canonical SIGINT color system | accepted | Pentest tooling is used in darkened environments; GitHub Dark provides a well-tested accessible palette that security practitioners already trust; JetBrains Mono with monospace fallbacks keeps the terminal aesthetic. Phase 16A. |
+| DEC-WEB-021 | Discriminated union for WebSocket events using `type` literal field | accepted | A discriminated union on `type` lets TypeScript narrow the event payload with a switch statement, producing fully type-safe handlers without runtime casting. Phase 16A. |
+| DEC-WEB-022 | Hash-based SPA routing via window.location.hash and hashchange event | accepted | Hash routing requires no server-side route configuration — the static file server's SPA fallback (serve index.html for unknown paths) already handles all routes; hashchange + useState provides a clean reactive routing model in Preact. Phase 16B. |
+| DEC-WEB-023 | WebSocketManager singleton with auto-reconnect and subscribe/unsubscribe pattern | accepted | A singleton prevents multiple WS connections from different components; subscribe returns an unsubscribe function matching Preact's useEffect cleanup convention; 3s reconnect delay avoids reconnect storms. Phase 16A. |
+| DEC-WEB-024 | esbuild CSS import creates sibling app.css alongside app.js — matches index.html expectations | accepted | esbuild automatically extracts CSS imports to a sibling file when outfile (not outdir) is configured; the existing index.html loads both /assets/app.js and /assets/app.css so this produces the correct output without manual file management. Phase 16A. |
+| DEC-WEB-025 | Sidebar uses CSS hover expansion (48px → 200px) with no JS state | accepted | Pure CSS transition on width avoids a useState toggle and re-render on every hover; the inner container is fixed at 200px so text is always laid out correctly and simply clipped by the overflow:hidden parent during collapse. Phase 16B. |
+| DEC-WEB-026 | TopBar carries WebSocket status badge and live scan indicator | accepted | Persistent top-of-screen visibility ensures operators always know connection state and whether a scan is active; avoids burying status in a sidebar or modal. Phase 16B. |
+| DEC-WEB-027 | App shell uses hash router with useState + hashchange listener | accepted | Hash routing requires no server configuration; a single hashchange listener + useState(location.hash) is the minimal correct Preact implementation; cleanup via removeEventListener in useEffect return prevents listener accumulation. Phase 16B. |
+| DEC-WEB-028 | DataTable generic over T with Column render prop for cell customisation | accepted | Generic table avoids duplicating sort/click logic across all list views; Column.render? allows per-cell JSX overrides (badges, links) while defaulting to String(value) for simple cases. Phase 16C. |
+| DEC-WEB-030 | Dashboard uses parallel useEffect fetches for sessions and scans | accepted | Two independent API calls fired in a single useEffect to minimise time-to-paint; they update independent state slices so partial failure still renders available data; loading and error states tracked independently. Phase 16D. |
+| DEC-WEB-031 | ReportViewer uses srcdoc iframe with sandbox="allow-same-origin" | accepted | srcdoc injects arbitrary HTML safely — sandbox prevents script execution from report body while allow-same-origin lets the iframe inherit CSS custom properties for themed rendering; Blob URL download avoids a second network round-trip. Phase 16E. |
+| DEC-WEB-032 | PipelineStatus uses CSS keyframes pulse animation on the active stage icon | accepted | CSS animation on the icon avoids JS setInterval for visual feedback; the pulse keyframe is defined in theme.css for consistency with the existing status-dot animation. Phase 16D. |
+| DEC-WEB-033 | EventLog auto-scroll uses a sentinel div + scrollIntoView | accepted | Zero-height sentinel div at bottom combined with scrollIntoView({ behavior: "smooth" }) is the idiomatic Preact pattern; avoids manual scrollTop arithmetic and handles dynamic item heights correctly. Phase 16D. |
+| DEC-WEB-034 | ApprovalModal is a pure presentational component — parent owns WS send | accepted | Keeping the modal free of WebSocket knowledge makes it testable in isolation and reusable; parent (ScanLive) constructs approval payload and calls wsManager.send(); modal fires onApprove/onDeny callbacks. Phase 16D. |
+| DEC-WEB-035 | Settings page is read-only, sourced from /api/health + hardcoded defaults | accepted | No /api/config endpoint exists; health check provides server status; hardcoding known defaults is preferable to omitting the section or adding a new endpoint solely for display; read-only avoids accidental misconfiguration from UI. Phase 16F. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -965,6 +981,27 @@ Sub-phases:
 - [x] trivy_scan: container image/filesystem/repo vulnerability scanner, SandboxProfile::recon(), JSON Results parser with per-target CVE list
 - [x] scout_suite_scan: cloud infrastructure auditor (AWS/Azure/GCP), SandboxProfile::web_scanner(), JSON report parser with service/rule/severity findings
 - [x] cloudsploit_scan: cloud misconfiguration detector, SandboxProfile::web_scanner(), JSON findings parser with PASS/FAIL/WARN aggregates
+
+---
+
+### Phase 16: Web UI Rebuild — Preact + TypeScript + esbuild
+**Status:** completed
+**Branch:** feature/phase16-web-ui (merged)
+**Sub-phases:** 16A (Build System + Infrastructure) → 16B (Shell + Layout) → 16C (Shared Components) → 16D (Dashboard + Scan pages) → 16E (Sessions + Reports) → 16F (Diff + Settings)
+**Decision IDs:** DEC-WEB-020..028, DEC-WEB-030..035
+**Definition of Done:**
+- `crates/sigint-web/frontend/` with esbuild build system producing `static/assets/app.js` + `app.css`
+- Preact + TypeScript SPA with hash-based routing, Sidebar, TopBar, shared components
+- All existing `cargo test -p sigint-web` tests pass (static files still servable)
+- `npm run build` completes without errors
+- Dashboard, NewScan, ScanLive, SessionDetail, ReportViewer, AttackPlanView, ScanDiff, Settings pages implemented
+
+- [x] Sub-Phase 16A (Tasks 1-3): Build system — package.json, tsconfig.json, esbuild.config.mjs; infrastructure — theme.css, types.ts, api.ts, ws.ts
+- [x] Sub-Phase 16B (Task 4): Shell — Sidebar.tsx, TopBar.tsx, app.tsx, index.tsx
+- [x] Sub-Phase 16C (Task 5): Shared components — StatCard.tsx, SeverityBadge.tsx, DataTable.tsx
+- [x] Sub-Phase 16D: Dashboard.tsx (stat cards, session list, recent findings), NewScan.tsx (form), ScanLive.tsx (live log + approval)
+- [x] Sub-Phase 16E: SessionDetail.tsx, ReportViewer.tsx, FindingsDetail.tsx, AttackPlanView.tsx
+- [x] Sub-Phase 16F: ScanDiff.tsx, Settings.tsx
 
 ---
 
