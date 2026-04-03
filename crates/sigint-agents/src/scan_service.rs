@@ -23,7 +23,7 @@ use tokio::task::AbortHandle;
 use uuid::Uuid;
 
 use sigint_core::{event::EventBus, ApprovalRegistry, Config, Error};
-use sigint_llm::factory::create_provider;
+use sigint_llm::{factory::create_provider, provider::LlmProvider};
 use sigint_memory::MemoryService;
 use sigint_store::{Database, ScanRecord};
 use tracing::{info, warn};
@@ -77,6 +77,10 @@ pub struct ScanService {
     event_bus: EventBus,
     approval_registry: Arc<ApprovalRegistry>,
     scans: Arc<Mutex<HashMap<Uuid, ScanHandle>>>,
+    /// Optional provider override. When `Some`, `start()` uses this provider
+    /// instead of calling `create_provider(&config.llm)`. Intended for tests
+    /// that inject `MockProvider` to exercise the scan pipeline without Ollama.
+    provider_override: Option<Arc<dyn LlmProvider>>,
 }
 
 impl ScanService {
@@ -91,7 +95,17 @@ impl ScanService {
             event_bus,
             approval_registry,
             scans: Arc::new(Mutex::new(HashMap::new())),
+            provider_override: None,
         }
+    }
+
+    /// Inject an `LlmProvider` override, bypassing `create_provider`.
+    ///
+    /// Returns `self` for chaining. Intended for E2E tests that need a
+    /// `MockProvider` without a running Ollama/OpenAI endpoint.
+    pub fn with_provider(mut self, provider: Arc<dyn LlmProvider>) -> Self {
+        self.provider_override = Some(provider);
+        self
     }
 
     // ── start() ───────────────────────────────────────────────────────────────
@@ -131,9 +145,12 @@ impl ScanService {
 
         let session_id = session.id;
 
-        // Build the LLM provider from config.
-        let provider = create_provider(&self.config.llm)?;
-        let provider = Arc::from(provider);
+        // Build the LLM provider: use the injected override (for tests) or
+        // construct one from config (production path).
+        let provider: Arc<dyn LlmProvider> = match &self.provider_override {
+            Some(p) => p.clone(),
+            None => Arc::from(create_provider(&self.config.llm)?),
+        };
 
         // Populate tool registry with all executor tools.
         let mut registry = ToolRegistry::new();

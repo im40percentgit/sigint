@@ -909,81 +909,10 @@ mod tests {
 
     use sigint_core::event::EventBus;
     use sigint_llm::{
+        mock::MockProvider,
         provider::{ChunkStream, LlmProvider},
         types::{ChatRequest, ChatResponse, StreamChunk},
     };
-
-    // ── MockProvider ─────────────────────────────────────────────────────────
-
-    /// Returns pre-configured text responses in sequence; never emits tool calls.
-    ///
-    /// When the queue is exhausted, falls back to a default response so tests
-    /// that make more calls than expected don't panic.
-    struct MockProvider {
-        responses: Mutex<Vec<String>>,
-    }
-
-    impl MockProvider {
-        fn new(responses: Vec<&str>) -> Self {
-            Self {
-                responses: Mutex::new(responses.iter().map(|s| s.to_string()).collect()),
-            }
-        }
-
-        /// A single-response mock — all agent turns return the same text.
-        fn uniform(response: &str, count: usize) -> Self {
-            Self::new(vec![response; count])
-        }
-    }
-
-    #[async_trait]
-    impl LlmProvider for MockProvider {
-        fn name(&self) -> &str {
-            "mock"
-        }
-
-        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, Error> {
-            // Delegate to chat_stream so the same response queue serves both paths.
-            use futures_util::StreamExt as FutStreamExt;
-            let mut s = self.chat_stream(request).await?;
-            let mut content = String::new();
-            while let Some(chunk) = FutStreamExt::next(&mut s).await {
-                content.push_str(&chunk?.delta);
-            }
-            Ok(ChatResponse {
-                content,
-                usage: None,
-                model: "mock".into(),
-                tool_calls: vec![],
-            })
-        }
-
-        async fn chat_stream(&self, _request: ChatRequest) -> Result<ChunkStream, Error> {
-            let mut queue = self.responses.lock().unwrap();
-            let content = if queue.is_empty() {
-                "[mock exhausted]".to_string()
-            } else {
-                queue.remove(0)
-            };
-            // Emit a text delta then a done=true chunk (no tool calls — orchestrator
-            // tests only exercise text responses).
-            let chunks: Vec<Result<StreamChunk, Error>> = vec![
-                Ok(StreamChunk {
-                    delta: content,
-                    done: false,
-                    usage: None,
-                    tool_calls: vec![],
-                }),
-                Ok(StreamChunk {
-                    delta: String::new(),
-                    done: true,
-                    usage: None,
-                    tool_calls: vec![],
-                }),
-            ];
-            Ok(Box::pin(stream::iter(chunks)))
-        }
-    }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -1002,7 +931,7 @@ mod tests {
     #[tokio::test]
     async fn run_scan_dispatches_all_five_agents() {
         // Five agents → five LLM calls (one per agent, no tool calls).
-        let provider = Arc::new(MockProvider::new(vec![
+        let provider = Arc::new(MockProvider::from_text(vec![
             "Researcher output: found open ports 22, 80",
             "Strategist output: attack via port 80",
             "Executor output: ran nmap, confirmed apache 2.4",
@@ -1026,7 +955,7 @@ mod tests {
     async fn run_scan_accumulates_context_in_order() {
         // Track which prompts each agent receives by embedding the prior output
         // into each mock response, then checking the final context.
-        let provider = Arc::new(MockProvider::new(vec![
+        let provider = Arc::new(MockProvider::from_text(vec![
             "RESEARCHER_DONE",
             "STRATEGIST_DONE",
             "EXECUTOR_DONE",
@@ -1074,7 +1003,7 @@ mod tests {
     #[tokio::test]
     async fn run_scan_reporter_output_is_summary() {
         // Each agent gets a distinct response; the last (reporter) becomes summary.
-        let provider = Arc::new(MockProvider::new(vec![
+        let provider = Arc::new(MockProvider::from_text(vec![
             "recon complete",
             "strategy planned",
             "tools executed",
@@ -1095,7 +1024,7 @@ mod tests {
     async fn run_agent_uses_system_prompt_and_user_prompt() {
         // We can't inspect the ChatRequest without a recording provider,
         // so we verify indirectly: run_agent returns the mock response text.
-        let provider = Arc::new(MockProvider::new(vec!["agent text response"]));
+        let provider = Arc::new(MockProvider::from_text(vec!["agent text response"]));
         let orch = make_orchestrator(provider);
 
         let agent = ResearcherAgent::new();
@@ -1865,7 +1794,7 @@ mod tests {
     /// the summary assertion.
     #[tokio::test]
     async fn run_scan_linear_default() {
-        let provider = Arc::new(MockProvider::new(vec![
+        let provider = Arc::new(MockProvider::from_text(vec![
             "Researcher: found open ports 22, 80",
             "Strategist: attack via port 80",
             "Executor: ran nmap",
@@ -2445,7 +2374,7 @@ mod tests {
         // Strategist emits an exploitation marker. With approval_gates=false
         // (the default), the scan should complete without any pause — the
         // Executor and Analyst run normally and the tier is updated in ctx.
-        let provider = Arc::new(MockProvider::new(vec![
+        let provider = Arc::new(MockProvider::from_text(vec![
             "Researcher: found Apache 2.4 on port 80",
             "Strategist: exploit CVE-2021-41773\nESCALATION: exploitation\nrun exploit.py",
             "Executor: ran exploit, got shell",
@@ -2466,7 +2395,7 @@ mod tests {
     #[tokio::test]
     async fn approval_gates_off_tier_updated_in_context() {
         // Even with gates off, the detected tier should be written to ctx.current_tier.
-        let provider = Arc::new(MockProvider::new(vec![
+        let provider = Arc::new(MockProvider::from_text(vec![
             "Researcher output",
             "ESCALATION: post-exploitation\nLateral movement plan",
             "Executor output",

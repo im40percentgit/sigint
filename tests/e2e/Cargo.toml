@@ -8,6 +8,7 @@ publish = false
 sigint-web = { workspace = true }
 sigint-agents = { workspace = true }
 sigint-core = { workspace = true }
+sigint-llm = { workspace = true }
 sigint-store = { workspace = true }
 
 axum = { workspace = true }
