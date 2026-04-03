@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 15B completed — Auth/Exploitation Tool Expansion
+**Current Phase:** Phase 15C completed — Network/Infrastructure Tool Expansion
 
 ### Architecture
 
@@ -51,6 +51,7 @@ sigint/
 - Phase 14 completed — agent intelligence: memory wiring, Strategist overhaul with MITRE ATT&CK, recon integration, asset-finding linking, configurable output caps
 - Phase 15A completed — tool expansion: sqlmap (SQL injection), ffuf (web fuzzing), whatweb (tech fingerprinting)
 - Phase 15B completed — auth/exploitation tools: hydra (brute-force), wpscan (WordPress), testssl (TLS analysis), hashcat (hash cracking)
+- Phase 15C completed — network/infrastructure tools: masscan (fast port scanning), tshark (packet capture), responder (LLMNR/NBT-NS credential capture)
 
 ---
 
@@ -771,6 +772,9 @@ Sub-phases:
 | DEC-P15-005 | WpscanTool uses JSON output format for reliable structured parsing | accepted | wpscan --format json provides stable machine-readable output; --no-banner --random-user-agent suppress noise and avoid WAF detection; plugin vulnerabilities counted from array length; users extracted by slug field. Phase 15B. |
 | DEC-P15-006 | TestsslTool uses SandboxProfile::recon() for passive TLS analysis | accepted | recon profile provides 60s timeout sufficient for single-host TLS checks; --jsonfile /dev/stdout emits JSON array; --quiet --color 0 suppress banner/ANSI; OK findings filtered out; protocol entries separated into protocols map. Phase 15B. |
 | DEC-P15-007 | HashcatTool uses SandboxProfile::offline() — no network, 60s timeout | accepted | hash cracking requires no network access; offline profile enforces no-network constraint; --force bypasses hardware warnings; --outfile-format=2 outputs plaintext-only for line parsing; -o /dev/stdout captures cracked pairs inline. Phase 15B. |
+| DEC-P15-008 | MasscanTool uses SandboxProfile::nmap() for pasta networking | accepted | masscan needs raw socket access like nmap; nmap profile provides pasta networking with 120s timeout; --rate parameter controls scan speed; -oJ /dev/stdout for JSON output; banners parsed from service array. Phase 15C. |
+| DEC-P15-009 | TsharkTool uses SandboxProfile::nmap() for raw network access; JSON output for structured analysis | accepted | tshark requires raw network access for packet capture; nmap profile provides pasta networking; -T json for structured output; -c packet count limit prevents unbounded capture; protocol hierarchy and conversation stats parsed from JSON layers. Phase 15C. |
+| DEC-P15-010 | Responder defaults to analyze-only mode (passive) for safety; active poisoning requires explicit opt-in | accepted | LLMNR/NBT-NS poisoning is high-impact; --analyze flag makes passive the default; active mode requires explicit poison=true parameter; SandboxProfile::nmap() for raw network; captured credentials parsed from Responder-Session.log format. Phase 15C. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -896,6 +900,23 @@ Sub-phases:
 - [x] wpscan_scan: WordPress enumeration, SandboxProfile::web_scanner(), JSON output parser
 - [x] testssl_scan: TLS/SSL analysis, SandboxProfile::recon(), JSON array findings parser
 - [x] hashcat_crack: offline hash cracking, SandboxProfile::offline(), cracked line parser
+
+---
+
+### Phase 15C: Network/Infrastructure Tool Expansion
+**Status:** completed
+**Branch:** feature/phase15c-network-tools
+**Decision IDs:** DEC-P15-008, DEC-P15-009, DEC-P15-010
+**Definition of Done:**
+- 3 new tools (masscan_scan, tshark_capture, responder_poison) with structured parsers
+- All tools registered in sigint-tools/src/lib.rs with sandbox profiles
+- Agent ACLs updated: Executor has all 3 (16 total); Researcher gets masscan + tshark (8 total), responder excluded
+- Doctor checks added for masscan, tshark, responder binaries
+- 276 tool tests + 161 agent tests pass, cargo check clean
+
+- [x] masscan_scan: fast large-scale port scanner, SandboxProfile::nmap(), JSON output parser with banner extraction
+- [x] tshark_capture: packet capture and traffic analysis, SandboxProfile::nmap(), JSON layer parser with protocol hierarchy
+- [x] responder_poison: LLMNR/NBT-NS credential capture, SandboxProfile::nmap(), passive by default (--analyze), session log parser
 
 ---
 
