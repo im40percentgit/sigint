@@ -12,3 +12,4 @@
 .fastembed_cache/
 .serena/
 .gstack/
+node_modules/
