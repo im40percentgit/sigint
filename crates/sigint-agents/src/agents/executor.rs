@@ -31,6 +31,9 @@ impl ExecutorAgent {
                 "nikto_scan".to_string(),
                 "nuclei_scan".to_string(),
                 "feroxbuster_scan".to_string(),
+                "sqlmap_scan".to_string(),
+                "ffuf_scan".to_string(),
+                "whatweb_scan".to_string(),
             ],
         }
     }
@@ -151,7 +154,19 @@ mod tests {
             tools.contains(&"feroxbuster_scan".to_string()),
             "executor must have feroxbuster_scan"
         );
-        assert_eq!(tools.len(), 6, "executor should have exactly 6 tools");
+        assert!(
+            tools.contains(&"sqlmap_scan".to_string()),
+            "executor must have sqlmap_scan"
+        );
+        assert!(
+            tools.contains(&"ffuf_scan".to_string()),
+            "executor must have ffuf_scan"
+        );
+        assert!(
+            tools.contains(&"whatweb_scan".to_string()),
+            "executor must have whatweb_scan"
+        );
+        assert_eq!(tools.len(), 9, "executor should have exactly 9 tools");
     }
 
     #[test]

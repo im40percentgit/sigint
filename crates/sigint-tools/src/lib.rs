@@ -29,6 +29,9 @@ pub mod nmap;
 pub mod nuclei;
 pub mod result;
 pub mod shell;
+pub mod sqlmap;
+pub mod ffuf;
+pub mod whatweb;
 pub mod tool;
 
 pub use akaei::{
@@ -49,6 +52,9 @@ pub use nmap::NmapTool;
 pub use nuclei::NucleiTool;
 pub use result::{ScanStatus, ToolResult, TruncationInfo};
 pub use shell::ShellTool;
+pub use sqlmap::SqlmapTool;
+pub use ffuf::FfufTool;
+pub use whatweb::WhatwebTool;
 pub use tool::Tool;
 
 /// Return all executor tools configured with per-tool output caps from `ToolsConfig`.
@@ -74,6 +80,9 @@ pub fn all_executor_tools_with_config(
         Box::new(NiktoTool::new().with_output_cap(tools_config.output_cap_for("nikto"))),
         Box::new(NucleiTool::new().with_output_cap(tools_config.output_cap_for("nuclei"))),
         Box::new(FeroxbusterTool::new().with_output_cap(tools_config.output_cap_for("feroxbuster"))),
+        Box::new(SqlmapTool::new().with_output_cap(tools_config.output_cap_for("sqlmap"))),
+        Box::new(FfufTool::new().with_output_cap(tools_config.output_cap_for("ffuf"))),
+        Box::new(WhatwebTool::new().with_output_cap(tools_config.output_cap_for("whatweb"))),
         // akaei SDR tools (direct process — USB device access required, no sandbox output caps)
         Box::new(AkaeiSweepTool),
         Box::new(AkaeiScanTool),
@@ -98,9 +107,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_executor_tools_returns_thirteen_tools() {
+    fn all_executor_tools_returns_sixteen_tools() {
         let tools = all_executor_tools();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 16);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         // Network tools
         assert!(names.contains(&"nmap_scan"));
@@ -109,6 +118,9 @@ mod tests {
         assert!(names.contains(&"nikto_scan"));
         assert!(names.contains(&"nuclei_scan"));
         assert!(names.contains(&"feroxbuster_scan"));
+        assert!(names.contains(&"sqlmap_scan"));
+        assert!(names.contains(&"ffuf_scan"));
+        assert!(names.contains(&"whatweb_scan"));
         // akaei SDR tools
         assert!(names.contains(&"akaei_sweep"));
         assert!(names.contains(&"akaei_scan"));

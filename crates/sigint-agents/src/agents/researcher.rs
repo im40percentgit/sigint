@@ -30,6 +30,7 @@ impl ResearcherAgent {
                 "shell".to_string(),
                 "gobuster_scan".to_string(),
                 "nuclei_scan".to_string(),
+                "whatweb_scan".to_string(),
             ],
         }
     }
@@ -140,7 +141,11 @@ mod tests {
             tools.contains(&"nuclei_scan".to_string()),
             "researcher must have nuclei_scan"
         );
-        assert_eq!(tools.len(), 4, "researcher should have exactly 4 tools");
+        assert!(
+            tools.contains(&"whatweb_scan".to_string()),
+            "researcher must have whatweb_scan"
+        );
+        assert_eq!(tools.len(), 5, "researcher should have exactly 5 tools");
     }
 
     #[test]
