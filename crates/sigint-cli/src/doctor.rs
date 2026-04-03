@@ -312,6 +312,13 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
         ("sqlmap", "sudo apt install sqlmap"),
         ("ffuf", "go install github.com/ffuf/ffuf/v2@latest"),
         ("whatweb", "sudo apt install whatweb"),
+        ("hydra", "sudo apt install hydra"),
+        ("wpscan", "gem install wpscan"),
+        (
+            "testssl",
+            "sudo apt install testssl.sh  OR  git clone https://github.com/drwetter/testssl.sh",
+        ),
+        ("hashcat", "sudo apt install hashcat"),
         ("dig", "sudo apt install dnsutils"),
         ("whois", "sudo apt install whois"),
         ("curl", "sudo apt install curl"),

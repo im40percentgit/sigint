@@ -1,8 +1,9 @@
 //! sigint-tools — Sandboxed pentest tool wrappers for the SIGINT agent layer.
 //!
 //! Provides the `Tool` trait and concrete implementations for nmap, shell,
-//! gobuster, nikto, nuclei, feroxbuster, and seven akaei SDR tools that the
-//! agent layer uses to give LLMs controlled access to external tools.
+//! gobuster, nikto, nuclei, feroxbuster, sqlmap, ffuf, whatweb, hydra, wpscan,
+//! testssl, hashcat, and seven akaei SDR tools that the agent layer uses to
+//! give LLMs controlled access to external tools.
 //!
 //! # Architecture
 //!
@@ -24,6 +25,8 @@ pub mod error;
 pub mod feroxbuster;
 pub mod finding;
 pub mod gobuster;
+pub mod hashcat;
+pub mod hydra;
 pub mod nikto;
 pub mod nmap;
 pub mod nuclei;
@@ -31,7 +34,9 @@ pub mod result;
 pub mod shell;
 pub mod sqlmap;
 pub mod ffuf;
+pub mod testssl;
 pub mod whatweb;
+pub mod wpscan;
 pub mod tool;
 
 pub use akaei::{
@@ -47,6 +52,8 @@ pub use feroxbuster::FeroxbusterTool;
 // at construction and is registered separately by the orchestrator per scan.
 pub use finding::{new_finding_collector, CreateFindingTool, FindingCollector};
 pub use gobuster::GobusterTool;
+pub use hashcat::HashcatTool;
+pub use hydra::HydraTool;
 pub use nikto::NiktoTool;
 pub use nmap::NmapTool;
 pub use nuclei::NucleiTool;
@@ -54,7 +61,9 @@ pub use result::{ScanStatus, ToolResult, TruncationInfo};
 pub use shell::ShellTool;
 pub use sqlmap::SqlmapTool;
 pub use ffuf::FfufTool;
+pub use testssl::TestsslTool;
 pub use whatweb::WhatwebTool;
+pub use wpscan::WpscanTool;
 pub use tool::Tool;
 
 /// Return all executor tools configured with per-tool output caps from `ToolsConfig`.
@@ -83,6 +92,10 @@ pub fn all_executor_tools_with_config(
         Box::new(SqlmapTool::new().with_output_cap(tools_config.output_cap_for("sqlmap"))),
         Box::new(FfufTool::new().with_output_cap(tools_config.output_cap_for("ffuf"))),
         Box::new(WhatwebTool::new().with_output_cap(tools_config.output_cap_for("whatweb"))),
+        Box::new(HydraTool::new().with_output_cap(tools_config.output_cap_for("hydra"))),
+        Box::new(WpscanTool::new().with_output_cap(tools_config.output_cap_for("wpscan"))),
+        Box::new(TestsslTool::new().with_output_cap(tools_config.output_cap_for("testssl"))),
+        Box::new(HashcatTool::new().with_output_cap(tools_config.output_cap_for("hashcat"))),
         // akaei SDR tools (direct process — USB device access required, no sandbox output caps)
         Box::new(AkaeiSweepTool),
         Box::new(AkaeiScanTool),
@@ -107,11 +120,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_executor_tools_returns_sixteen_tools() {
+    fn all_executor_tools_returns_twenty_tools() {
         let tools = all_executor_tools();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 20);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        // Network tools
+        // Network pentest tools
         assert!(names.contains(&"nmap_scan"));
         assert!(names.contains(&"shell"));
         assert!(names.contains(&"gobuster_scan"));
@@ -121,6 +134,11 @@ mod tests {
         assert!(names.contains(&"sqlmap_scan"));
         assert!(names.contains(&"ffuf_scan"));
         assert!(names.contains(&"whatweb_scan"));
+        // Phase 15B auth/exploitation tools
+        assert!(names.contains(&"hydra_scan"));
+        assert!(names.contains(&"wpscan_scan"));
+        assert!(names.contains(&"testssl_scan"));
+        assert!(names.contains(&"hashcat_crack"));
         // akaei SDR tools
         assert!(names.contains(&"akaei_sweep"));
         assert!(names.contains(&"akaei_scan"));
