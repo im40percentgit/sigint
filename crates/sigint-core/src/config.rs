@@ -7,6 +7,7 @@
 //! cloud providers added in Phase 2 as optional fallback.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Top-level configuration for SIGINT.
@@ -27,6 +28,10 @@ pub struct Config {
     /// Agent behavior settings (approval gate, auto-approve thresholds).
     #[serde(default)]
     pub agent: AgentConfig,
+
+    /// Tool execution settings (output caps, per-tool overrides).
+    #[serde(default)]
+    pub tools: ToolsConfig,
 }
 
 /// LLM provider configuration.
@@ -93,6 +98,41 @@ pub struct AgentConfig {
     /// is considered timed out (and the tool call is denied).
     #[serde(default = "default_approval_timeout")]
     pub approval_timeout: u64,
+
+    /// Enable episodic memory for agents (store and recall past findings).
+    #[serde(default)]
+    pub memory: bool,
+
+    /// Enable recon-driven planning (attack surface feeds agent prompts).
+    #[serde(default)]
+    pub recon: bool,
+}
+
+/// Tool execution configuration — global defaults and per-tool overrides.
+///
+/// @decision DEC-P14-TOOLS-001: Per-tool output caps. Allows noisy tools
+/// (e.g. nuclei) to have larger caps while keeping the global default tight.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolsConfig {
+    /// Default maximum bytes of tool stdout/stderr to capture.
+    #[serde(default = "default_output_cap")]
+    pub default_output_cap: usize,
+
+    /// Per-tool overrides keyed by tool name (e.g. "nmap", "nuclei").
+    #[serde(default)]
+    pub overrides: HashMap<String, ToolOverrides>,
+}
+
+/// Per-tool configuration overrides.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolOverrides {
+    /// Override the output capture cap for this tool (bytes).
+    #[serde(default)]
+    pub output_cap: Option<usize>,
+
+    /// Override the execution timeout for this tool (seconds).
+    #[serde(default)]
+    pub timeout: Option<u64>,
 }
 
 // ── Default implementations ──────────────────────────────────────────────────
@@ -131,7 +171,30 @@ impl Default for AgentConfig {
         Self {
             auto_approve: default_auto_approve(),
             approval_timeout: default_approval_timeout(),
+            memory: false,
+            recon: false,
         }
+    }
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            default_output_cap: default_output_cap(),
+            overrides: HashMap::new(),
+        }
+    }
+}
+
+impl ToolsConfig {
+    /// Resolve the output cap for a specific tool.
+    ///
+    /// Returns the tool-specific override if present, otherwise the global default.
+    pub fn output_cap_for(&self, tool_name: &str) -> usize {
+        self.overrides
+            .get(tool_name)
+            .and_then(|o| o.output_cap)
+            .unwrap_or(self.default_output_cap)
     }
 }
 
@@ -158,6 +221,9 @@ fn default_auto_approve() -> String {
 }
 fn default_approval_timeout() -> u64 {
     300
+}
+fn default_output_cap() -> usize {
+    1_048_576
 }
 
 // ── Loading ──────────────────────────────────────────────────────────────────
@@ -323,5 +389,78 @@ approval_timeout = 60
         let cfg: Config = toml::from_str(toml_str).expect("parse failed");
         assert_eq!(cfg.agent.auto_approve, "medium");
         assert_eq!(cfg.agent.approval_timeout, 60);
+    }
+
+    #[test]
+    fn agent_config_memory_defaults_false() {
+        let cfg = Config::default();
+        assert_eq!(cfg.agent.memory, false);
+        assert_eq!(cfg.agent.recon, false);
+    }
+
+    #[test]
+    fn agent_config_memory_from_toml() {
+        let toml_str = r#"
+[agent]
+memory = true
+recon = true
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.agent.memory, true);
+        assert_eq!(cfg.agent.recon, true);
+    }
+
+    #[test]
+    fn tools_config_defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.tools.default_output_cap, 1_048_576);
+        assert!(cfg.tools.overrides.is_empty());
+    }
+
+    #[test]
+    fn tools_config_from_toml() {
+        let toml_str = r#"
+[tools]
+default_output_cap = 2097152
+
+[tools.overrides.nmap]
+output_cap = 4194304
+timeout = 600
+
+[tools.overrides.nuclei]
+timeout = 900
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.tools.default_output_cap, 2_097_152);
+        let nmap = cfg.tools.overrides.get("nmap").expect("nmap override");
+        assert_eq!(nmap.output_cap, Some(4_194_304));
+        assert_eq!(nmap.timeout, Some(600));
+        let nuclei = cfg.tools.overrides.get("nuclei").expect("nuclei override");
+        assert_eq!(nuclei.output_cap, None);
+        assert_eq!(nuclei.timeout, Some(900));
+    }
+
+    #[test]
+    fn tools_config_missing_section_uses_defaults() {
+        let toml_str = r#"
+[llm]
+model = "mistral"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.tools.default_output_cap, 1_048_576);
+    }
+
+    #[test]
+    fn tools_config_resolve_output_cap() {
+        let cfg: Config = toml::from_str(r#"
+[tools]
+default_output_cap = 1000
+
+[tools.overrides.nmap]
+output_cap = 5000
+"#).expect("parse failed");
+        assert_eq!(cfg.tools.output_cap_for("nmap"), 5000);
+        assert_eq!(cfg.tools.output_cap_for("shell"), 1000);
+        assert_eq!(cfg.tools.output_cap_for("nonexistent"), 1000);
     }
 }
