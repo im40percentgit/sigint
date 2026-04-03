@@ -1,7 +1,7 @@
 //! ExecutorAgent — sandboxed tool execution specialist.
 //!
 //! @decision DEC-AGENT-009
-//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster, hydra, wpscan, testssl, hashcat, masscan, tshark, responder
+//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster, hydra, wpscan, testssl, hashcat, masscan, tshark, responder, msf_exploit, linpeas_enum, enum4linux_scan
 //! @status accepted
 //! @rationale The Executor is the only agent that runs tools against the target.
 //! It receives a concrete plan from the Strategist and is trusted to execute it
@@ -13,6 +13,8 @@
 //! testssl (TLS analysis), and hashcat (offline hash cracking).
 //! Phase 15C adds masscan (large-scale port scanning), tshark (traffic capture),
 //! and responder (LLMNR/NBT-NS/MDNS poisoning and credential capture).
+//! Phase 15D adds msf_exploit (Metasploit module execution), linpeas_enum (Linux
+//! privilege escalation enumeration), and enum4linux_scan (SMB/Samba enumeration).
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -45,6 +47,9 @@ impl ExecutorAgent {
                 "masscan_scan".to_string(),
                 "tshark_capture".to_string(),
                 "responder_poison".to_string(),
+                "msf_exploit".to_string(),
+                "linpeas_enum".to_string(),
+                "enum4linux_scan".to_string(),
             ],
         }
     }
@@ -205,7 +210,19 @@ mod tests {
             tools.contains(&"responder_poison".to_string()),
             "executor must have responder_poison"
         );
-        assert_eq!(tools.len(), 16, "executor should have exactly 16 tools");
+        assert!(
+            tools.contains(&"msf_exploit".to_string()),
+            "executor must have msf_exploit"
+        );
+        assert!(
+            tools.contains(&"linpeas_enum".to_string()),
+            "executor must have linpeas_enum"
+        );
+        assert!(
+            tools.contains(&"enum4linux_scan".to_string()),
+            "executor must have enum4linux_scan"
+        );
+        assert_eq!(tools.len(), 19, "executor should have exactly 19 tools");
     }
 
     #[test]

@@ -325,6 +325,12 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
             "responder",
             "sudo apt install responder OR git clone https://github.com/lgandx/Responder",
         ),
+        ("msfconsole", "sudo apt install metasploit-framework"),
+        (
+            "linpeas.sh",
+            "wget https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh",
+        ),
+        ("enum4linux-ng", "pip install enum4linux-ng"),
         ("dig", "sudo apt install dnsutils"),
         ("whois", "sudo apt install whois"),
         ("curl", "sudo apt install curl"),

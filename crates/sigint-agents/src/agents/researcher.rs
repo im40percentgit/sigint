@@ -1,7 +1,7 @@
 //! ResearcherAgent — OSINT and initial reconnaissance specialist.
 //!
 //! @decision DEC-AGENT-007
-//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei + whatweb + testssl + masscan + tshark
+//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei + whatweb + testssl + masscan + tshark + enum4linux_scan
 //! @status accepted
 //! @rationale The Researcher phase focuses on information gathering, not
 //! exploitation. nmap covers port/service enumeration; shell covers DNS, WHOIS,
@@ -15,6 +15,9 @@
 //! Phase 15C adds masscan (fast large-scale port enumeration across IP ranges)
 //! and tshark (passive traffic capture and protocol analysis). responder is
 //! NOT included — active poisoning belongs in the Executor phase only.
+//! Phase 15D adds enum4linux_scan: SMB share/user/group enumeration is
+//! reconnaissance — it reads SMB metadata without exploiting anything. msf_exploit
+//! and linpeas_enum are Executor-only (active exploitation / local execution).
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -39,6 +42,7 @@ impl ResearcherAgent {
                 "testssl_scan".to_string(),
                 "masscan_scan".to_string(),
                 "tshark_capture".to_string(),
+                "enum4linux_scan".to_string(),
             ],
         }
     }
@@ -165,7 +169,11 @@ mod tests {
             tools.contains(&"tshark_capture".to_string()),
             "researcher must have tshark_capture"
         );
-        assert_eq!(tools.len(), 8, "researcher should have exactly 8 tools");
+        assert!(
+            tools.contains(&"enum4linux_scan".to_string()),
+            "researcher must have enum4linux_scan"
+        );
+        assert_eq!(tools.len(), 9, "researcher should have exactly 9 tools");
     }
 
     #[test]

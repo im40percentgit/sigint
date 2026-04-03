@@ -2,8 +2,9 @@
 //!
 //! Provides the `Tool` trait and concrete implementations for nmap, shell,
 //! gobuster, nikto, nuclei, feroxbuster, sqlmap, ffuf, whatweb, hydra, wpscan,
-//! testssl, hashcat, masscan, tshark, responder, and seven akaei SDR tools that
-//! the agent layer uses to give LLMs controlled access to external tools.
+//! testssl, hashcat, masscan, tshark, responder, msfconsole, linpeas,
+//! enum4linux-ng, and seven akaei SDR tools that the agent layer uses to give
+//! LLMs controlled access to external tools.
 //!
 //! # Architecture
 //!
@@ -21,13 +22,16 @@
 
 pub mod akaei;
 pub mod attack_plan;
+pub mod enum4linux;
 pub mod error;
 pub mod feroxbuster;
 pub mod finding;
 pub mod gobuster;
 pub mod hashcat;
 pub mod hydra;
+pub mod linpeas;
 pub mod masscan;
+pub mod msfconsole;
 pub mod nikto;
 pub mod nmap;
 pub mod nuclei;
@@ -49,6 +53,7 @@ pub use akaei::{
 // CreateAttackPlanTool is NOT in all_executor_tools() — it requires a PlanCollector
 // at construction and is registered separately by the orchestrator per scan.
 pub use attack_plan::{new_plan_collector, AttackStep, CreateAttackPlanTool, PlanCollector};
+pub use enum4linux::Enum4linuxTool;
 pub use error::{Result, ToolError};
 pub use feroxbuster::FeroxbusterTool;
 // CreateFindingTool is NOT in all_executor_tools() — it requires a FindingCollector
@@ -57,7 +62,9 @@ pub use finding::{new_finding_collector, CreateFindingTool, FindingCollector};
 pub use gobuster::GobusterTool;
 pub use hashcat::HashcatTool;
 pub use hydra::HydraTool;
+pub use linpeas::LinpeasTool;
 pub use masscan::MasscanTool;
+pub use msfconsole::MsfconsoleTool;
 pub use nikto::NiktoTool;
 pub use nmap::NmapTool;
 pub use nuclei::NucleiTool;
@@ -106,6 +113,10 @@ pub fn all_executor_tools_with_config(
         Box::new(MasscanTool::new().with_output_cap(tools_config.output_cap_for("masscan"))),
         Box::new(TsharkTool::new().with_output_cap(tools_config.output_cap_for("tshark"))),
         Box::new(ResponderTool::new().with_output_cap(tools_config.output_cap_for("responder"))),
+        // Phase 15D post-exploitation tools
+        Box::new(MsfconsoleTool::new().with_output_cap(tools_config.output_cap_for("msfconsole"))),
+        Box::new(LinpeasTool::new().with_output_cap(tools_config.output_cap_for("linpeas"))),
+        Box::new(Enum4linuxTool::new().with_output_cap(tools_config.output_cap_for("enum4linux"))),
         // akaei SDR tools (direct process — USB device access required, no sandbox output caps)
         Box::new(AkaeiSweepTool),
         Box::new(AkaeiScanTool),
@@ -130,9 +141,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_executor_tools_returns_twenty_three_tools() {
+    fn all_executor_tools_returns_twenty_six_tools() {
         let tools = all_executor_tools();
-        assert_eq!(tools.len(), 23);
+        assert_eq!(tools.len(), 26);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         // Network pentest tools
         assert!(names.contains(&"nmap_scan"));
@@ -153,6 +164,10 @@ mod tests {
         assert!(names.contains(&"masscan_scan"));
         assert!(names.contains(&"tshark_capture"));
         assert!(names.contains(&"responder_poison"));
+        // Phase 15D post-exploitation tools
+        assert!(names.contains(&"msf_exploit"));
+        assert!(names.contains(&"linpeas_enum"));
+        assert!(names.contains(&"enum4linux_scan"));
         // akaei SDR tools
         assert!(names.contains(&"akaei_sweep"));
         assert!(names.contains(&"akaei_scan"));
