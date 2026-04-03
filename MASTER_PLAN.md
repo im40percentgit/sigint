@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 14 completed — Agent Intelligence
+**Current Phase:** Phase 15A completed — Tool Expansion
 
 ### Architecture
 
@@ -49,6 +49,7 @@ sigint/
 - Phase 12 completed — iterative convergence loop, enriched findings, evidence linking, approval-gated escalation
 - Phase 13 completed — live target hardening: ScanStatus/TruncationInfo foundation types, sandbox output cap, nmap/gobuster/feroxbuster/nikto/nuclei/shell hardening
 - Phase 14 completed — agent intelligence: memory wiring, Strategist overhaul with MITRE ATT&CK, recon integration, asset-finding linking, configurable output caps
+- Phase 15A completed — tool expansion: sqlmap (SQL injection), ffuf (web fuzzing), whatweb (tech fingerprinting)
 
 ---
 
@@ -762,6 +763,9 @@ Sub-phases:
 | DEC-P14-003 | ReconEngine pre-step injects asset context into Orchestrator TaskContext | accepted | Running recon before the agent loop provides up-to-date asset inventory; injecting into TaskContext makes asset data available to all downstream agents without coupling them to ReconEngine. Phase 14C. |
 | DEC-P14-004 | Migration 9 adds asset_id FK to findings table with FindingQuery::by_asset_id | accepted | Foreign key links findings to discovered assets; nullable column preserves backward compatibility for findings without asset association; query method enables per-asset finding retrieval for reports and analysis. Phase 14D. |
 | DEC-P14-005 | ToolsConfig with per-tool max_output overrides for all 6 tools | accepted | Global default (1MB from DEC-P13-002) may be too large or small for specific tools; per-tool config in sigint.toml [tools.<name>] allows operators to tune output caps without code changes. Phase 14E. |
+| DEC-P15-001 | sqlmap runs with --batch flag for non-interactive automated execution | accepted | sqlmap prompts interactively by default which blocks the agent tool loop; --batch selects safe defaults automatically; combined with --forms and risk/level params for coverage control. Phase 15A. |
+| DEC-P15-002 | ffuf uses -json flag for structured JSON output parsing | accepted | ffuf's default output is human-readable text; -json emits one JSON object per result line enabling reliable structured parsing without fragile regex; results array built from line-delimited JSON. Phase 15A. |
+| DEC-P15-003 | whatweb uses --log-json with Recon aggression profile | accepted | Recon profile (aggression level 1) is passive and safe for authorized testing; --log-json produces machine-parseable output; higher aggression levels available via parameter override. Phase 15A. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -852,6 +856,23 @@ Sub-phases:
 - [x] Sub-Phase 14C: Recon integration — --recon flag, ReconEngine pre-step, asset context injection
 - [x] Sub-Phase 14D: Asset-finding linking — migration 9 (asset_id FK), FindingQuery::by_asset_id
 - [x] Sub-Phase 14E: Configurable output caps — ToolsConfig, per-tool overrides, all 6 tools updated
+
+---
+
+### Phase 15A: Tool Expansion
+**Status:** completed
+**Sub-phases:** sqlmap_scan → ffuf_scan → whatweb_scan
+**Decision IDs:** DEC-P15-001, DEC-P15-002, DEC-P15-003
+**Definition of Done:**
+- 3 new tools (sqlmap_scan, ffuf_scan, whatweb_scan) with structured JSON parsers
+- All tools registered in sigint-tools/src/lib.rs with sandbox profiles
+- Agent ACLs updated: Executor and Researcher have access to new tools
+- Doctor checks added for sqlmap, ffuf, whatweb binaries
+- 214 tool-crate tests pass (899+ total), 0 failures
+
+- [x] Sub-Phase sqlmap_scan: sqlmap wrapper with --batch mode, SQL injection parameter support, structured finding parser
+- [x] Sub-Phase ffuf_scan: ffuf wrapper with -json output, wordlist/URL/method params, result parser
+- [x] Sub-Phase whatweb_scan: whatweb wrapper with --log-json, Recon aggression profile, technology fingerprint parser
 
 ---
 
