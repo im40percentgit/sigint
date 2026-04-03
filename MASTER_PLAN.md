@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 15E in-progress — Cloud/Container Security Tool Expansion
+**Current Phase:** Phase 15E completed — Cloud/Container Security Tool Expansion
 
 ### Architecture
 
@@ -53,7 +53,7 @@ sigint/
 - Phase 15B completed — auth/exploitation tools: hydra (brute-force), wpscan (WordPress), testssl (TLS analysis), hashcat (hash cracking)
 - Phase 15C completed — network/infrastructure tools: masscan (fast port scanning), tshark (packet capture), responder (LLMNR/NBT-NS credential capture)
 - Phase 15D completed — post-exploitation tools: msfconsole (Metasploit Framework), linpeas (privilege escalation enumeration), enum4linux-ng (SMB enumeration)
-- Phase 15E in-progress — cloud/container security tools: trivy (vulnerability scanning), ScoutSuite (cloud auditing), CloudSploit (cloud misconfigurations)
+- Phase 15E completed — cloud/container security tools: trivy (vulnerability scanning), ScoutSuite (cloud auditing), CloudSploit (cloud misconfigurations)
 
 ---
 
@@ -952,7 +952,7 @@ Sub-phases:
 ---
 
 ### Phase 15E: Cloud/Container Security Tool Expansion
-**Status:** in-progress
+**Status:** completed
 **Branch:** feature/phase15e-cloud-tools
 **Decision IDs:** DEC-P15-014, DEC-P15-015, DEC-P15-016
 **Definition of Done:**
@@ -962,9 +962,9 @@ Sub-phases:
 - Doctor checks added for trivy, scout, cloudsploit binaries
 - All sigint-tools and sigint-agents tests pass, cargo check clean
 
-- [ ] trivy_scan: container image/filesystem/repo vulnerability scanner, SandboxProfile::recon(), JSON Results parser with per-target CVE list
-- [ ] scout_suite_scan: cloud infrastructure auditor (AWS/Azure/GCP), SandboxProfile::web_scanner(), JSON report parser with service/rule/severity findings
-- [ ] cloudsploit_scan: cloud misconfiguration detector, SandboxProfile::web_scanner(), JSON findings parser with PASS/FAIL/WARN aggregates
+- [x] trivy_scan: container image/filesystem/repo vulnerability scanner, SandboxProfile::recon(), JSON Results parser with per-target CVE list
+- [x] scout_suite_scan: cloud infrastructure auditor (AWS/Azure/GCP), SandboxProfile::web_scanner(), JSON report parser with service/rule/severity findings
+- [x] cloudsploit_scan: cloud misconfiguration detector, SandboxProfile::web_scanner(), JSON findings parser with PASS/FAIL/WARN aggregates
 
 ---
 
