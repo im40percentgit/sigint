@@ -1,7 +1,7 @@
 //! ExecutorAgent — sandboxed tool execution specialist.
 //!
 //! @decision DEC-AGENT-009
-//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster, hydra, wpscan, testssl, hashcat, masscan, tshark, responder, msf_exploit, linpeas_enum, enum4linux_scan
+//! @title Executor has full tool access: nmap, shell, gobuster, nikto, nuclei, feroxbuster, hydra, wpscan, testssl, hashcat, masscan, tshark, responder, msf_exploit, linpeas_enum, enum4linux_scan, trivy_scan, scout_suite_scan, cloudsploit_scan
 //! @status accepted
 //! @rationale The Executor is the only agent that runs tools against the target.
 //! It receives a concrete plan from the Strategist and is trusted to execute it
@@ -15,6 +15,9 @@
 //! and responder (LLMNR/NBT-NS/MDNS poisoning and credential capture).
 //! Phase 15D adds msf_exploit (Metasploit module execution), linpeas_enum (Linux
 //! privilege escalation enumeration), and enum4linux_scan (SMB/Samba enumeration).
+//! Phase 15E adds trivy_scan (container/image CVE scanning), scout_suite_scan
+//! (cloud infrastructure auditing), and cloudsploit_scan (cloud misconfiguration
+//! detection).
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -50,6 +53,9 @@ impl ExecutorAgent {
                 "msf_exploit".to_string(),
                 "linpeas_enum".to_string(),
                 "enum4linux_scan".to_string(),
+                "trivy_scan".to_string(),
+                "scout_suite_scan".to_string(),
+                "cloudsploit_scan".to_string(),
             ],
         }
     }
@@ -222,7 +228,19 @@ mod tests {
             tools.contains(&"enum4linux_scan".to_string()),
             "executor must have enum4linux_scan"
         );
-        assert_eq!(tools.len(), 19, "executor should have exactly 19 tools");
+        assert!(
+            tools.contains(&"trivy_scan".to_string()),
+            "executor must have trivy_scan"
+        );
+        assert!(
+            tools.contains(&"scout_suite_scan".to_string()),
+            "executor must have scout_suite_scan"
+        );
+        assert!(
+            tools.contains(&"cloudsploit_scan".to_string()),
+            "executor must have cloudsploit_scan"
+        );
+        assert_eq!(tools.len(), 22, "executor should have exactly 22 tools");
     }
 
     #[test]

@@ -3,8 +3,8 @@
 //! Provides the `Tool` trait and concrete implementations for nmap, shell,
 //! gobuster, nikto, nuclei, feroxbuster, sqlmap, ffuf, whatweb, hydra, wpscan,
 //! testssl, hashcat, masscan, tshark, responder, msfconsole, linpeas,
-//! enum4linux-ng, and seven akaei SDR tools that the agent layer uses to give
-//! LLMs controlled access to external tools.
+//! enum4linux-ng, trivy, scout_suite, cloudsploit, and seven akaei SDR tools
+//! that the agent layer uses to give LLMs controlled access to external tools.
 //!
 //! # Architecture
 //!
@@ -22,6 +22,7 @@
 
 pub mod akaei;
 pub mod attack_plan;
+pub mod cloudsploit;
 pub mod enum4linux;
 pub mod error;
 pub mod feroxbuster;
@@ -37,10 +38,12 @@ pub mod nmap;
 pub mod nuclei;
 pub mod responder;
 pub mod result;
+pub mod scout_suite;
 pub mod shell;
 pub mod sqlmap;
 pub mod ffuf;
 pub mod testssl;
+pub mod trivy;
 pub mod tshark;
 pub mod whatweb;
 pub mod wpscan;
@@ -53,6 +56,7 @@ pub use akaei::{
 // CreateAttackPlanTool is NOT in all_executor_tools() — it requires a PlanCollector
 // at construction and is registered separately by the orchestrator per scan.
 pub use attack_plan::{new_plan_collector, AttackStep, CreateAttackPlanTool, PlanCollector};
+pub use cloudsploit::CloudsploitTool;
 pub use enum4linux::Enum4linuxTool;
 pub use error::{Result, ToolError};
 pub use feroxbuster::FeroxbusterTool;
@@ -70,10 +74,12 @@ pub use nmap::NmapTool;
 pub use nuclei::NucleiTool;
 pub use responder::ResponderTool;
 pub use result::{ScanStatus, ToolResult, TruncationInfo};
+pub use scout_suite::ScoutSuiteTool;
 pub use shell::ShellTool;
 pub use sqlmap::SqlmapTool;
 pub use ffuf::FfufTool;
 pub use testssl::TestsslTool;
+pub use trivy::TrivyTool;
 pub use tshark::TsharkTool;
 pub use whatweb::WhatwebTool;
 pub use wpscan::WpscanTool;
@@ -117,6 +123,10 @@ pub fn all_executor_tools_with_config(
         Box::new(MsfconsoleTool::new().with_output_cap(tools_config.output_cap_for("msfconsole"))),
         Box::new(LinpeasTool::new().with_output_cap(tools_config.output_cap_for("linpeas"))),
         Box::new(Enum4linuxTool::new().with_output_cap(tools_config.output_cap_for("enum4linux"))),
+        // Phase 15E cloud/container security tools
+        Box::new(TrivyTool::new().with_output_cap(tools_config.output_cap_for("trivy"))),
+        Box::new(ScoutSuiteTool::new().with_output_cap(tools_config.output_cap_for("scout_suite"))),
+        Box::new(CloudsploitTool::new().with_output_cap(tools_config.output_cap_for("cloudsploit"))),
         // akaei SDR tools (direct process — USB device access required, no sandbox output caps)
         Box::new(AkaeiSweepTool),
         Box::new(AkaeiScanTool),
@@ -141,9 +151,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_executor_tools_returns_twenty_six_tools() {
+    fn all_executor_tools_returns_twenty_nine_tools() {
         let tools = all_executor_tools();
-        assert_eq!(tools.len(), 26);
+        assert_eq!(tools.len(), 29);
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         // Network pentest tools
         assert!(names.contains(&"nmap_scan"));
@@ -168,6 +178,10 @@ mod tests {
         assert!(names.contains(&"msf_exploit"));
         assert!(names.contains(&"linpeas_enum"));
         assert!(names.contains(&"enum4linux_scan"));
+        // Phase 15E cloud/container security tools
+        assert!(names.contains(&"trivy_scan"));
+        assert!(names.contains(&"scout_suite_scan"));
+        assert!(names.contains(&"cloudsploit_scan"));
         // akaei SDR tools
         assert!(names.contains(&"akaei_sweep"));
         assert!(names.contains(&"akaei_scan"));

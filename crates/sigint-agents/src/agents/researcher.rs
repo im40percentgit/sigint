@@ -1,7 +1,7 @@
 //! ResearcherAgent — OSINT and initial reconnaissance specialist.
 //!
 //! @decision DEC-AGENT-007
-//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei + whatweb + testssl + masscan + tshark + enum4linux_scan
+//! @title Researcher allowed tools: nmap + shell + gobuster + nuclei + whatweb + testssl + masscan + tshark + enum4linux_scan + trivy_scan
 //! @status accepted
 //! @rationale The Researcher phase focuses on information gathering, not
 //! exploitation. nmap covers port/service enumeration; shell covers DNS, WHOIS,
@@ -18,6 +18,9 @@
 //! Phase 15D adds enum4linux_scan: SMB share/user/group enumeration is
 //! reconnaissance — it reads SMB metadata without exploiting anything. msf_exploit
 //! and linpeas_enum are Executor-only (active exploitation / local execution).
+//! Phase 15E adds trivy_scan: container image scanning is passive and read-only,
+//! making it appropriate for the Researcher phase. scout_suite_scan and
+//! cloudsploit_scan make broad active cloud API calls and belong in Executor only.
 
 use crate::{agent::Agent, role::AgentRole};
 
@@ -43,6 +46,7 @@ impl ResearcherAgent {
                 "masscan_scan".to_string(),
                 "tshark_capture".to_string(),
                 "enum4linux_scan".to_string(),
+                "trivy_scan".to_string(),
             ],
         }
     }
@@ -173,7 +177,11 @@ mod tests {
             tools.contains(&"enum4linux_scan".to_string()),
             "researcher must have enum4linux_scan"
         );
-        assert_eq!(tools.len(), 9, "researcher should have exactly 9 tools");
+        assert!(
+            tools.contains(&"trivy_scan".to_string()),
+            "researcher must have trivy_scan"
+        );
+        assert_eq!(tools.len(), 10, "researcher should have exactly 10 tools");
     }
 
     #[test]
