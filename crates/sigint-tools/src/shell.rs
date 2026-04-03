@@ -44,14 +44,32 @@ const ALLOWED_COMMANDS: &[&str] = &[
 /// instead of the Offline profile.
 const NETWORK_COMMANDS: &[&str] = &["whois", "dig", "host", "nslookup", "curl", "openssl"];
 
+/// Default 1 MB output cap for shell commands.
+const DEFAULT_SHELL_OUTPUT_CAP: usize = 1_048_576;
+
 /// Sandboxed shell command wrapper with an allowlist.
 ///
 /// Lets the LLM agent run a restricted set of shell commands for processing
 /// tool output (grepping nmap results, extracting fields with jq, etc.).
 /// All commands run inside an offline sandbox — no network access.
-pub struct ShellTool;
+pub struct ShellTool {
+    output_cap: usize,
+}
 
 impl ShellTool {
+    /// Create a new ShellTool with the default output cap.
+    pub fn new() -> Self {
+        Self {
+            output_cap: DEFAULT_SHELL_OUTPUT_CAP,
+        }
+    }
+
+    /// Set a custom output cap (builder pattern).
+    pub fn with_output_cap(mut self, cap: usize) -> Self {
+        self.output_cap = cap;
+        self
+    }
+
     /// Return true when `command` (by basename of the first whitespace token) is in the allowlist.
     ///
     /// Accepts both bare command names ("whois") and combined command strings
@@ -68,6 +86,12 @@ impl ShellTool {
             .and_then(|n| n.to_str())
             .unwrap_or(first_token);
         ALLOWED_COMMANDS.contains(&basename)
+    }
+}
+
+impl Default for ShellTool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -172,7 +196,7 @@ impl Tool for ShellTool {
             SandboxProfile::offline()
         };
         let mut cmd = profile.apply(&command);
-        cmd = cmd.max_output(1_048_576);
+        cmd = cmd.max_output(self.output_cap);
         for arg in cmd_args {
             cmd = cmd.arg(arg);
         }
@@ -212,23 +236,23 @@ mod tests {
 
     #[test]
     fn shell_risk_level_is_high() {
-        assert_eq!(ShellTool.risk_level(), sigint_core::types::ToolRisk::High);
+        assert_eq!(ShellTool::new().risk_level(), sigint_core::types::ToolRisk::High);
     }
 
     #[test]
     fn shell_tool_name_nonempty() {
-        assert!(!ShellTool.name().is_empty());
-        assert_eq!(ShellTool.name(), "shell");
+        assert!(!ShellTool::new().name().is_empty());
+        assert_eq!(ShellTool::new().name(), "shell");
     }
 
     #[test]
     fn shell_tool_description_nonempty() {
-        assert!(!ShellTool.description().is_empty());
+        assert!(!ShellTool::new().description().is_empty());
     }
 
     #[test]
     fn shell_tool_definition_shape() {
-        let def = ShellTool.definition();
+        let def = ShellTool::new().definition();
         assert_eq!(def.type_, "function");
         assert_eq!(def.function.name, "shell");
 
@@ -290,7 +314,7 @@ mod tests {
 
     #[tokio::test]
     async fn shell_missing_command_errors() {
-        let err = ShellTool.execute(json!({})).await.unwrap_err();
+        let err = ShellTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"
@@ -299,7 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn shell_disallowed_command_errors() {
-        let err = ShellTool
+        let err = ShellTool::new()
             .execute(json!({"command": "rm", "args": ["-rf", "/"]}))
             .await
             .unwrap_err();
@@ -311,7 +335,7 @@ mod tests {
 
     #[tokio::test]
     async fn shell_disallowed_python_errors() {
-        let err = ShellTool
+        let err = ShellTool::new()
             .execute(json!({"command": "python", "args": ["-c", "print('hi')"]}))
             .await
             .unwrap_err();
@@ -324,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn shell_invalid_args_type_errors() {
         // args array contains a non-string element.
-        let err = ShellTool
+        let err = ShellTool::new()
             .execute(json!({"command": "grep", "args": ["pattern", 42]}))
             .await
             .unwrap_err();
@@ -361,7 +385,7 @@ mod tests {
     async fn shell_combined_command_splits_args() {
         // "whois scanme.nmap.org" — should pass allowlist and attempt execution.
         // We expect either success or a sandbox/execution error (not DisallowedCommand).
-        let result = ShellTool
+        let result = ShellTool::new()
             .execute(json!({"command": "whois scanme.nmap.org"}))
             .await;
         match result {
@@ -379,7 +403,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn shell_executes_grep_in_sandbox() {
-        let result = ShellTool
+        let result = ShellTool::new()
             .execute(json!({"command": "grep", "args": ["-c", "root", "/etc/passwd"]}))
             .await
             .expect("grep execution should not error");

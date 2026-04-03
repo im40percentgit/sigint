@@ -31,12 +31,38 @@ use sigint_core::types::ToolRisk;
 /// Severity levels accepted by nuclei's `-severity` flag.
 const VALID_SEVERITIES: &[&str] = &["info", "low", "medium", "high", "critical"];
 
+/// Default 1 MB output cap for nuclei.
+const DEFAULT_NUCLEI_OUTPUT_CAP: usize = 1_048_576;
+
 /// Sandboxed nuclei tool wrapper.
 ///
 /// Exposes nuclei as a `Tool` for the LLM agent layer. Runs YAML-based
 /// vulnerability templates against a URL target. Network access is provided via
 /// pasta user-mode networking with a 10-minute timeout.
-pub struct NucleiTool;
+pub struct NucleiTool {
+    output_cap: usize,
+}
+
+impl NucleiTool {
+    /// Create a new NucleiTool with the default output cap.
+    pub fn new() -> Self {
+        Self {
+            output_cap: DEFAULT_NUCLEI_OUTPUT_CAP,
+        }
+    }
+
+    /// Set a custom output cap (builder pattern).
+    pub fn with_output_cap(mut self, cap: usize) -> Self {
+        self.output_cap = cap;
+        self
+    }
+}
+
+impl Default for NucleiTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl Tool for NucleiTool {
@@ -115,7 +141,7 @@ impl Tool for NucleiTool {
         );
 
         let mut cmd = SandboxProfile::web_scanner().apply("nuclei");
-        cmd = cmd.max_output(1_048_576);
+        cmd = cmd.max_output(self.output_cap);
         cmd = cmd.arg("-u").arg(&target);
 
         // Suppress banner and ANSI colour codes; emit one JSON object per finding.
@@ -255,25 +281,25 @@ mod tests {
     #[test]
     fn nuclei_risk_level_is_medium() {
         assert_eq!(
-            NucleiTool.risk_level(),
+            NucleiTool::new().risk_level(),
             sigint_core::types::ToolRisk::Medium
         );
     }
 
     #[test]
     fn nuclei_tool_name_nonempty() {
-        assert!(!NucleiTool.name().is_empty());
-        assert_eq!(NucleiTool.name(), "nuclei_scan");
+        assert!(!NucleiTool::new().name().is_empty());
+        assert_eq!(NucleiTool::new().name(), "nuclei_scan");
     }
 
     #[test]
     fn nuclei_tool_description_nonempty() {
-        assert!(!NucleiTool.description().is_empty());
+        assert!(!NucleiTool::new().description().is_empty());
     }
 
     #[test]
     fn nuclei_tool_definition_shape() {
-        let def = NucleiTool.definition();
+        let def = NucleiTool::new().definition();
         assert_eq!(def.type_, "function");
         assert_eq!(def.function.name, "nuclei_scan");
 
@@ -305,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn nuclei_missing_target_errors() {
-        let err = NucleiTool.execute(json!({})).await.unwrap_err();
+        let err = NucleiTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"
@@ -314,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn nuclei_invalid_severity_errors() {
-        let err = NucleiTool
+        let err = NucleiTool::new()
             .execute(json!({"target": "http://example.com", "severity": "ultra"}))
             .await
             .unwrap_err();
@@ -395,7 +421,7 @@ this is not json at all
     #[tokio::test]
     #[ignore]
     async fn nuclei_executes_against_loopback() {
-        let result = NucleiTool
+        let result = NucleiTool::new()
             .execute(json!({
                 "target": "http://127.0.0.1",
                 "severity": "medium"

@@ -95,6 +95,12 @@ enum Commands {
         /// Only meaningful when --max-cycles > 1 and the TUI/web approval UI is active.
         #[arg(long, default_value = "false")]
         approval_gates: bool,
+        /// Enable episodic memory recall from prior scans of the same target.
+        #[arg(long)]
+        memory: bool,
+        /// Run ReconEngine as a pre-scan step to build asset inventory.
+        #[arg(long)]
+        recon: bool,
         /// Force TUI mode on (default: auto-detect via isatty).
         #[arg(long)]
         tui: bool,
@@ -246,6 +252,8 @@ async fn main() {
             max_cycles,
             goal,
             approval_gates,
+            memory,
+            recon,
             tui,
             no_tui,
         } => {
@@ -259,6 +267,8 @@ async fn main() {
                     max_cycles,
                     goal,
                     approval_gates,
+                    memory,
+                    recon,
                     force_tui: tui,
                     force_no_tui: no_tui,
                 },

@@ -32,12 +32,14 @@ impl Database {
                      id, session_id, title, description, severity,
                      asset, evidence, created_at, cvss_score,
                      remediation, exploitability, impact,
-                     evidence_ref, chain_id, chain_order
+                     evidence_ref, chain_id, chain_order,
+                     asset_id
                  ) VALUES (
                      ?1, ?2, ?3, ?4, ?5,
                      ?6, ?7, ?8, ?9,
                      ?10, ?11, ?12,
-                     ?13, ?14, ?15
+                     ?13, ?14, ?15,
+                     ?16
                  )",
                 params![
                     finding.id.to_string(),
@@ -55,6 +57,7 @@ impl Database {
                     finding.evidence_ref.map(|u| u.to_string()),
                     finding.chain_id.map(|u| u.to_string()),
                     finding.chain_order,
+                    finding.asset_id.map(|id| id.to_string()),
                 ],
             )
             .map_err(|e| Error::Database(format!("create_finding failed: {e}")))?;
@@ -70,7 +73,8 @@ impl Database {
                     "SELECT id, session_id, title, description, severity,
                             asset, evidence, created_at, cvss_score,
                             remediation, exploitability, impact,
-                            evidence_ref, chain_id, chain_order
+                            evidence_ref, chain_id, chain_order,
+                            asset_id
                      FROM findings WHERE session_id = ?1
                      ORDER BY created_at ASC",
                 )
@@ -104,7 +108,8 @@ pub(crate) fn severity_from_str(s: &str) -> Severity {
 ///
 /// Column order must match the SELECT used in `get_findings` and
 /// `FindingQuery::list`. Columns 0–8 are the original fields;
-/// columns 9–14 are the Phase 12A enrichment additions.
+/// columns 9–14 are the Phase 12A enrichment additions;
+/// column 15 is the Phase 14 asset_id FK.
 pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> {
     // ── original columns (0–8) ───────────────────────────────────────────────
     let id_str: String = row.get(0).map_err(|e| Error::Database(e.to_string()))?;
@@ -125,6 +130,9 @@ pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> 
         row.get(12).map_err(|e| Error::Database(e.to_string()))?;
     let chain_id_str: Option<String> = row.get(13).map_err(|e| Error::Database(e.to_string()))?;
     let chain_order: Option<i32> = row.get(14).map_err(|e| Error::Database(e.to_string()))?;
+
+    // ── Phase 14 asset_id FK (15) ───────────────────────────────────────────
+    let asset_id_str: Option<String> = row.get(15).map_err(|e| Error::Database(e.to_string()))?;
 
     // ── parse UUIDs ──────────────────────────────────────────────────────────
     let id = Uuid::parse_str(&id_str)
@@ -151,6 +159,14 @@ pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> 
         })
         .transpose()?;
 
+    let asset_id = asset_id_str
+        .as_deref()
+        .map(|s| {
+            Uuid::parse_str(s)
+                .map_err(|e| Error::Database(format!("Invalid asset_id UUID '{s}': {e}")))
+        })
+        .transpose()?;
+
     Ok(Finding {
         id,
         session_id,
@@ -167,6 +183,7 @@ pub(crate) fn row_to_finding(row: &rusqlite::Row<'_>) -> Result<Finding, Error> 
         evidence_ref,
         chain_id,
         chain_order,
+        asset_id,
     })
 }
 

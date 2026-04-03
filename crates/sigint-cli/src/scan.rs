@@ -65,6 +65,10 @@ pub struct ScanArgs {
     pub goal: Option<String>,
     /// Whether to gate escalation tier transitions behind operator approval.
     pub approval_gates: bool,
+    /// Enable episodic memory recall from prior scans of the same target.
+    pub memory: bool,
+    /// Run ReconEngine as a pre-scan step to build asset inventory.
+    pub recon: bool,
     /// `--tui` flag: force TUI mode on.
     pub force_tui: bool,
     /// `--no-tui` flag: force stdout mode.
@@ -91,6 +95,8 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
         max_cycles,
         goal,
         approval_gates,
+        memory,
+        recon,
         force_tui,
         force_no_tui,
     } = args;
@@ -160,13 +166,18 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
     // Build MemoryService for episodic recall (without embeddings — the worker
     // handles embedding in the background; recall_semantic requires a loaded model
     // which is expensive to hold in the scan path).
-    let memory_service = Database::open(&db_path)
-        .ok()
-        .map(|db| MemoryService::new_without_embeddings(db, context_window / 5));
+    // Gated behind --memory flag or config `agent.memory` (default off).
+    let memory_service = if memory || core.config.agent.memory {
+        Database::open(&db_path)
+            .ok()
+            .map(|db| MemoryService::new_without_embeddings(db, context_window / 5))
+    } else {
+        None
+    };
 
     // ── Tool registry ─────────────────────────────────────────────────────────
     let mut registry = ToolRegistry::new();
-    for tool in sigint_tools::all_executor_tools() {
+    for tool in sigint_tools::all_executor_tools_with_config(&core.config.tools) {
         registry.register(tool);
     }
 
@@ -194,6 +205,28 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
         }
     }
 
+    // ── Recon pre-step (optional) ────────────────────────────────────────────
+    let discovered_assets = if recon || core.config.agent.recon {
+        if let Ok(recon_db) = Database::open(&db_path) {
+            use sigint_recon::ReconEngine;
+            let engine = ReconEngine::new(&recon_db, &core.events);
+            match engine.run(&target, scan_session_id).await {
+                Ok(assets) => {
+                    println!("  recon  : {} assets discovered", assets.len());
+                    assets
+                }
+                Err(e) => {
+                    warn!("Recon pre-step failed (continuing without): {e}");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
     // ── Orchestrator ──────────────────────────────────────────────────────────
     let mut orchestrator = Orchestrator::new(
         provider.clone(),
@@ -207,6 +240,10 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
     .with_ports(ports)
     .with_session_id(scan_session_id)
     .with_approval_gates(approval_gates);
+
+    if !discovered_assets.is_empty() {
+        orchestrator = orchestrator.with_discovered_assets(discovered_assets);
+    }
 
     if let Some(g) = goal {
         orchestrator = orchestrator.with_goal(g);
@@ -234,7 +271,7 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
     if use_tui {
         let interactive_provider: Arc<dyn sigint_llm::provider::LlmProvider> = provider.clone();
         let mut interactive_registry = ToolRegistry::new();
-        for tool in sigint_tools::all_executor_tools() {
+        for tool in sigint_tools::all_executor_tools_with_config(&core.config.tools) {
             interactive_registry.register(tool);
         }
         let interactive_orch = Orchestrator::new(
@@ -467,6 +504,10 @@ mod tests {
             #[arg(long, default_value = "false")]
             approval_gates: bool,
             #[arg(long)]
+            memory: bool,
+            #[arg(long)]
+            recon: bool,
+            #[arg(long)]
             tui: bool,
             #[arg(long)]
             no_tui: bool,
@@ -598,6 +639,8 @@ mod tests {
                 max_cycles: 1,
                 goal: None,
                 approval_gates: false,
+                memory: false,
+                recon: false,
                 force_tui: false,
                 force_no_tui: true,
             },

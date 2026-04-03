@@ -285,6 +285,8 @@ pub struct Finding {
     pub chain_id: Option<Uuid>,
     /// Ordering within the attack chain; lower = earlier in chain (Phase 12A).
     pub chain_order: Option<i32>,
+    /// Optional FK to the assets table — links this finding to a discovered asset.
+    pub asset_id: Option<Uuid>,
 }
 
 impl Finding {
@@ -310,6 +312,7 @@ impl Finding {
             evidence_ref: None,
             chain_id: None,
             chain_order: None,
+            asset_id: None,
         }
     }
 }

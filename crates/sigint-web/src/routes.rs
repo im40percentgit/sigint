@@ -288,6 +288,7 @@ pub async fn get_report(
                 asset: f.asset.clone(),
                 evidence: f.evidence.clone(),
                 risk_score: f.cvss_score,
+                asset_id: f.asset_id.map(|id| id.to_string()),
             })
             .collect(),
         assets: assets

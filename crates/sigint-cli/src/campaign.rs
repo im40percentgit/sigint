@@ -136,7 +136,7 @@ pub async fn run(
 
         // Build fresh tool registry per target.
         let mut registry = ToolRegistry::new();
-        for tool in sigint_tools::all_executor_tools() {
+        for tool in sigint_tools::all_executor_tools_with_config(&core.config.tools) {
             registry.register(tool);
         }
 

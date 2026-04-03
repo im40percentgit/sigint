@@ -73,7 +73,10 @@ use sigint_core::{
 };
 use sigint_llm::provider::LlmProvider;
 use sigint_memory::MemoryService;
-use sigint_tools::{new_finding_collector, CreateFindingTool, Tool};
+use sigint_tools::{
+    attack_plan::{new_plan_collector, AttackStep, CreateAttackPlanTool},
+    new_finding_collector, CreateFindingTool, Tool,
+};
 
 use crate::{
     agent::Agent,
@@ -175,6 +178,12 @@ pub struct Orchestrator {
     /// transitions proceed automatically. This preserves backward compatibility
     /// with existing callers that do not opt in to gated escalation.
     approval_gates: bool,
+    /// Pre-discovered assets from ReconEngine to seed into the TaskContext.
+    ///
+    /// When non-empty, `run_scan` copies these into `ctx.discovered_assets`
+    /// so agent prompts include baseline asset intelligence from the recon
+    /// pre-step. Defaults to an empty Vec.
+    discovered_assets: Vec<sigint_core::types::Asset>,
 }
 
 /// Parse Strategist output for escalation tier markers (DEC-LOOP-004).
@@ -196,6 +205,27 @@ pub fn detect_tier(strategist_output: &str) -> EscalationTier {
     if strategist_output.contains("ESCALATION: post-exploitation") {
         EscalationTier::PostExploitation
     } else if strategist_output.contains("ESCALATION: exploitation") {
+        EscalationTier::Exploitation
+    } else {
+        EscalationTier::Recon
+    }
+}
+
+/// Derive an escalation tier from structured attack plan risk scores.
+///
+/// Complements `detect_tier` (text-based) with a structured-data path.
+/// The Orchestrator takes the higher of `detect_tier` and `detect_tier_from_plan`
+/// so that high-risk plan steps trigger escalation even when the Strategist
+/// omits text markers.
+///
+/// - max_risk >= 9 → PostExploitation
+/// - max_risk >= 8 → Exploitation
+/// - otherwise     → Recon
+pub fn detect_tier_from_plan(plan: &[AttackStep]) -> EscalationTier {
+    let max_risk = plan.iter().map(|s| s.risk_score).max().unwrap_or(0);
+    if max_risk >= 9 {
+        EscalationTier::PostExploitation
+    } else if max_risk >= 8 {
         EscalationTier::Exploitation
     } else {
         EscalationTier::Recon
@@ -235,6 +265,7 @@ impl Orchestrator {
             max_cycles: 1,
             goal: None,
             approval_gates: false,
+            discovered_assets: Vec::new(),
         }
     }
 
@@ -366,6 +397,16 @@ impl Orchestrator {
         self
     }
 
+    /// Seed pre-discovered assets from the ReconEngine into the scan context.
+    ///
+    /// When non-empty, `run_scan` copies these into `ctx.discovered_assets`
+    /// so agent prompts include baseline asset intelligence (hosts, services,
+    /// subdomains) discovered during the recon pre-step.
+    pub fn with_discovered_assets(mut self, assets: Vec<sigint_core::types::Asset>) -> Self {
+        self.discovered_assets = assets;
+        self
+    }
+
     /// Check whether the convergence loop should stop after this cycle.
     ///
     /// Convergence is declared when either:
@@ -408,17 +449,33 @@ impl Orchestrator {
         _cycle: usize,
     ) -> Result<Vec<Finding>, Error> {
         // ── Strategist ───────────────────────────────────────────────────────
+        // Create a fresh PlanCollector per cycle so we can identify the attack
+        // steps produced this cycle, then drain them into ctx.attack_plan.
+        let plan_collector = new_plan_collector();
+        let plan_tool = CreateAttackPlanTool::new(plan_collector.clone());
+
         let strategist = StrategistAgent::new();
         info!(cycle = ctx.cycle, "orchestrator: running strategist agent");
-        let strategist_output = self.run_agent(&strategist, ctx).await?;
+        let strategist_output = self
+            .run_agent_with_extras(&strategist, ctx, &[&plan_tool as &dyn Tool])
+            .await?;
         ctx.agent_outputs
             .insert(AgentRole::Strategist, strategist_output.clone());
 
+        // Drain the PlanCollector into the TaskContext's attack_plan so
+        // downstream agents (Executor, Reporter) can reference structured steps.
+        {
+            let mut guard = plan_collector.lock().expect("plan collector lock poisoned");
+            ctx.attack_plan = guard.drain(..).collect();
+        }
+
         // ── Escalation gate (DEC-LOOP-004) ───────────────────────────────────
-        // Detect the tier the Strategist is recommending. If it exceeds the
-        // current tier AND approval gates are enabled, request operator approval
-        // before allowing the Executor to proceed.
-        let detected_tier = detect_tier(&strategist_output);
+        // Detect the tier the Strategist is recommending using both text markers
+        // and structured plan risk scores. Take the higher of the two so that
+        // high-risk plan steps trigger escalation even without explicit markers.
+        let text_tier = detect_tier(&strategist_output);
+        let plan_tier = detect_tier_from_plan(&ctx.attack_plan);
+        let detected_tier = std::cmp::max(text_tier, plan_tier);
         if detected_tier > ctx.current_tier {
             if self.approval_gates {
                 info!(
@@ -660,6 +717,7 @@ impl Orchestrator {
         );
 
         let mut ctx = TaskContext::new(target).with_ports(self.ports.clone());
+        ctx.discovered_assets = self.discovered_assets.clone();
 
         // ── 0. RfRecon (optional, once) ──────────────────────────────────────
         // Feature-detected: only runs when akaei_sweep is registered in the
@@ -2423,5 +2481,66 @@ mod tests {
             EscalationTier::PostExploitation,
             "ctx.current_tier should be updated even when gates are off"
         );
+    }
+
+    // ── Phase 14: detect_tier_from_plan tests ───────────────────────────────
+
+    fn make_step(risk: u8) -> AttackStep {
+        AttackStep {
+            name: "test step".into(),
+            description: "test".into(),
+            mitre_technique: None,
+            risk_score: risk,
+            priority: 1,
+            tools: vec![],
+            rationale: "test rationale".into(),
+        }
+    }
+
+    #[test]
+    fn detect_tier_from_plan_empty_returns_recon() {
+        assert_eq!(detect_tier_from_plan(&[]), EscalationTier::Recon);
+    }
+
+    #[test]
+    fn detect_tier_from_plan_low_risk_returns_recon() {
+        let plan = vec![make_step(3), make_step(5), make_step(7)];
+        assert_eq!(detect_tier_from_plan(&plan), EscalationTier::Recon);
+    }
+
+    #[test]
+    fn detect_tier_from_plan_risk_8_returns_exploitation() {
+        let plan = vec![make_step(3), make_step(8)];
+        assert_eq!(detect_tier_from_plan(&plan), EscalationTier::Exploitation);
+    }
+
+    #[test]
+    fn detect_tier_from_plan_risk_9_returns_post_exploitation() {
+        let plan = vec![make_step(5), make_step(9)];
+        assert_eq!(
+            detect_tier_from_plan(&plan),
+            EscalationTier::PostExploitation
+        );
+    }
+
+    #[test]
+    fn detect_tier_from_plan_risk_10_returns_post_exploitation() {
+        let plan = vec![make_step(10)];
+        assert_eq!(
+            detect_tier_from_plan(&plan),
+            EscalationTier::PostExploitation
+        );
+    }
+
+    // ── Phase 14: with_discovered_assets builder test ───────────────────────
+
+    #[test]
+    fn with_discovered_assets_builder() {
+        use sigint_core::types::{Asset, AssetKind};
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let asset = Asset::new(Uuid::nil(), AssetKind::Host, "10.0.0.1");
+        let orch = make_orchestrator(provider).with_discovered_assets(vec![asset.clone()]);
+        assert_eq!(orch.discovered_assets.len(), 1);
+        assert_eq!(orch.discovered_assets[0].value, "10.0.0.1");
     }
 }

@@ -65,11 +65,37 @@ impl GobusterMode {
     }
 }
 
+/// Default 1 MB output cap for gobuster.
+const DEFAULT_GOBUSTER_OUTPUT_CAP: usize = 1_048_576;
+
 /// Sandboxed gobuster tool wrapper.
 ///
 /// Exposes gobuster as a `Tool` for the LLM agent layer. Supports dir, vhost,
 /// and DNS modes. Network access is provided via pasta user-mode networking.
-pub struct GobusterTool;
+pub struct GobusterTool {
+    output_cap: usize,
+}
+
+impl GobusterTool {
+    /// Create a new GobusterTool with the default output cap.
+    pub fn new() -> Self {
+        Self {
+            output_cap: DEFAULT_GOBUSTER_OUTPUT_CAP,
+        }
+    }
+
+    /// Set a custom output cap (builder pattern).
+    pub fn with_output_cap(mut self, cap: usize) -> Self {
+        self.output_cap = cap;
+        self
+    }
+}
+
+impl Default for GobusterTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl Tool for GobusterTool {
@@ -147,7 +173,7 @@ impl Tool for GobusterTool {
 
         let mode_str = mode.as_str().to_string();
         let mut cmd = SandboxProfile::bruteforce().apply("gobuster");
-        cmd = cmd.max_output(1_048_576);
+        cmd = cmd.max_output(self.output_cap);
         cmd = cmd.arg(&mode_str);
 
         // DNS mode uses -d (domain) instead of -u (URL).
@@ -280,18 +306,18 @@ mod tests {
 
     #[test]
     fn gobuster_tool_name_nonempty() {
-        assert!(!GobusterTool.name().is_empty());
-        assert_eq!(GobusterTool.name(), "gobuster_scan");
+        assert!(!GobusterTool::new().name().is_empty());
+        assert_eq!(GobusterTool::new().name(), "gobuster_scan");
     }
 
     #[test]
     fn gobuster_tool_description_nonempty() {
-        assert!(!GobusterTool.description().is_empty());
+        assert!(!GobusterTool::new().description().is_empty());
     }
 
     #[test]
     fn gobuster_tool_definition_shape() {
-        let def = GobusterTool.definition();
+        let def = GobusterTool::new().definition();
         assert_eq!(def.type_, "function");
         assert_eq!(def.function.name, "gobuster_scan");
 
@@ -324,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn gobuster_missing_target_errors() {
-        let err = GobusterTool.execute(json!({})).await.unwrap_err();
+        let err = GobusterTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"
@@ -333,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn gobuster_invalid_mode_errors() {
-        let err = GobusterTool
+        let err = GobusterTool::new()
             .execute(json!({"target": "http://example.com", "mode": "stealth"}))
             .await
             .unwrap_err();
@@ -446,7 +472,7 @@ Found: dev.example.com (Status: 403) [Size: 288]"#;
     #[tokio::test]
     #[ignore]
     async fn gobuster_executes_dir_scan() {
-        let result = GobusterTool
+        let result = GobusterTool::new()
             .execute(json!({
                 "target": "http://127.0.0.1",
                 "mode": "dir",

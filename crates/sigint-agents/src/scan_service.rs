@@ -137,7 +137,7 @@ impl ScanService {
 
         // Populate tool registry with all executor tools.
         let mut registry = ToolRegistry::new();
-        for tool in sigint_tools::all_executor_tools() {
+        for tool in sigint_tools::all_executor_tools_with_config(&self.config.tools) {
             registry.register(tool);
         }
 

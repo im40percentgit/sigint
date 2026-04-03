@@ -16,6 +16,8 @@
 //! Markdown through pulldown-cmark, so both formats share a single template
 //! code path and the HTML is always in sync with the Markdown.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 
 // ── Public data types ─────────────────────────────────────────────────────────
@@ -35,6 +37,9 @@ pub struct FindingSummary {
     pub evidence: Option<String>,
     /// Optional numeric risk score (0.0–10.0) for CVSS-style prioritisation.
     pub risk_score: Option<f32>,
+    /// Optional FK to the assets table (stringified UUID).
+    /// Used to group findings by asset in the report.
+    pub asset_id: Option<String>,
 }
 
 /// A single asset summarised for inclusion in a report.
@@ -232,6 +237,105 @@ fn render_severity_chart(findings: &[FindingSummary]) -> String {
     svg
 }
 
+// ── Asset-grouped findings helper ────────────────────────────────────────────
+
+/// Returns `true` when any finding carries a non-`None` `asset_id`.
+fn has_any_asset_id(findings: &[FindingSummary]) -> bool {
+    findings.iter().any(|f| f.asset_id.is_some())
+}
+
+/// Render a single finding entry (used by both flat and grouped renderers).
+/// `idx` is the 1-based ordinal.  When `include_evidence` is true the raw
+/// evidence block is emitted (Technical template).
+fn render_single_finding(f: &FindingSummary, idx: usize, include_evidence: bool) -> String {
+    let mut out = String::new();
+    let asset_line = f
+        .asset
+        .as_deref()
+        .map(|a| format!("**Asset:** {a}  \n"))
+        .unwrap_or_default();
+    let risk_line = f
+        .risk_score
+        .map(|s| format!("**Risk Score:** {:.1}/10.0  \n", s))
+        .unwrap_or_default();
+    out.push_str(&format!(
+        "### {}. {} `[{}]`\n\n\
+         {asset_line}\
+         {risk_line}\
+         {}\n\n",
+        idx, f.title, f.severity, f.description,
+    ));
+    if include_evidence {
+        if let Some(ev) = &f.evidence {
+            out.push_str("**Evidence:**\n\n");
+            out.push_str("```\n");
+            out.push_str(ev);
+            out.push_str("\n```\n\n");
+        }
+    }
+    out
+}
+
+/// Render findings grouped by asset.
+///
+/// Findings that carry `asset_id` are grouped under "### Findings by Asset"
+/// with each group showing the human-readable `asset` label (falling back to
+/// the UUID when `asset` is `None`).  Findings without `asset_id` appear under
+/// "### General Findings".
+///
+/// When `include_evidence` is `true` (Technical template), evidence blocks are
+/// rendered inline.
+fn render_findings_grouped(
+    findings: &[FindingSummary],
+    include_evidence: bool,
+) -> String {
+    let mut sorted: Vec<&FindingSummary> = findings.iter().collect();
+    sorted.sort_by_key(|f| severity_order(&f.severity));
+
+    let (with_asset, without_asset): (Vec<&&FindingSummary>, Vec<&&FindingSummary>) =
+        sorted.iter().partition(|f| f.asset_id.is_some());
+
+    let mut out = String::new();
+
+    // -- Findings by Asset --
+    if !with_asset.is_empty() {
+        out.push_str("### Findings by Asset\n\n");
+
+        // Group by asset_id, preserving insertion order via BTreeMap.
+        let mut groups: BTreeMap<&str, Vec<&&FindingSummary>> = BTreeMap::new();
+        for f in &with_asset {
+            let key = f.asset_id.as_deref().unwrap_or("unknown");
+            groups.entry(key).or_default().push(f);
+        }
+
+        let mut global_idx = 1usize;
+        for (asset_id, group) in &groups {
+            // Use the human-readable asset label from the first finding if available,
+            // otherwise fall back to the UUID.
+            let label = group
+                .first()
+                .and_then(|f| f.asset.as_deref())
+                .unwrap_or(asset_id);
+            out.push_str(&format!("#### {label}\n\n"));
+            for f in group {
+                out.push_str(&render_single_finding(f, global_idx, include_evidence));
+                global_idx += 1;
+            }
+        }
+    }
+
+    // -- General Findings --
+    if !without_asset.is_empty() {
+        out.push_str("### General Findings\n\n");
+        let start_idx = with_asset.len() + 1;
+        for (i, f) in without_asset.iter().enumerate() {
+            out.push_str(&render_single_finding(f, start_idx + i, include_evidence));
+        }
+    }
+
+    out
+}
+
 // ── Executive summary section ─────────────────────────────────────────────────
 
 fn render_executive_summary(data: &ReportData) -> String {
@@ -373,30 +477,14 @@ fn render_detailed(data: &ReportData) -> String {
     out.push_str("## Findings\n\n");
     if data.findings.is_empty() {
         out.push_str("_No findings recorded for this session._\n\n");
+    } else if has_any_asset_id(&data.findings) {
+        out.push_str(&render_findings_grouped(&data.findings, false));
     } else {
         let mut sorted: Vec<&FindingSummary> = data.findings.iter().collect();
         sorted.sort_by_key(|f| severity_order(&f.severity));
 
         for (i, f) in sorted.iter().enumerate() {
-            let asset_line = f
-                .asset
-                .as_deref()
-                .map(|a| format!("**Asset:** {a}  \n"))
-                .unwrap_or_default();
-            let risk_line = f
-                .risk_score
-                .map(|s| format!("**Risk Score:** {:.1}/10.0  \n", s))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "### {}. {} `[{}]`\n\n\
-                 {asset_line}\
-                 {risk_line}\
-                 {}\n\n",
-                i + 1,
-                f.title,
-                f.severity,
-                f.description,
-            ));
+            out.push_str(&render_single_finding(f, i + 1, false));
         }
     }
 
@@ -430,37 +518,14 @@ fn render_technical(data: &ReportData) -> String {
     out.push_str("## Technical Findings\n\n");
     if data.findings.is_empty() {
         out.push_str("_No findings recorded for this session._\n\n");
+    } else if has_any_asset_id(&data.findings) {
+        out.push_str(&render_findings_grouped(&data.findings, true));
     } else {
         let mut sorted: Vec<&FindingSummary> = data.findings.iter().collect();
         sorted.sort_by_key(|f| severity_order(&f.severity));
 
         for (i, f) in sorted.iter().enumerate() {
-            let asset_line = f
-                .asset
-                .as_deref()
-                .map(|a| format!("**Asset:** {a}  \n"))
-                .unwrap_or_default();
-            let risk_line = f
-                .risk_score
-                .map(|s| format!("**Risk Score:** {:.1}/10.0  \n", s))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "### {}. {} `[{}]`\n\n\
-                 {asset_line}\
-                 {risk_line}\
-                 {}\n\n",
-                i + 1,
-                f.title,
-                f.severity,
-                f.description,
-            ));
-
-            if let Some(ev) = &f.evidence {
-                out.push_str("**Evidence:**\n\n");
-                out.push_str("```\n");
-                out.push_str(ev);
-                out.push_str("\n```\n\n");
-            }
+            out.push_str(&render_single_finding(f, i + 1, true));
         }
     }
 
@@ -611,6 +676,7 @@ mod tests {
                     asset: Some("example.com:443".into()),
                     evidence: Some("' OR 1=1 --".into()),
                     risk_score: None,
+                    asset_id: None,
                 },
                 FindingSummary {
                     title: "XSS".into(),
@@ -619,6 +685,7 @@ mod tests {
                     asset: Some("example.com".into()),
                     evidence: None,
                     risk_score: None,
+                    asset_id: None,
                 },
             ],
             assets: vec![AssetSummary {
@@ -797,6 +864,7 @@ mod tests {
                 asset: None,
                 evidence: None,
                 risk_score: None,
+                asset_id: None,
             }],
             assets: vec![],
             scan_count: 1,
@@ -825,6 +893,7 @@ mod tests {
                 asset: Some("10.0.0.1:443".into()),
                 evidence: None,
                 risk_score: None,
+                asset_id: None,
             }],
             assets: vec![],
             scan_count: 1,
@@ -854,6 +923,7 @@ mod tests {
                     asset: None,
                     evidence: None,
                     risk_score: None,
+                    asset_id: None,
                 },
                 FindingSummary {
                     title: "Critical Finding".into(),
@@ -862,6 +932,7 @@ mod tests {
                     asset: None,
                     evidence: None,
                     risk_score: None,
+                    asset_id: None,
                 },
                 FindingSummary {
                     title: "Medium Finding".into(),
@@ -870,6 +941,7 @@ mod tests {
                     asset: None,
                     evidence: None,
                     risk_score: None,
+                    asset_id: None,
                 },
             ],
             assets: vec![],
@@ -914,6 +986,7 @@ mod tests {
                 asset: None,
                 evidence: None,
                 risk_score: None,
+                asset_id: None,
             }],
             assets: vec![],
             scan_count: 1,
@@ -959,6 +1032,7 @@ mod tests {
                     asset: None,
                     evidence: None,
                     risk_score: None,
+                    asset_id: None,
                 })
                 .collect(),
             assets: vec![],
@@ -1012,6 +1086,7 @@ mod tests {
                 asset: None,
                 evidence: None,
                 risk_score: None,
+                asset_id: None,
             },
             FindingSummary {
                 title: "High".into(),
@@ -1020,6 +1095,7 @@ mod tests {
                 asset: None,
                 evidence: None,
                 risk_score: None,
+                asset_id: None,
             },
             FindingSummary {
                 title: "Medium".into(),
@@ -1028,6 +1104,7 @@ mod tests {
                 asset: None,
                 evidence: None,
                 risk_score: None,
+                asset_id: None,
             },
         ];
 
@@ -1136,6 +1213,7 @@ mod tests {
                     asset: asset.map(|a| a.to_string()),
                     evidence: None,
                     risk_score,
+                    asset_id: None,
                 })
                 .collect(),
             assets: vec![
@@ -1224,6 +1302,7 @@ mod tests {
             asset: None,
             evidence: None,
             risk_score,
+            asset_id: None,
         }
     }
 
@@ -1297,6 +1376,179 @@ mod tests {
         assert!(
             !md.contains("<svg"),
             "Executive template must not embed SVG chart when no findings"
+        );
+    }
+
+    // ── Asset grouping tests ────────────────────────────────────────────────
+
+    #[test]
+    fn findings_grouped_by_asset_in_detailed() {
+        let asset_uuid_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let asset_uuid_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+
+        let data = ReportData {
+            session_name: "Grouped Test".into(),
+            target: Some("example.com".into()),
+            created_at: Utc::now(),
+            findings: vec![
+                FindingSummary {
+                    title: "SQLi on API".into(),
+                    severity: "critical".into(),
+                    description: "SQL injection.".into(),
+                    asset: Some("10.0.0.1:443".into()),
+                    evidence: None,
+                    risk_score: None,
+                    asset_id: Some(asset_uuid_a.into()),
+                },
+                FindingSummary {
+                    title: "XSS on Web".into(),
+                    severity: "high".into(),
+                    description: "Reflected XSS.".into(),
+                    asset: Some("10.0.0.2:80".into()),
+                    evidence: None,
+                    risk_score: None,
+                    asset_id: Some(asset_uuid_b.into()),
+                },
+                FindingSummary {
+                    title: "Weak TLS".into(),
+                    severity: "medium".into(),
+                    description: "Old cipher suite.".into(),
+                    asset: None,
+                    evidence: None,
+                    risk_score: None,
+                    asset_id: None,
+                },
+            ],
+            assets: vec![],
+            scan_count: 2,
+        };
+
+        let md = build_markdown(&data, ReportTemplate::Detailed);
+
+        // Grouped heading must appear
+        assert!(
+            md.contains("### Findings by Asset"),
+            "must have Findings by Asset heading"
+        );
+        // General heading must appear for the ungrouped finding
+        assert!(
+            md.contains("### General Findings"),
+            "must have General Findings heading"
+        );
+        // Asset labels used as sub-headings
+        assert!(
+            md.contains("#### 10.0.0.1:443"),
+            "must use asset label as sub-heading"
+        );
+        assert!(
+            md.contains("#### 10.0.0.2:80"),
+            "must use second asset label as sub-heading"
+        );
+        // The ungrouped finding must appear
+        assert!(
+            md.contains("Weak TLS"),
+            "ungrouped finding must appear in General Findings"
+        );
+    }
+
+    #[test]
+    fn findings_without_asset_id_render_flat() {
+        // When NO findings have asset_id, the flat rendering is preserved
+        // (backward compat).
+        let data = ReportData {
+            session_name: "Flat Test".into(),
+            target: None,
+            created_at: Utc::now(),
+            findings: vec![
+                FindingSummary {
+                    title: "Finding A".into(),
+                    severity: "high".into(),
+                    description: "Desc A.".into(),
+                    asset: None,
+                    evidence: None,
+                    risk_score: None,
+                    asset_id: None,
+                },
+                FindingSummary {
+                    title: "Finding B".into(),
+                    severity: "low".into(),
+                    description: "Desc B.".into(),
+                    asset: None,
+                    evidence: None,
+                    risk_score: None,
+                    asset_id: None,
+                },
+            ],
+            assets: vec![],
+            scan_count: 1,
+        };
+
+        let md = build_markdown(&data, ReportTemplate::Detailed);
+
+        // Must NOT contain grouping headings
+        assert!(
+            !md.contains("### Findings by Asset"),
+            "flat rendering must not have Findings by Asset heading"
+        );
+        assert!(
+            !md.contains("### General Findings"),
+            "flat rendering must not have General Findings heading"
+        );
+        // Findings still rendered
+        assert!(md.contains("Finding A"), "Finding A must appear");
+        assert!(md.contains("Finding B"), "Finding B must appear");
+    }
+
+    #[test]
+    fn findings_grouped_in_technical_with_evidence() {
+        let asset_uuid = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+
+        let data = ReportData {
+            session_name: "Tech Grouped".into(),
+            target: None,
+            created_at: Utc::now(),
+            findings: vec![
+                FindingSummary {
+                    title: "SQLi".into(),
+                    severity: "critical".into(),
+                    description: "Injection found.".into(),
+                    asset: Some("db.internal:3306".into()),
+                    evidence: Some("' OR 1=1 --".into()),
+                    risk_score: None,
+                    asset_id: Some(asset_uuid.into()),
+                },
+                FindingSummary {
+                    title: "Info Leak".into(),
+                    severity: "low".into(),
+                    description: "Version header exposed.".into(),
+                    asset: None,
+                    evidence: None,
+                    risk_score: None,
+                    asset_id: None,
+                },
+            ],
+            assets: vec![],
+            scan_count: 1,
+        };
+
+        let md = build_markdown(&data, ReportTemplate::Technical);
+
+        assert!(
+            md.contains("### Findings by Asset"),
+            "Technical template must group by asset"
+        );
+        assert!(
+            md.contains("#### db.internal:3306"),
+            "asset label must appear as sub-heading"
+        );
+        // Evidence must still be rendered for grouped findings
+        assert!(
+            md.contains("**Evidence:**"),
+            "evidence block must be present for grouped finding"
+        );
+        assert!(
+            md.contains("### General Findings"),
+            "ungrouped finding must appear under General Findings"
         );
     }
 }

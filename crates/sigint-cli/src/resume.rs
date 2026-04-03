@@ -125,7 +125,7 @@ pub async fn run(
 
     // ── Tool registry ─────────────────────────────────────────────────────────
     let mut registry = ToolRegistry::new();
-    for tool in sigint_tools::all_executor_tools() {
+    for tool in sigint_tools::all_executor_tools_with_config(&core.config.tools) {
         registry.register(tool);
     }
 
@@ -168,7 +168,7 @@ pub async fn run(
     if use_tui {
         let interactive_provider: Arc<dyn sigint_llm::provider::LlmProvider> = provider.clone();
         let mut interactive_registry = ToolRegistry::new();
-        for tool in sigint_tools::all_executor_tools() {
+        for tool in sigint_tools::all_executor_tools_with_config(&core.config.tools) {
             interactive_registry.register(tool);
         }
         let interactive_orch = Orchestrator::new(

@@ -36,12 +36,38 @@ use sigint_core::types::ToolRisk;
 const DEFAULT_THREADS: u64 = 50;
 const DEFAULT_WORDLIST: &str = "/usr/share/wordlists/dirb/common.txt";
 
+/// Default 1 MB output cap for feroxbuster.
+const DEFAULT_FEROXBUSTER_OUTPUT_CAP: usize = 1_048_576;
+
 /// Sandboxed feroxbuster tool wrapper.
 ///
 /// Exposes feroxbuster as a `Tool` for the LLM agent layer. Performs recursive
 /// content discovery against web targets using wordlist-based bruteforce.
 /// Network access is provided via pasta user-mode networking.
-pub struct FeroxbusterTool;
+pub struct FeroxbusterTool {
+    output_cap: usize,
+}
+
+impl FeroxbusterTool {
+    /// Create a new FeroxbusterTool with the default output cap.
+    pub fn new() -> Self {
+        Self {
+            output_cap: DEFAULT_FEROXBUSTER_OUTPUT_CAP,
+        }
+    }
+
+    /// Set a custom output cap (builder pattern).
+    pub fn with_output_cap(mut self, cap: usize) -> Self {
+        self.output_cap = cap;
+        self
+    }
+}
+
+impl Default for FeroxbusterTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl Tool for FeroxbusterTool {
@@ -125,7 +151,7 @@ impl Tool for FeroxbusterTool {
         );
 
         let mut cmd = SandboxProfile::bruteforce().apply("feroxbuster");
-        cmd = cmd.max_output(1_048_576);
+        cmd = cmd.max_output(self.output_cap);
         cmd = cmd.arg("-u").arg(&target);
         cmd = cmd.arg("-w").arg(&wordlist);
 
@@ -252,18 +278,18 @@ mod tests {
 
     #[test]
     fn feroxbuster_tool_name_nonempty() {
-        assert!(!FeroxbusterTool.name().is_empty());
-        assert_eq!(FeroxbusterTool.name(), "feroxbuster_scan");
+        assert!(!FeroxbusterTool::new().name().is_empty());
+        assert_eq!(FeroxbusterTool::new().name(), "feroxbuster_scan");
     }
 
     #[test]
     fn feroxbuster_tool_description_nonempty() {
-        assert!(!FeroxbusterTool.description().is_empty());
+        assert!(!FeroxbusterTool::new().description().is_empty());
     }
 
     #[test]
     fn feroxbuster_tool_definition_shape() {
-        let def = FeroxbusterTool.definition();
+        let def = FeroxbusterTool::new().definition();
         assert_eq!(def.type_, "function");
         assert_eq!(def.function.name, "feroxbuster_scan");
 
@@ -304,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn feroxbuster_missing_target_errors() {
-        let err = FeroxbusterTool.execute(json!({})).await.unwrap_err();
+        let err = FeroxbusterTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"
@@ -313,7 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn feroxbuster_zero_threads_errors() {
-        let err = FeroxbusterTool
+        let err = FeroxbusterTool::new()
             .execute(json!({"target": "http://example.com", "threads": 0}))
             .await
             .unwrap_err();
@@ -390,7 +416,7 @@ WLD      GET      10l       20w      300c Got 200 for http://target/FUZZ"#;
     #[tokio::test]
     #[ignore]
     async fn feroxbuster_executes_against_loopback() {
-        let result = FeroxbusterTool
+        let result = FeroxbusterTool::new()
             .execute(json!({
                 "target": "http://127.0.0.1",
                 "threads": 10

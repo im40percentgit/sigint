@@ -228,6 +228,14 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         ALTER TABLE findings ADD COLUMN chain_order INTEGER;
         ",
     ),
+    (
+        9,
+        "findings: asset_id foreign key",
+        "
+        ALTER TABLE findings ADD COLUMN asset_id TEXT REFERENCES assets(id);
+        CREATE INDEX IF NOT EXISTS idx_findings_asset_id ON findings(asset_id);
+        ",
+    ),
 ];
 
 /// Run all pending migrations against the given connection.
@@ -596,5 +604,28 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn migration_9_adds_asset_id_column() {
+        let conn = in_memory();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, name, created_at, updated_at) VALUES ('s1', 'test', datetime('now'), datetime('now'))",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO assets (id, session_id, kind, value, discovered_at) VALUES ('a1', 's1', 'host', '10.0.0.1', datetime('now'))",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO findings (id, session_id, title, description, severity, created_at, asset_id) \
+             VALUES ('f1', 's1', 'test', 'desc', 'high', datetime('now'), 'a1')",
+            [],
+        ).unwrap();
+        let asset_id: String = conn.query_row(
+            "SELECT asset_id FROM findings WHERE id = 'f1'", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(asset_id, "a1");
     }
 }

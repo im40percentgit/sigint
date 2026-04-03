@@ -19,6 +19,7 @@
 //! downstream crates only need `use sigint_tools::Tool` — no sub-module imports.
 
 pub mod akaei;
+pub mod attack_plan;
 pub mod error;
 pub mod feroxbuster;
 pub mod finding;
@@ -34,6 +35,9 @@ pub use akaei::{
     AkaeiAnalyzeTool, AkaeiAuditTool, AkaeiDecodeTool, AkaeiFingerprintTool, AkaeiFreqdbTool,
     AkaeiScanTool, AkaeiSweepTool,
 };
+// CreateAttackPlanTool is NOT in all_executor_tools() — it requires a PlanCollector
+// at construction and is registered separately by the orchestrator per scan.
+pub use attack_plan::{new_plan_collector, AttackStep, CreateAttackPlanTool, PlanCollector};
 pub use error::{Result, ToolError};
 pub use feroxbuster::FeroxbusterTool;
 // CreateFindingTool is NOT in all_executor_tools() — it requires a FindingCollector
@@ -47,10 +51,10 @@ pub use result::{ScanStatus, ToolResult, TruncationInfo};
 pub use shell::ShellTool;
 pub use tool::Tool;
 
-/// Return all executor tools for registration with ToolRegistry.
+/// Return all executor tools configured with per-tool output caps from `ToolsConfig`.
 ///
-/// This is the single source of truth for the tool catalog — both CLI and
-/// web scan handlers use this to populate their registries.
+/// This is the preferred entry point — callers that have access to the loaded
+/// config should use this so per-tool cap overrides take effect.
 ///
 /// @decision DEC-TOOL-004
 /// @title all_executor_tools() is the canonical tool catalog
@@ -59,16 +63,18 @@ pub use tool::Tool;
 /// risking drift (CLI gets a new tool, web doesn't). Centralising registration here
 /// ensures both consumers always have the same tool set without any sigint-tools →
 /// sigint-agents circular dependency.
-pub fn all_executor_tools() -> Vec<Box<dyn Tool>> {
+pub fn all_executor_tools_with_config(
+    tools_config: &sigint_core::config::ToolsConfig,
+) -> Vec<Box<dyn Tool>> {
     vec![
         // Network pentest tools (sandboxed)
-        Box::new(NmapTool),
-        Box::new(ShellTool),
-        Box::new(GobusterTool),
-        Box::new(NiktoTool),
-        Box::new(NucleiTool),
-        Box::new(FeroxbusterTool),
-        // akaei SDR tools (direct process — USB device access required)
+        Box::new(NmapTool::new().with_output_cap(tools_config.output_cap_for("nmap"))),
+        Box::new(ShellTool::new().with_output_cap(tools_config.output_cap_for("shell"))),
+        Box::new(GobusterTool::new().with_output_cap(tools_config.output_cap_for("gobuster"))),
+        Box::new(NiktoTool::new().with_output_cap(tools_config.output_cap_for("nikto"))),
+        Box::new(NucleiTool::new().with_output_cap(tools_config.output_cap_for("nuclei"))),
+        Box::new(FeroxbusterTool::new().with_output_cap(tools_config.output_cap_for("feroxbuster"))),
+        // akaei SDR tools (direct process — USB device access required, no sandbox output caps)
         Box::new(AkaeiSweepTool),
         Box::new(AkaeiScanTool),
         Box::new(AkaeiDecodeTool),
@@ -77,6 +83,14 @@ pub fn all_executor_tools() -> Vec<Box<dyn Tool>> {
         Box::new(AkaeiFingerprintTool),
         Box::new(AkaeiFreqdbTool),
     ]
+}
+
+/// Return all executor tools with default output caps.
+///
+/// Backward-compatible wrapper for callers that don't have a `ToolsConfig`.
+/// Delegates to `all_executor_tools_with_config` with the default config.
+pub fn all_executor_tools() -> Vec<Box<dyn Tool>> {
+    all_executor_tools_with_config(&sigint_core::config::ToolsConfig::default())
 }
 
 #[cfg(test)]

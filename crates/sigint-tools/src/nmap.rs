@@ -38,9 +38,9 @@ use crate::error::{Result, ToolError};
 use crate::result::{TruncationInfo, ToolResult};
 use crate::tool::Tool;
 
-/// 1 MB output cap for nmap. Scans against large CIDR ranges can produce many
+/// Default 1 MB output cap for nmap. Scans against large CIDR ranges can produce many
 /// megabytes of XML; this keeps sandbox memory usage bounded.
-const NMAP_MAX_OUTPUT_BYTES: usize = 1_048_576;
+const DEFAULT_NMAP_OUTPUT_CAP: usize = 1_048_576;
 
 /// Parse nmap XML output (`-oX -`) into structured JSON.
 ///
@@ -337,7 +337,30 @@ impl ScanType {
 ///
 /// Exposes nmap as a `Tool` for the LLM agent layer. Network access is
 /// provided via pasta (user-mode networking) inside a Linux namespace sandbox.
-pub struct NmapTool;
+pub struct NmapTool {
+    output_cap: usize,
+}
+
+impl NmapTool {
+    /// Create a new NmapTool with the default output cap.
+    pub fn new() -> Self {
+        Self {
+            output_cap: DEFAULT_NMAP_OUTPUT_CAP,
+        }
+    }
+
+    /// Set a custom output cap (builder pattern).
+    pub fn with_output_cap(mut self, cap: usize) -> Self {
+        self.output_cap = cap;
+        self
+    }
+}
+
+impl Default for NmapTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl Tool for NmapTool {
@@ -404,11 +427,11 @@ impl Tool for NmapTool {
             "executing nmap scan"
         );
 
-        // Build the sandboxed command. Cap output at 1 MB to prevent OOM from
+        // Build the sandboxed command. Cap output to prevent OOM from
         // large CIDR scans; truncation metadata is surfaced via ToolResult::truncation.
         let mut cmd = SandboxProfile::nmap()
             .apply("nmap")
-            .max_output(NMAP_MAX_OUTPUT_BYTES);
+            .max_output(self.output_cap);
 
         // Apply scan-type flags.
         for flag in scan_type.flags() {
@@ -469,23 +492,23 @@ mod tests {
 
     #[test]
     fn nmap_risk_level_is_low() {
-        assert_eq!(NmapTool.risk_level(), sigint_core::types::ToolRisk::Low);
+        assert_eq!(NmapTool::new().risk_level(), sigint_core::types::ToolRisk::Low);
     }
 
     #[test]
     fn nmap_tool_name_nonempty() {
-        assert!(!NmapTool.name().is_empty());
-        assert_eq!(NmapTool.name(), "nmap_scan");
+        assert!(!NmapTool::new().name().is_empty());
+        assert_eq!(NmapTool::new().name(), "nmap_scan");
     }
 
     #[test]
     fn nmap_tool_description_nonempty() {
-        assert!(!NmapTool.description().is_empty());
+        assert!(!NmapTool::new().description().is_empty());
     }
 
     #[test]
     fn nmap_tool_definition_shape() {
-        let def = NmapTool.definition();
+        let def = NmapTool::new().definition();
         assert_eq!(def.type_, "function");
         assert_eq!(def.function.name, "nmap_scan");
 
@@ -520,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn nmap_missing_target_errors() {
-        let err = NmapTool.execute(json!({})).await.unwrap_err();
+        let err = NmapTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"
@@ -529,7 +552,7 @@ mod tests {
 
     #[tokio::test]
     async fn nmap_invalid_scan_type_errors() {
-        let err = NmapTool
+        let err = NmapTool::new()
             .execute(json!({"target": "127.0.0.1", "scan_type": "stealth"}))
             .await
             .unwrap_err();
@@ -788,7 +811,7 @@ Nmap done: 1 IP address (1 host up) scanned in 5.00 seconds
     #[tokio::test]
     #[ignore]
     async fn nmap_executes_loopback_quick_scan() {
-        let result = NmapTool
+        let result = NmapTool::new()
             .execute(json!({"target": "127.0.0.1", "scan_type": "quick"}))
             .await
             .expect("nmap execution should not error");

@@ -38,7 +38,8 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use sigint_core::types::{EscalationTier, Finding};
+use sigint_core::types::{Asset, EscalationTier, Finding};
+use sigint_tools::attack_plan::AttackStep;
 use sigint_tools::result::ToolResult;
 use uuid::Uuid;
 
@@ -98,6 +99,20 @@ pub struct TaskContext {
     /// pauses at each tier transition and waits for operator approval before
     /// allowing the Executor to proceed. Defaults to `EscalationTier::Recon`.
     pub current_tier: EscalationTier,
+    /// Assets discovered by ReconEngine pre-scan step.
+    ///
+    /// Populated by the Orchestrator after the ReconEngine completes its
+    /// automated discovery pass. When non-empty, agent prompts include these
+    /// as baseline context so agents can build on prior automated recon.
+    #[serde(skip)]
+    pub discovered_assets: Vec<Asset>,
+    /// Structured attack plan produced by the Strategist.
+    ///
+    /// Populated by the Orchestrator after draining the Strategist's
+    /// `PlanCollector`. When non-empty, the Executor prompt renders these
+    /// steps in priority order so the LLM executes them systematically.
+    #[serde(skip)]
+    pub attack_plan: Vec<AttackStep>,
 }
 
 impl TaskContext {
@@ -112,6 +127,8 @@ impl TaskContext {
             cycle: 0,
             scan_record_refs: Vec::new(),
             current_tier: EscalationTier::Recon,
+            discovered_assets: Vec::new(),
+            attack_plan: Vec::new(),
         }
     }
 
@@ -147,12 +164,27 @@ impl TaskContext {
                 )
             }
             AgentRole::Researcher => {
-                format!(
+                let base = format!(
                     "Target: {}. Perform initial reconnaissance. \
                      Gather open-source intelligence, identify exposed services, \
                      subdomains, and technology stack. Report your findings.",
                     self.target
-                )
+                );
+                if self.discovered_assets.is_empty() {
+                    base
+                } else {
+                    let asset_lines: Vec<String> = self
+                        .discovered_assets
+                        .iter()
+                        .map(|a| format!("- {}: {} ({})", a.kind, a.value, a.metadata))
+                        .collect();
+                    format!(
+                        "{}\n\n## Prior Recon (automated discovery)\n{}\n\n\
+                         Use this as baseline. Focus scanning on areas not yet covered.",
+                        base,
+                        asset_lines.join("\n")
+                    )
+                }
             }
             AgentRole::Strategist => {
                 let researcher_output = self
@@ -210,16 +242,46 @@ impl TaskContext {
                     .get(&AgentRole::Strategist)
                     .map(String::as_str)
                     .unwrap_or("(no strategist output yet)");
-                let base = format!(
+                let mut base = format!(
                     "Target: {}. Strategy:\n{}\n\n\
                      Execute the planned tools against the target. \
                      Use the available tools to carry out the strategy. \
                      Report the raw output of each tool invocation.",
                     self.target, strategist_output
                 );
+                // When the Strategist produced a structured attack plan, render
+                // it in priority order so the Executor follows a clear sequence.
+                if !self.attack_plan.is_empty() {
+                    let mut sorted = self.attack_plan.clone();
+                    sorted.sort_by_key(|s| s.priority);
+                    let step_lines: Vec<String> = sorted
+                        .iter()
+                        .map(|s| {
+                            let mitre = s
+                                .mitre_technique
+                                .as_deref()
+                                .unwrap_or("N/A");
+                            format!(
+                                "{}. {} [risk:{}, MITRE:{}] — tools: {} — {}",
+                                s.priority,
+                                s.name,
+                                s.risk_score,
+                                mitre,
+                                s.tools.join(", "),
+                                s.description
+                            )
+                        })
+                        .collect();
+                    base = format!(
+                        "{}\n\n## Attack Plan (structured)\n{}\n\n\
+                         Execute these steps in priority order.",
+                        base,
+                        step_lines.join("\n")
+                    );
+                }
                 // On cycle > 0, note this is a re-execution pass so the model
                 // understands it should focus on the revised strategy.
-                let base = if self.cycle > 0 {
+                base = if self.cycle > 0 {
                     format!(
                         "{}\n\nNote: This is re-execution cycle {}. \
                          Focus on the revised strategy above — avoid repeating \
@@ -244,30 +306,43 @@ impl TaskContext {
                     .get(&AgentRole::Executor)
                     .map(String::as_str)
                     .unwrap_or("(no executor output yet)");
-                let base = format!(
+                let mut base = format!(
                     "Target: {}. Tool results:\n{}\n\n\
                      Analyse the tool output above. Identify security vulnerabilities, \
                      misconfigurations, and notable findings. Classify each finding by \
                      severity (critical/high/medium/low/info) and provide evidence.",
                     self.target, executor_output
                 );
+                // When discovered assets exist, list them so the Analyst can
+                // link findings to the correct asset_id.
+                if !self.discovered_assets.is_empty() {
+                    let asset_lines: Vec<String> = self
+                        .discovered_assets
+                        .iter()
+                        .map(|a| format!("[{}] {} ({})", a.id, a.value, a.kind))
+                        .collect();
+                    base = format!(
+                        "{}\n\nDISCOVERED ASSETS (use the ID in the asset_id field of create_finding):\n{}",
+                        base,
+                        asset_lines.join("\n")
+                    );
+                }
                 // When the Orchestrator has populated scan_record_refs (requires DB),
                 // append an EVIDENCE REFERENCES table so the LLM can link findings to
                 // the specific tool invocation that produced the evidence.
-                if self.scan_record_refs.is_empty() {
-                    base
-                } else {
+                if !self.scan_record_refs.is_empty() {
                     let refs_table = self
                         .scan_record_refs
                         .iter()
                         .map(|(id, tool, args)| format!("[{}] {}({})", id, tool, args))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    format!(
+                    base = format!(
                         "{}\n\nEVIDENCE REFERENCES (use the ID in the evidence_ref field of create_finding):\n{}",
                         base, refs_table
-                    )
+                    );
                 }
+                base
             }
             AgentRole::Reporter => {
                 let all_outputs = self.format_all_outputs();
@@ -615,6 +690,170 @@ mod tests {
                 .get(&AgentRole::Analyst)
                 .map(String::as_str),
             Some("analysis results")
+        );
+    }
+
+    // ── Phase 14: discovered_assets + attack_plan tests ──────────────────
+
+    use sigint_core::types::AssetKind;
+    use sigint_tools::attack_plan::AttackStep;
+
+    fn make_test_asset(kind: AssetKind, value: &str) -> Asset {
+        Asset {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            kind,
+            value: value.to_string(),
+            metadata: serde_json::json!({"source": "dns"}),
+            discovered_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_test_step(name: &str, priority: u8, risk: u8) -> AttackStep {
+        AttackStep {
+            name: name.to_string(),
+            description: format!("Execute {name}"),
+            mitre_technique: Some("T1046".to_string()),
+            risk_score: risk,
+            rationale: "strategic reasoning".to_string(),
+            tools: vec!["nmap_scan".to_string()],
+            priority,
+        }
+    }
+
+    #[test]
+    fn new_context_has_empty_discovered_assets() {
+        let ctx = TaskContext::new("example.com");
+        assert!(ctx.discovered_assets.is_empty());
+        assert!(ctx.attack_plan.is_empty());
+    }
+
+    #[test]
+    fn researcher_prompt_includes_prior_recon_when_assets_present() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.discovered_assets
+            .push(make_test_asset(AssetKind::Host, "93.184.216.34"));
+        let agent = ResearcherAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            prompt.contains("Prior Recon"),
+            "researcher prompt should contain 'Prior Recon': {prompt}"
+        );
+        assert!(
+            prompt.contains("93.184.216.34"),
+            "researcher prompt should contain the asset value: {prompt}"
+        );
+        assert!(
+            prompt.contains("host"),
+            "researcher prompt should contain the asset kind: {prompt}"
+        );
+        assert!(
+            prompt.contains("Focus scanning on areas not yet covered"),
+            "researcher prompt should instruct focused scanning: {prompt}"
+        );
+    }
+
+    #[test]
+    fn researcher_prompt_omits_prior_recon_when_no_assets() {
+        let ctx = TaskContext::new("example.com");
+        let agent = ResearcherAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            !prompt.contains("Prior Recon"),
+            "researcher prompt should NOT contain 'Prior Recon' when no assets: {prompt}"
+        );
+    }
+
+    #[test]
+    fn executor_prompt_includes_structured_plan_when_present() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs
+            .insert(AgentRole::Strategist, "Run scans".to_string());
+        ctx.attack_plan.push(make_test_step("Port scan", 1, 3));
+        ctx.attack_plan
+            .push(make_test_step("Directory brute-force", 2, 5));
+        let agent = ExecutorAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            prompt.contains("Attack Plan (structured)"),
+            "executor prompt should contain 'Attack Plan': {prompt}"
+        );
+        assert!(
+            prompt.contains("Port scan"),
+            "executor prompt should contain step name: {prompt}"
+        );
+        assert!(
+            prompt.contains("MITRE:T1046"),
+            "executor prompt should contain MITRE technique: {prompt}"
+        );
+        assert!(
+            prompt.contains("risk:3"),
+            "executor prompt should contain risk score: {prompt}"
+        );
+        assert!(
+            prompt.contains("Execute these steps in priority order"),
+            "executor prompt should instruct priority execution: {prompt}"
+        );
+        // Verify priority ordering: "1. Port scan" before "2. Directory brute-force"
+        let pos1 = prompt.find("1. Port scan").unwrap();
+        let pos2 = prompt.find("2. Directory brute-force").unwrap();
+        assert!(
+            pos1 < pos2,
+            "steps should be sorted by priority: {prompt}"
+        );
+    }
+
+    #[test]
+    fn executor_prompt_omits_plan_when_empty() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs
+            .insert(AgentRole::Strategist, "Run scans".to_string());
+        let agent = ExecutorAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            !prompt.contains("Attack Plan"),
+            "executor prompt should NOT contain 'Attack Plan' when empty: {prompt}"
+        );
+    }
+
+    #[test]
+    fn analyst_prompt_includes_asset_list_when_present() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs
+            .insert(AgentRole::Executor, "PORT 22/tcp open ssh".to_string());
+        let asset = make_test_asset(AssetKind::Host, "93.184.216.34");
+        let asset_id_str = asset.id.to_string();
+        ctx.discovered_assets.push(asset);
+        let agent = AnalystAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            prompt.contains("DISCOVERED ASSETS"),
+            "analyst prompt should contain 'DISCOVERED ASSETS': {prompt}"
+        );
+        assert!(
+            prompt.contains(&asset_id_str),
+            "analyst prompt should contain the asset UUID: {prompt}"
+        );
+        assert!(
+            prompt.contains("93.184.216.34"),
+            "analyst prompt should contain the asset value: {prompt}"
+        );
+        assert!(
+            prompt.contains("asset_id"),
+            "analyst prompt should instruct use of asset_id field: {prompt}"
+        );
+    }
+
+    #[test]
+    fn analyst_prompt_omits_asset_list_when_empty() {
+        let mut ctx = TaskContext::new("example.com");
+        ctx.agent_outputs
+            .insert(AgentRole::Executor, "PORT 22/tcp open ssh".to_string());
+        let agent = AnalystAgent::new();
+        let prompt = ctx.to_agent_prompt(&agent);
+        assert!(
+            !prompt.contains("DISCOVERED ASSETS"),
+            "analyst prompt should NOT contain 'DISCOVERED ASSETS' when empty: {prompt}"
         );
     }
 }

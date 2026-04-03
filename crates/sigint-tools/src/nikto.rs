@@ -31,12 +31,38 @@ use crate::result::{TruncationInfo, ToolResult};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
+/// Default 1 MB output cap for nikto.
+const DEFAULT_NIKTO_OUTPUT_CAP: usize = 1_048_576;
+
 /// Sandboxed nikto tool wrapper.
 ///
 /// Exposes nikto as a `Tool` for the LLM agent layer. Scans web targets for
 /// known vulnerabilities and misconfigurations. Network access is provided via
 /// pasta user-mode networking with a 10-minute timeout.
-pub struct NiktoTool;
+pub struct NiktoTool {
+    output_cap: usize,
+}
+
+impl NiktoTool {
+    /// Create a new NiktoTool with the default output cap.
+    pub fn new() -> Self {
+        Self {
+            output_cap: DEFAULT_NIKTO_OUTPUT_CAP,
+        }
+    }
+
+    /// Set a custom output cap (builder pattern).
+    pub fn with_output_cap(mut self, cap: usize) -> Self {
+        self.output_cap = cap;
+        self
+    }
+}
+
+impl Default for NiktoTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl Tool for NiktoTool {
@@ -95,7 +121,7 @@ impl Tool for NiktoTool {
         );
 
         let mut cmd = SandboxProfile::web_scanner().apply("nikto");
-        cmd = cmd.max_output(1_048_576);
+        cmd = cmd.max_output(self.output_cap);
         cmd = cmd.arg("-h").arg(&target);
 
         // Stream plain-text output to stdout for LLM consumption.
@@ -220,23 +246,23 @@ mod tests {
 
     #[test]
     fn nikto_risk_level_is_high() {
-        assert_eq!(NiktoTool.risk_level(), sigint_core::types::ToolRisk::High);
+        assert_eq!(NiktoTool::new().risk_level(), sigint_core::types::ToolRisk::High);
     }
 
     #[test]
     fn nikto_tool_name_nonempty() {
-        assert!(!NiktoTool.name().is_empty());
-        assert_eq!(NiktoTool.name(), "nikto_scan");
+        assert!(!NiktoTool::new().name().is_empty());
+        assert_eq!(NiktoTool::new().name(), "nikto_scan");
     }
 
     #[test]
     fn nikto_tool_description_nonempty() {
-        assert!(!NiktoTool.description().is_empty());
+        assert!(!NiktoTool::new().description().is_empty());
     }
 
     #[test]
     fn nikto_tool_definition_shape() {
-        let def = NiktoTool.definition();
+        let def = NiktoTool::new().definition();
         assert_eq!(def.type_, "function");
         assert_eq!(def.function.name, "nikto_scan");
 
@@ -263,7 +289,7 @@ mod tests {
 
     #[tokio::test]
     async fn nikto_missing_target_errors() {
-        let err = NiktoTool.execute(json!({})).await.unwrap_err();
+        let err = NiktoTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"
@@ -274,7 +300,7 @@ mod tests {
     fn nikto_tuning_argument_is_optional_string() {
         // Verify the definition schema accepts tuning as an optional string field.
         // No execution needed — this tests the JSON schema shape only.
-        let def = NiktoTool.definition();
+        let def = NiktoTool::new().definition();
         let params = &def.function.parameters;
         let required = params["required"].as_array().unwrap();
         // tuning must NOT be in the required array
@@ -384,7 +410,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn nikto_executes_against_loopback() {
-        let result = NiktoTool
+        let result = NiktoTool::new()
             .execute(json!({"target": "http://127.0.0.1"}))
             .await
             .expect("nikto execution should not error");

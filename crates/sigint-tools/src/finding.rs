@@ -158,6 +158,10 @@ impl Tool for CreateFindingTool {
                         "type": "string",
                         "description": "UUID of the scan_history record that produced the \
                                         primary evidence for this finding"
+                    },
+                    "asset_id": {
+                        "type": "string",
+                        "description": "UUID of the discovered asset this finding relates to"
                     }
                 },
                 "required": ["title", "severity", "description"]
@@ -205,6 +209,7 @@ impl Tool for CreateFindingTool {
         let exploitability = args.get("exploitability").and_then(|v| v.as_str());
         let impact = args.get("impact").and_then(|v| v.as_str());
         let evidence_ref = args.get("evidence_ref").and_then(|v| v.as_str());
+        let asset_id = args.get("asset_id").and_then(|v| v.as_str());
 
         // cvss_score: present as JSON number, validated to [0.0, 10.0].
         let cvss_score_raw = args.get("cvss_score").and_then(|v| v.as_f64());
@@ -231,6 +236,7 @@ impl Tool for CreateFindingTool {
             "impact": impact,
             "cvss_score": cvss_score_raw,
             "evidence_ref": evidence_ref,
+            "asset_id": asset_id,
         });
 
         {
@@ -630,5 +636,33 @@ mod tests {
                 "'{field}' must not be in required array"
             );
         }
+    }
+
+    // ── Tests: asset_id field ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn execute_with_asset_id() {
+        let (tool, collector) = make_tool();
+        let args = json!({
+            "title": "Open Port",
+            "severity": "info",
+            "description": "Port 22 open",
+            "asset_id": "550e8400-e29b-41d4-a716-446655440000"
+        });
+        let result = tool.execute(args).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        let guard = collector.lock().unwrap();
+        assert_eq!(guard[0]["asset_id"], "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[test]
+    fn tool_definition_has_asset_id_property() {
+        let collector = new_finding_collector();
+        let tool = CreateFindingTool::new(collector);
+        let def = tool.definition();
+        let props = def.function.parameters.get("properties").expect("properties");
+        assert!(props.get("asset_id").is_some(), "schema should define asset_id property");
+        let required = def.function.parameters.get("required").and_then(|r| r.as_array()).unwrap();
+        assert!(!required.iter().any(|v| v == "asset_id"), "asset_id must not be required");
     }
 }

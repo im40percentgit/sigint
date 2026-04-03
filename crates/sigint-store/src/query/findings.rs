@@ -21,6 +21,7 @@ pub struct FindingQuery<'a> {
     session_id: Option<Uuid>,
     severity: Option<Severity>,
     asset: Option<String>,
+    asset_id: Option<Uuid>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -32,6 +33,7 @@ impl<'a> FindingQuery<'a> {
             session_id: None,
             severity: None,
             asset: None,
+            asset_id: None,
             limit: None,
             offset: None,
         }
@@ -49,9 +51,15 @@ impl<'a> FindingQuery<'a> {
         self
     }
 
-    /// Filter findings by asset string.
+    /// Filter findings by asset string (legacy text column).
     pub fn by_asset(mut self, asset: &str) -> Self {
         self.asset = Some(asset.to_string());
+        self
+    }
+
+    /// Filter findings by asset_id FK (references assets table).
+    pub fn by_asset_id(mut self, asset_id: Uuid) -> Self {
+        self.asset_id = Some(asset_id);
         self
     }
 
@@ -83,6 +91,10 @@ impl<'a> FindingQuery<'a> {
             conditions.push(format!("asset = ?{}", params.len() + 1));
             params.push(rusqlite::types::Value::Text(asset.clone()));
         }
+        if let Some(ref aid) = self.asset_id {
+            conditions.push(format!("asset_id = ?{}", params.len() + 1));
+            params.push(rusqlite::types::Value::Text(aid.to_string()));
+        }
 
         (conditions, params)
     }
@@ -98,7 +110,8 @@ impl<'a> FindingQuery<'a> {
                 "SELECT id, session_id, title, description, severity, \
                         asset, evidence, created_at, cvss_score, \
                         remediation, exploitability, impact, \
-                        evidence_ref, chain_id, chain_order \
+                        evidence_ref, chain_id, chain_order, \
+                        asset_id \
                  FROM findings",
             );
 
