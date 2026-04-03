@@ -115,6 +115,7 @@ impl Tool for NucleiTool {
         );
 
         let mut cmd = SandboxProfile::web_scanner().apply("nuclei");
+        cmd = cmd.max_output(1_048_576);
         cmd = cmd.arg("-u").arg(&target);
 
         // Suppress banner and ANSI colour codes; emit one JSON object per finding.

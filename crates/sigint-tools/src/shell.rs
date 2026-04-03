@@ -172,6 +172,7 @@ impl Tool for ShellTool {
             SandboxProfile::offline()
         };
         let mut cmd = profile.apply(&command);
+        cmd = cmd.max_output(1_048_576);
         for arg in cmd_args {
             cmd = cmd.arg(arg);
         }
