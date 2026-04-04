@@ -90,6 +90,10 @@ mod inner {
         pub(crate) temperature: f32,
         /// Number of layers to offload to GPU. 0 = CPU-only.
         pub(crate) gpu_layers: u32,
+        /// Number of CPU threads (0 = auto-detect).
+        pub(crate) threads: u32,
+        /// Enable flash attention.
+        pub(crate) flash_attention: bool,
     }
 
     impl EmbeddedProvider {
@@ -113,6 +117,8 @@ mod inner {
             };
 
             let gpu_layers = config.gpu_layers.unwrap_or(0) as u32;
+            let threads = config.threads.unwrap_or(0);
+            let flash_attention = config.flash_attention.unwrap_or(false);
 
             Ok(EmbeddedProvider {
                 model_path,
@@ -120,6 +126,8 @@ mod inner {
                 context_window,
                 temperature: config.temperature,
                 gpu_layers,
+                threads,
+                flash_attention,
             })
         }
     }
@@ -140,6 +148,8 @@ mod inner {
             let context_window = self.context_window;
             let temperature = self.temperature;
             let gpu_layers = self.gpu_layers;
+            let threads = self.threads;
+            let flash_attention = self.flash_attention;
 
             tokio::task::spawn_blocking(move || {
                 run_inference(
@@ -148,6 +158,8 @@ mod inner {
                     context_window,
                     temperature,
                     gpu_layers,
+                    threads,
+                    flash_attention,
                     request,
                 )
             })
@@ -165,6 +177,8 @@ mod inner {
             let context_window = self.context_window;
             let temperature = self.temperature;
             let gpu_layers = self.gpu_layers;
+            let threads = self.threads;
+            let flash_attention = self.flash_attention;
 
             let (tx, mut rx) =
                 mpsc::channel::<Result<StreamChunk, Error>>(STREAM_CHANNEL_CAPACITY);
@@ -176,6 +190,8 @@ mod inner {
                     context_window,
                     temperature,
                     gpu_layers,
+                    threads,
+                    flash_attention,
                     request,
                     tx,
                 );
@@ -204,6 +220,8 @@ mod inner {
         context_window: u32,
         temperature: f32,
         gpu_layers: u32,
+        threads: u32,
+        flash_attention: bool,
         request: ChatRequest,
     ) -> Result<ChatResponse, Error> {
         let mut content = String::new();
@@ -212,6 +230,8 @@ mod inner {
             context_window,
             temperature,
             gpu_layers,
+            threads,
+            flash_attention,
             &request,
             |piece| content.push_str(piece),
         )?;
@@ -231,6 +251,8 @@ mod inner {
         context_window: u32,
         temperature: f32,
         gpu_layers: u32,
+        threads: u32,
+        flash_attention: bool,
         request: ChatRequest,
         tx: mpsc::Sender<Result<StreamChunk, Error>>,
     ) {
@@ -244,6 +266,8 @@ mod inner {
             context_window,
             temperature,
             gpu_layers,
+            threads,
+            flash_attention,
             &request,
             |piece: &str| {
                 send(Ok(StreamChunk {
@@ -288,6 +312,8 @@ mod inner {
         context_window: u32,
         temperature: f32,
         gpu_layers: u32,
+        threads: u32,
+        flash_attention: bool,
         request: &ChatRequest,
         mut on_token: F,
     ) -> Result<(String, Vec<ToolCall>), Error>
@@ -316,9 +342,16 @@ mod inner {
         // 3. Create inference context.
         let n_ctx = NonZeroU32::new(context_window)
             .unwrap_or_else(|| NonZeroU32::new(DEFAULT_CONTEXT_WINDOW).unwrap());
-        let ctx_params = LlamaContextParams::default()
+        let mut ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(n_ctx))
             .with_n_batch(DEFAULT_BATCH_SIZE);
+        if threads > 0 {
+            ctx_params = ctx_params.with_n_threads(threads as i32);
+            ctx_params = ctx_params.with_n_threads_batch(threads as i32);
+        }
+        if flash_attention {
+            ctx_params = ctx_params.with_flash_attention_policy(1);
+        }
         let mut ctx = model
             .new_context(&backend, ctx_params)
             .map_err(|e| Error::Llm(format!("Failed to create llama context: {}", e)))?;
@@ -585,6 +618,8 @@ mod tests {
             api_key: None,
             models_dir,
             gpu_layers: None,
+            threads: None,
+            flash_attention: None,
         }
     }
 

@@ -515,6 +515,8 @@ mod tests {
             api_key,
             models_dir: None,
             gpu_layers: None,
+            threads: None,
+            flash_attention: None,
         }
     }
 

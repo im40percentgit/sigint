@@ -371,6 +371,8 @@ mod tests {
             api_key: None,
             models_dir: None,
             gpu_layers: None,
+            threads: None,
+            flash_attention: None,
         };
         let provider = OllamaProvider::from_config(&cfg);
         assert_eq!(provider.default_model(), "llama3.2");

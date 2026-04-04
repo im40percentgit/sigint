@@ -26,7 +26,9 @@ context_window = 8192
 # provider = "embedded"
 # model = "llama-3.2-8B-Q4_K_M.gguf"
 # models_dir = "~/.local/share/sigint/models"
-# gpu_layers = 0
+# gpu_layers = 99          # -1 or 99 = all layers on GPU, 0 = CPU only
+# threads = 16             # CPU threads for inference (0 = auto-detect)
+# flash_attention = true   # Enable flash attention for faster inference
 
 [store]
 # SQLite database path (~ expanded)

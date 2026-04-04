@@ -71,6 +71,16 @@ pub struct LlmConfig {
     /// Only used by the embedded LLM provider.
     #[serde(default)]
     pub gpu_layers: Option<i32>,
+
+    /// Number of CPU threads for inference (0 = auto-detect).
+    /// Only used by the embedded LLM provider. Maps to llama.cpp `-t` flag.
+    #[serde(default)]
+    pub threads: Option<u32>,
+
+    /// Enable flash attention for faster inference.
+    /// Only used by the embedded LLM provider. Maps to llama.cpp `-fa` flag.
+    #[serde(default)]
+    pub flash_attention: Option<bool>,
 }
 
 /// SQLite store configuration.
@@ -158,6 +168,8 @@ impl Default for LlmConfig {
             api_key: None,
             models_dir: None,
             gpu_layers: None,
+            threads: None,
+            flash_attention: None,
         }
     }
 }
