@@ -25,6 +25,7 @@ mod chat;
 mod diff;
 mod doctor;
 mod log;
+mod model;
 mod recon;
 mod report;
 mod scan;
@@ -136,6 +137,27 @@ enum Commands {
         /// Continuous mode — re-scan every 5 minutes and show changes.
         #[arg(long)]
         watch: bool,
+    },
+    /// Manage local GGUF models.
+    Model {
+        #[command(subcommand)]
+        command: ModelCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelCommands {
+    /// List available GGUF models in the configured models directory.
+    List,
+    /// Download a model from HuggingFace (owner/repo) or a direct URL.
+    Pull {
+        /// HuggingFace repo ID (e.g. meta-llama/Llama-3.2-8B-GGUF) or direct URL.
+        source: String,
+    },
+    /// Show detailed metadata for a local GGUF model.
+    Info {
+        /// Model filename or stem (e.g. "llama-3.2-8B-Q4_K_M" or "llama-3.2-8B-Q4_K_M.gguf").
+        name: String,
     },
 }
 
@@ -302,6 +324,11 @@ async fn main() {
             )
             .await
         }
+        Commands::Model { command } => match command {
+            ModelCommands::List => model::run_list(core).await,
+            ModelCommands::Pull { source } => model::run_pull(core, source).await,
+            ModelCommands::Info { name } => model::run_info(core, name).await,
+        },
     };
 
     if let Err(e) = result {

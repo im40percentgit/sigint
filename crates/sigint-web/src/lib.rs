@@ -24,6 +24,7 @@
 //! | DELETE | `/api/scan/{id}` | [`routes::cancel_scan`] |
 //! | GET | `/api/scans` | [`routes::list_scans`] |
 //! | GET | `/api/diff/{scan_a}/{scan_b}` | [`routes::diff_scans`] |
+//! | GET | `/api/models` | [`routes::list_models`] |
 //! | GET | `/ws/events` | [`ws::ws_events`] |
 //!
 //! @decision DEC-WEB-001
@@ -74,6 +75,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/report/{id}", get(routes::get_report))
         // Scan diff
         .route("/api/diff/{scan_a}/{scan_b}", get(routes::diff_scans))
+        // Models
+        .route("/api/models", get(routes::list_models))
         // Scan lifecycle
         .route("/api/scan", post(routes::start_scan))
         .route("/api/scan/{id}/status", get(routes::scan_status))

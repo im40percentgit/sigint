@@ -3311,6 +3311,7 @@ dependencies = [
  "serde_json",
  "sigint-agents",
  "sigint-core",
+ "sigint-llm",
  "sigint-report",
  "sigint-store",
  "thiserror",

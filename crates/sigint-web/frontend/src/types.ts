@@ -145,6 +145,16 @@ export type WsEvent =
   | WsEventSessionUpdated
   | WsEventError;
 
+// ── Model Types ────────────────────────────────────────────────────────────
+
+export interface ModelInfo {
+  name: string;
+  filename: string;
+  size_bytes: number;
+  quantization: string | null;
+  context_length: number | null;
+}
+
 // ── API Param Types ────────────────────────────────────────────────────────
 
 export interface StartScanParams {

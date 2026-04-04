@@ -18,6 +18,8 @@
 import { h } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { wsManager } from "../ws";
+import { api } from "../api";
+import type { ModelInfo } from "../types";
 
 interface HealthResponse {
   status: string;
@@ -118,6 +120,7 @@ export function Settings() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [wsConnected, setWsConnected] = useState<boolean>(wsManager.connected);
   const [loading, setLoading] = useState(true);
+  const [models, setModels] = useState<ModelInfo[]>([]);
 
   useEffect(() => {
     fetch("/api/health")
@@ -130,6 +133,12 @@ export function Settings() {
         setHealth({ status: "unreachable" });
         setLoading(false);
       });
+
+    // Fetch available embedded models (best-effort)
+    api.models
+      .list()
+      .then((m) => setModels(m))
+      .catch(() => setModels([]));
   }, []);
 
   // Poll WS connected state
@@ -213,6 +222,59 @@ export function Settings() {
         <ConfigRow label="Base URL">
           <CodeValue>{health?.llm?.base_url ?? "http://localhost:11434"}</CodeValue>
         </ConfigRow>
+      </div>
+
+      {/* Embedded Models */}
+      <div class="card" style={{ marginBottom: "16px" }}>
+        <div class="card-title">
+          Embedded Models{" "}
+          <span
+            style={{
+              fontSize: "10px",
+              color: "var(--text-secondary)",
+              fontWeight: 400,
+              textTransform: "none",
+              letterSpacing: 0,
+            }}
+          >
+            ({models.length})
+          </span>
+        </div>
+
+        {models.length === 0 ? (
+          <p style={{ color: "var(--text-secondary)", fontSize: "12px", margin: "8px 0" }}>
+            No GGUF models found. Download one with:{" "}
+            <code style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+              sigint model pull meta-llama/Llama-3.2-8B-GGUF
+            </code>
+          </p>
+        ) : (
+          <div style={{ marginTop: "4px" }}>
+            {models.map((m) => (
+              <div
+                key={m.filename}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "6px 0",
+                  borderBottom: "1px solid var(--border)",
+                  fontSize: "12px",
+                  gap: "12px",
+                }}
+              >
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--accent)" }}>
+                  {m.filename}
+                </span>
+                <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                  {m.quantization ?? "?"} &middot;{" "}
+                  {m.context_length ? `${m.context_length} ctx` : "?"} &middot;{" "}
+                  {(m.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Agent Configuration */}

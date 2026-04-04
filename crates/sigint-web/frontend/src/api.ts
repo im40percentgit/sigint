@@ -23,6 +23,7 @@ import type {
   DiffResult,
   StartScanParams,
   ReportFormat,
+  ModelInfo,
 } from "./types";
 
 const BASE = "/api";
@@ -142,5 +143,12 @@ export const api = {
    */
   diff(sessionA: string, sessionB: string): Promise<DiffResult> {
     return get<DiffResult>(`/diff?a=${encodeURIComponent(sessionA)}&b=${encodeURIComponent(sessionB)}`);
+  },
+
+  models: {
+    /** List available GGUF models in the server's models directory. */
+    list(): Promise<ModelInfo[]> {
+      return get<ModelInfo[]>("/models");
+    },
   },
 } as const;
