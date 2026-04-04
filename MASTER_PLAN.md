@@ -55,6 +55,7 @@ sigint/
 - Phase 15D completed — post-exploitation tools: msfconsole (Metasploit Framework), linpeas (privilege escalation enumeration), enum4linux-ng (SMB enumeration)
 - Phase 15E completed — cloud/container security tools: trivy (vulnerability scanning), ScoutSuite (cloud auditing), CloudSploit (cloud misconfigurations)
 - Phase 16 completed — Web UI rebuild: Preact + TypeScript + esbuild, 9 pages, 8 components, 62KB JS + 5KB CSS bundle
+- Phase 17 completed — E2E validation infrastructure: MockProvider extraction to sigint-llm, provider injection via ScanService::with_provider(), 4 new E2E scan pipeline tests
 - Phase 18 completed — User readiness: README.md, ARCHITECTURE.md, USER_GUIDE.md, config.example.toml, LICENSE (MIT), crates/sigint-web/build.rs (frontend bundling)
 
 ---
@@ -250,6 +251,8 @@ Phase 2 transforms SIGINT from a passive chat interface into an autonomous multi
 | DEC-4D-RECON-002 | 2026-03-14 | ReconEngine borrows &Database and &EventBus — both live for the scope of run() | Borrowed references avoid Arc overhead and make the lifetime constraint explicit at the call site (CLI holds both for the session). Phase 4D. |
 | DEC-P6-APPROVAL-001 | 2026-03-14 | PendingApproval held in AppState; approval responses emitted by app.rs | AppState remains a pure data structure (no channel handles). apply() records pending approvals; app.rs reads and emits responses, then clears pending_approval. Phase 6D. |
 | DEC-AGENT-007-REV | 2026-03-14 | Tool loop switched from chat() to chat_stream() for all iterations (Phase 8A) | Streaming every iteration enables AgentThinking event emission for real-time reasoning visibility. Tool calls still arrive on the done=true chunk per DEC-LLM-003. Phase 8A. |
+| DEC-P17-001 | 2026-04-02 | MockProvider extracted as public sigint-llm module (mock.rs) | MockProvider was defined locally in orchestrator.rs tests; extracting to sigint-llm makes it reusable by E2E tests without circular crate dependencies. Phase 17. |
+| DEC-P17-002 | 2026-04-02 | ScanService::with_provider() builder for test-time LLM injection | Provider injection via builder method lets E2E tests supply a MockProvider to ScanService without changing production code paths. Phase 17. |
 
 ### Implementation Issues (Inline — No GitHub Remote)
 
@@ -1003,6 +1006,24 @@ Sub-phases:
 - [x] Sub-Phase 16D: Dashboard.tsx (stat cards, session list, recent findings), NewScan.tsx (form), ScanLive.tsx (live log + approval)
 - [x] Sub-Phase 16E: SessionDetail.tsx, ReportViewer.tsx, FindingsDetail.tsx, AttackPlanView.tsx
 - [x] Sub-Phase 16F: ScanDiff.tsx, Settings.tsx
+
+---
+
+### Phase 17: E2E Validation Infrastructure
+**Status:** completed
+**Branch:** feature/phase17-e2e (merged)
+**Decision IDs:** DEC-P17-001, DEC-P17-002
+**Definition of Done:**
+- MockProvider extracted from orchestrator.rs into `crates/sigint-llm/src/mock.rs` as a public module
+- ScanService gains `with_provider()` builder for test-time LLM injection
+- 4 new E2E tests in `tests/e2e/tests/scan_e2e.rs` exercise full scan pipeline (start -> agents -> DB -> query)
+- All tests pass (sigint-llm 45, sigint-agents 162, sigint-e2e 20)
+
+- [x] Extract MockProvider + MockResponse (Text/ToolCall variants) into sigint-llm/src/mock.rs
+- [x] Remove local MockProvider from orchestrator.rs, import from sigint_llm::mock
+- [x] Add provider_override field + with_provider() builder to ScanService
+- [x] Write start_server_with_mock() E2E helper
+- [x] 4 E2E scan pipeline tests: start scan, verify agents dispatched, check DB state, query findings
 
 ---
 
