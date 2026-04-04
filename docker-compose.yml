@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  sigint:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - sigint-data:/root/.local/share/sigint
+      - sigint-config:/root/.config/sigint
+    environment:
+      - SIGINT_LOG=sigint=info
+    depends_on:
+      - ollama
+    networks:
+      - sigint-net
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - sigint-net
+
+volumes:
+  sigint-data:
+  sigint-config:
+  ollama-data:
+
+networks:
+  sigint-net:
+    driver: bridge

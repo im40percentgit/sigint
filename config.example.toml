@@ -8,6 +8,8 @@ provider = "ollama"
 model = "llama3.2"
 # Provider API endpoint
 base_url = "http://localhost:11434"
+# For Docker: use service name instead of localhost
+# base_url = "http://ollama:11434"
 # Sampling temperature (0.0-1.0)
 temperature = 0.7
 # Context window in tokens (0 = provider default)

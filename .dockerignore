@@ -1,0 +1,11 @@
+target/
+.git/
+.github/
+.claude/
+.worktrees/
+.superpowers/
+docs/
+*.md
+!README.md
+node_modules/
+tmp/
