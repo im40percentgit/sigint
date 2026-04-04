@@ -205,6 +205,17 @@ impl OpenAiProvider {
         Ok(Self::new(&cfg.base_url, key, cfg.temperature))
     }
 
+    /// Create an OpenAI-compatible provider for local servers (no API key required).
+    ///
+    /// Used for llama.cpp (`llama-server`), text-generation-webui, and other local
+    /// OpenAI-compatible servers that do not require authentication. An empty string
+    /// is used as the bearer token, which local servers typically accept or ignore.
+    pub fn from_config_local(cfg: &sigint_core::config::LlmConfig) -> Result<Self, Error> {
+        // Empty string is acceptable for local servers — they ignore the Authorization header
+        let api_key = cfg.api_key.clone().unwrap_or_default();
+        Ok(Self::new(&cfg.base_url, api_key, cfg.temperature))
+    }
+
     /// Build the completions endpoint URL.
     fn completions_url(&self) -> String {
         format!("{}/v1/chat/completions", self.base_url)

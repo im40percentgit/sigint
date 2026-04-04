@@ -24,8 +24,11 @@ pub fn create_provider(config: &LlmConfig) -> Result<Box<dyn LlmProvider>, Error
     match config.provider.as_str() {
         "ollama" => Ok(Box::new(OllamaProvider::from_config(config))),
         "openai" => Ok(Box::new(OpenAiProvider::from_config(config)?)),
+        "llama-cpp" | "llama.cpp" | "llamacpp" => {
+            Ok(Box::new(OpenAiProvider::from_config_local(config)?))
+        }
         other => Err(Error::Config(format!(
-            "Unknown LLM provider '{}'. Supported: ollama, openai",
+            "Unknown LLM provider '{}'. Supported: ollama, openai, llama-cpp",
             other
         ))),
     }
@@ -99,5 +102,31 @@ mod tests {
             "Error should list supported providers, got: {}",
             msg
         );
+    }
+
+    #[test]
+    fn factory_creates_llama_cpp_without_key() {
+        let mut cfg = make_config("llama-cpp", None);
+        // Override base_url to llama.cpp default port
+        cfg.base_url = "http://localhost:8080".into();
+        let provider = create_provider(&cfg).expect("llama-cpp provider should succeed without key");
+        // Uses OpenAI provider under the hood (OpenAI-compatible API)
+        assert_eq!(provider.name(), "openai");
+    }
+
+    #[test]
+    fn factory_creates_llamacpp_alias() {
+        let mut cfg = make_config("llamacpp", None);
+        cfg.base_url = "http://localhost:8080".into();
+        let provider = create_provider(&cfg).expect("llamacpp alias should work");
+        assert_eq!(provider.name(), "openai");
+    }
+
+    #[test]
+    fn factory_creates_llama_dot_cpp_alias() {
+        let mut cfg = make_config("llama.cpp", None);
+        cfg.base_url = "http://localhost:8080".into();
+        let provider = create_provider(&cfg).expect("llama.cpp alias should work");
+        assert_eq!(provider.name(), "openai");
     }
 }

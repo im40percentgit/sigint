@@ -2,7 +2,7 @@
 # Copy to: ~/.config/sigint/config.toml
 
 [llm]
-# LLM provider: "ollama" (default), "openai", "anthropic"
+# LLM provider: "ollama" (default), "openai", "llama-cpp"
 provider = "ollama"
 # Model name
 model = "llama3.2"
@@ -14,6 +14,11 @@ temperature = 0.7
 context_window = 8192
 # API key for cloud providers (or set SIGINT_API_KEY env var)
 # api_key = "sk-..."
+
+# For llama.cpp (local, no API key needed):
+# provider = "llama-cpp"
+# model = "your-model-name"
+# base_url = "http://localhost:8080"
 
 [store]
 # SQLite database path (~ expanded)

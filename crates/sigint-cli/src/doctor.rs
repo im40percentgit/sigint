@@ -338,6 +338,10 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
         ("whois", "sudo apt install whois"),
         ("curl", "sudo apt install curl"),
         ("akaei", "Build from ~/CerebrumCraft/akaei and add to PATH"),
+        (
+            "llama-server",
+            "Build from https://github.com/ggerganov/llama.cpp or install via package manager",
+        ),
     ];
     for (name, hint) in &tools {
         results.push(check_tool(name, hint));
