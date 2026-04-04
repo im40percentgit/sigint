@@ -58,6 +58,7 @@ sigint/
 - Phase 17 completed — E2E validation infrastructure: MockProvider extraction to sigint-llm, provider injection via ScanService::with_provider(), 4 new E2E scan pipeline tests
 - Phase 18 completed — User readiness: README.md, ARCHITECTURE.md, USER_GUIDE.md, config.example.toml, LICENSE (MIT), crates/sigint-web/build.rs (frontend bundling)
 - Phase 19 completed — Embedded LLM infrastructure: GGUF reader, EmbeddedProvider stub, Model CLI (list/pull/info), GET /api/models, web UI model selector, doctor checks
+- Phase 19B completed — Real llama-cpp-2 inference wiring: EmbeddedProvider generates tokens, threads + flash_attention config, tool-calling support via grammar-constrained JSON
 - Phase 20 completed — Ship readiness: CI/CD with frontend build + security audit, multi-stage Dockerfile, docker-compose with Ollama sidecar, Makefile, CONTAINER.md
 
 ---
@@ -261,6 +262,7 @@ Phase 2 transforms SIGINT from a passive chat interface into an autonomous multi
 | DEC-P19-004 | 2026-04-04 | HuggingFace as model source | De facto hub for GGUF model distribution; model pull resolves repo IDs to download URLs; reqwest streaming with byte-counter progress. Phase 19. |
 | DEC-P19-005 | 2026-04-04 | Compile-time GPU flags via Cargo features | GPU acceleration (CUDA, Metal, Vulkan) requires compile-time vendor SDK linking; Cargo features map to llama-cpp-2 build config; default is CPU-only. Phase 19. |
 | DEC-P19-006 | 2026-04-04 | Standalone GGUF reader (no llama-cpp dependency) | Model discovery needs only header metadata, not multi-GB weights; pure-Rust reader avoids C dependencies for list/info path. Phase 19. |
+| DEC-P19-EMBEDDED-003 | 2026-04-04 | threads + flash_attention config fields for embedded inference | Maps to llama.cpp -t and -fa flags; threads=0 means auto-detect (llama.cpp default); flash_attention defaults to false; wired through LlamaContextParams in EmbeddedProvider. Phase 19B. |
 
 ### Implementation Issues (Inline — No GitHub Remote)
 
@@ -823,6 +825,7 @@ Sub-phases:
 | DEC-P19-004 | HuggingFace as model source for pull | accepted | HuggingFace is the de facto hub for GGUF model distribution; model pull resolves repo IDs to direct download URLs; reqwest streaming with byte-counter progress avoids adding the indicatif crate. Phase 19. |
 | DEC-P19-005 | Compile-time GPU flags via Cargo features | accepted | GPU acceleration (CUDA, Metal, Vulkan) requires compile-time linking of vendor SDKs; Cargo feature flags (cuda, metal, vulkan) map cleanly to llama-cpp-2's build configuration; default build is CPU-only for maximum portability. Phase 19. |
 | DEC-P19-006 | Standalone GGUF reader (no llama-cpp dependency) | accepted | Model discovery only needs architecture/quantisation metadata, not multi-GB weight tensors; a pure-Rust GGUF v3 header reader keeps the listing/info path free of C dependencies and compiles in the default build without the embedded-llm feature. Phase 19. |
+| DEC-P19-EMBEDDED-003 | threads + flash_attention config fields | accepted | Maps to llama.cpp -t (CPU threads) and -fa (flash attention) flags; threads=0 means auto-detect; flash_attention defaults to false; wired through LlamaContextParams in EmbeddedProvider. Phase 19B. |
 | DEC-P20-001 | Multi-stage Dockerfile with Debian slim runtime | accepted | Builder stage compiles Rust + frontend; slim runtime keeps image small while including essential pentest tools (nmap, gobuster, nikto); two-stage build avoids shipping compiler toolchain. Phase 20. |
 | DEC-P20-002 | CI frontend build before Rust test/clippy jobs | accepted | sigint-web's build.rs expects pre-built frontend assets; CI must run npm ci + npm run build before cargo test/clippy to avoid build failures on the frontend embedding step. Phase 20. |
 | DEC-P20-003 | docker-compose with Ollama sidecar on bridge network | accepted | Ollama runs as a separate container so sigint can reach it at http://ollama:11434; bridge network isolates services; persistent volumes for model weights and sigint data survive container restarts. Phase 20. |
@@ -1065,13 +1068,13 @@ Sub-phases:
 ---
 
 ### Phase 19: Embedded LLM — GGUF Reader, EmbeddedProvider, Config Extensions
-**Status:** completed (infrastructure — full llama-cpp-2 inference wiring is Phase 19B)
-**Branch:** feature/phase19-embedded-llm (merged)
-**Decision IDs:** DEC-P19-001, DEC-P19-002, DEC-P19-003, DEC-P19-004, DEC-P19-005, DEC-P19-006
+**Status:** completed (all sub-phases)
+**Branch:** feature/phase19-embedded-llm (merged), feature/phase19b-inference (merged)
+**Decision IDs:** DEC-P19-001 through DEC-P19-006, DEC-P19-EMBEDDED-001, DEC-P19-EMBEDDED-002, DEC-P19-EMBEDDED-003
 **Sub-phases:**
-- 19A: EmbeddedProvider stub + GGUF reader (foundation)
-- 19B: Model CLI (list/pull/info) + web API + doctor checks
-- 19C: Web UI model selector (future — full inference wiring when embedded-llm feature enabled at build time)
+- 19A: EmbeddedProvider stub + GGUF reader (foundation) — completed
+- 19B: Real llama-cpp-2 inference wiring, threads/flash_attention config, tool-calling via grammar-constrained JSON — completed
+- 19C: Web UI model selector (future — deferred)
 **Definition of Done:**
 - `GgufMetadata::read(path)` parses GGUF v3 headers without loading weights
 - `EmbeddedProvider` gated behind `--features embedded-llm` feature flag
