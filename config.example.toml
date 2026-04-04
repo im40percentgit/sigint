@@ -1,0 +1,47 @@
+# SIGINT Configuration
+# Copy to: ~/.config/sigint/config.toml
+
+[llm]
+# LLM provider: "ollama" (default), "openai", "anthropic"
+provider = "ollama"
+# Model name
+model = "llama3.2"
+# Provider API endpoint
+base_url = "http://localhost:11434"
+# Sampling temperature (0.0-1.0)
+temperature = 0.7
+# Context window in tokens (0 = provider default)
+context_window = 8192
+# API key for cloud providers (or set SIGINT_API_KEY env var)
+# api_key = "sk-..."
+
+[store]
+# SQLite database path (~ expanded)
+db_path = "~/.local/share/sigint/sigint.db"
+
+[log]
+# Tracing filter string
+level = "sigint=info,warn"
+
+[agent]
+# Auto-approve tool calls by risk level: "none", "low", "medium", "all"
+auto_approve = "low"
+# Seconds to wait for operator approval before timeout
+approval_timeout = 300
+# Enable episodic memory recall from prior scans (or use --memory flag)
+memory = false
+# Run ReconEngine before scanning (or use --recon flag)
+recon = false
+
+[tools]
+# Default output cap in bytes for all tools
+default_output_cap = 1048576  # 1 MB
+
+# Per-tool overrides (optional)
+# [tools.overrides.nmap]
+# output_cap = 2097152  # 2 MB
+# timeout = 300
+
+# [tools.overrides.nuclei]
+# output_cap = 2097152
+# timeout = 600
