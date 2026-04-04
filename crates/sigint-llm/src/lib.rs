@@ -9,13 +9,18 @@
 //! cloud providers are supported via the openai module added in Phase 5B.
 
 pub mod factory;
+pub mod gguf;
 pub mod mock;
 pub mod ollama;
 pub mod openai;
 pub mod provider;
 pub mod types;
 
+#[cfg(feature = "embedded-llm")]
+pub mod embedded;
+
 pub use factory::create_provider;
+pub use gguf::GgufMetadata;
 pub use mock::{MockProvider, MockResponse};
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;

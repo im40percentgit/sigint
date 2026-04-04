@@ -20,6 +20,12 @@ context_window = 8192
 # model = "your-model-name"
 # base_url = "http://localhost:8080"
 
+# For embedded llama.cpp (no external server, requires --features embedded-llm):
+# provider = "embedded"
+# model = "llama-3.2-8B-Q4_K_M.gguf"
+# models_dir = "~/.local/share/sigint/models"
+# gpu_layers = 0
+
 [store]
 # SQLite database path (~ expanded)
 db_path = "~/.local/share/sigint/sigint.db"

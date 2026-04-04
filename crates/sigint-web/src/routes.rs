@@ -116,6 +116,34 @@ pub async fn list_scans(State(state): State<AppState>) -> impl IntoResponse {
     Json(scans)
 }
 
+// ── Models ────────────────────────────────────────────────────────────────────
+
+/// `GET /api/models` — list GGUF model files in the configured models directory.
+///
+/// Returns a JSON array of model info objects. Returns an empty array when the
+/// models directory does not exist or contains no `.gguf` files.
+pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
+    let models_dir = state.config.resolved_models_dir();
+    let mut models = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&models_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
+                if let Ok(meta) = sigint_llm::GgufMetadata::read(&path) {
+                    models.push(serde_json::json!({
+                        "name": meta.model_name(),
+                        "filename": path.file_name().unwrap().to_string_lossy(),
+                        "size_bytes": meta.file_size,
+                        "quantization": meta.quantization_name(),
+                        "context_length": meta.context_length(),
+                    }));
+                }
+            }
+        }
+    }
+    Json(models)
+}
+
 // ── Error helper ─────────────────────────────────────────────────────────────
 
 /// Convenience alias for handler return types.
@@ -622,6 +650,24 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Models ────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_models_returns_empty_array_when_dir_absent() {
+        // Default config points to ~/.local/share/sigint/models which won't
+        // exist in CI — the endpoint must return an empty JSON array, not 500.
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v.is_array(), "expected JSON array, got: {}", body);
     }
 
     // ── Scan lifecycle endpoints ───────────────────────────────────────────────

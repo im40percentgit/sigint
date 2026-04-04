@@ -21,8 +21,9 @@
  */
 
 import { h } from "preact";
-import { useState } from "preact/hooks";
+import { useState, useEffect } from "preact/hooks";
 import { api } from "../api";
+import type { ModelInfo } from "../types";
 
 // ── Component ──────────────────────────────────────────────────────────────
 
@@ -33,6 +34,15 @@ export function NewScan() {
   // Optional extras
   const [ports, setPorts] = useState("");
   const [model, setModel] = useState("");
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+
+  // Fetch available embedded models on mount (best-effort — fails silently)
+  useEffect(() => {
+    api.models
+      .list()
+      .then((models) => setAvailableModels(models))
+      .catch(() => setAvailableModels([]));
+  }, []);
   const [maxIterations, setMaxIterations] = useState(10);
   const [maxCycles, setMaxCycles] = useState(1);
   const [goal, setGoal] = useState("");
@@ -106,17 +116,34 @@ export function NewScan() {
           />
         </div>
 
-        {/* Model */}
+        {/* Model — dropdown when embedded models available, text input otherwise */}
         <div class="form-group">
           <label for="model">Model</label>
-          <input
-            id="model"
-            type="text"
-            value={model}
-            onInput={(e) => setModel((e.target as HTMLInputElement).value)}
-            placeholder="llama3.2"
-            style={{ width: "100%" }}
-          />
+          {availableModels.length > 0 ? (
+            <select
+              id="model"
+              value={model}
+              onChange={(e) => setModel((e.target as HTMLSelectElement).value)}
+              style={{ width: "100%" }}
+            >
+              <option value="">-- use server default --</option>
+              {availableModels.map((m) => (
+                <option key={m.filename} value={m.filename}>
+                  {m.name} ({m.quantization ?? "?"},{" "}
+                  {m.context_length ? `${m.context_length} ctx` : "?"})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id="model"
+              type="text"
+              value={model}
+              onInput={(e) => setModel((e.target as HTMLInputElement).value)}
+              placeholder="llama3.2"
+              style={{ width: "100%" }}
+            />
+          )}
         </div>
 
         {/* Iteration / Cycle counts in a 2-col row */}

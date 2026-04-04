@@ -94,6 +94,59 @@ pub fn parse_ollama_models(json: &str) -> Result<Vec<String>, Error> {
     Ok(models)
 }
 
+/// Check embedded LLM configuration when `provider == "embedded"`.
+///
+/// Verifies that:
+/// 1. The `models_dir` exists on disk.
+/// 2. The configured `model` file exists inside `models_dir`.
+pub fn check_embedded_llm(config: &sigint_core::config::Config) -> Option<Vec<CheckResult>> {
+    if config.llm.provider != "embedded" {
+        return None; // Not applicable — skip silently.
+    }
+
+    let models_dir = config.resolved_models_dir();
+    let mut results = Vec::new();
+
+    if !models_dir.exists() {
+        results.push(CheckResult::fail(
+            "Embedded LLM: models_dir exists",
+            format!(
+                "Directory {} not found — create it or run: sigint model pull <repo>",
+                models_dir.display()
+            ),
+        ));
+        // Can't check model file if dir is absent.
+        return Some(results);
+    }
+
+    results.push(CheckResult::pass(
+        "Embedded LLM: models_dir exists",
+        models_dir.display().to_string(),
+    ));
+
+    // Check that the configured model file exists.
+    let model_name = &config.llm.model;
+    let model_path = models_dir.join(model_name);
+    let model_path_gguf = models_dir.join(format!("{}.gguf", model_name));
+
+    if model_path.exists() || model_path_gguf.exists() {
+        results.push(CheckResult::pass(
+            format!("Embedded LLM: model file ({})", model_name),
+            "found",
+        ));
+    } else {
+        results.push(CheckResult::fail(
+            format!("Embedded LLM: model file ({})", model_name),
+            format!(
+                "Not found in {} — run: sigint model pull <repo>",
+                models_dir.display()
+            ),
+        ));
+    }
+
+    Some(results)
+}
+
 /// Check whether `model` appears in the list returned by Ollama.
 ///
 /// Matches with or without the `:tag` suffix — e.g. "llama3.2" matches
@@ -291,10 +344,18 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
     // 1. Config check
     results.push(check_config(&core.config));
 
-    // 2 & 3. Ollama reachability + model availability
-    let (ollama, model) = check_ollama(&core.config.llm.base_url, &core.config.llm.model).await;
-    results.push(ollama);
-    results.push(model);
+    // 2 & 3. Ollama reachability + model availability (skip when using embedded provider)
+    if core.config.llm.provider != "embedded" {
+        let (ollama, model) =
+            check_ollama(&core.config.llm.base_url, &core.config.llm.model).await;
+        results.push(ollama);
+        results.push(model);
+    }
+
+    // 2 (alt). Embedded LLM checks — only when provider == "embedded"
+    if let Some(embedded_results) = check_embedded_llm(&core.config) {
+        results.extend(embedded_results);
+    }
 
     // 4. Tool availability
     let tools = [
@@ -400,6 +461,8 @@ mod tests {
                 temperature: 0.7,
                 context_window: 0,
                 api_key: None,
+                models_dir: None,
+                gpu_layers: None,
             },
             store: StoreConfig {
                 db_path: "~/.local/share/sigint/sigint.db".into(),

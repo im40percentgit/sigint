@@ -132,6 +132,51 @@ sigint campaign run --file targets.json --concurrency 3
 
 ---
 
+## Embedded LLM (no server needed)
+
+Run inference entirely inside the `sigint` process using llama.cpp — no
+Ollama, no external server required.
+
+**Build with embedded support** (requires a C/C++ toolchain):
+
+```bash
+cargo build --release --features embedded-llm
+```
+
+**Download a model:**
+
+```bash
+sigint model pull meta-llama/Llama-3.2-8B-GGUF
+# Auto-selects the Q4_K_M quantisation file (~4.5 GiB)
+# Saves to ~/.local/share/sigint/models/
+```
+
+**Model management:**
+
+```bash
+sigint model list              # List downloaded models
+sigint model info llama-3.2-8B-Q4_K_M  # Detailed metadata
+sigint model pull https://example.com/model.gguf  # Direct URL
+```
+
+**Configure** (`~/.config/sigint/config.toml`):
+
+```toml
+[llm]
+provider = "embedded"
+model = "llama-3.2-8B-Q4_K_M.gguf"
+models_dir = "~/.local/share/sigint/models"
+gpu_layers = 0   # 0 = CPU-only; -1 = all layers on GPU
+```
+
+**Verify** setup:
+
+```bash
+sigint doctor   # Checks models_dir exists and model file is present
+```
+
+---
+
 ## Configuration
 
 SIGINT reads configuration from `~/.config/sigint/config.toml`. Copy the

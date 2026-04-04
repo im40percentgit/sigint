@@ -61,6 +61,16 @@ pub struct LlmConfig {
     /// Can also be supplied via the `SIGINT_API_KEY` environment variable.
     #[serde(default)]
     pub api_key: Option<String>,
+
+    /// Directory where GGUF model files are stored (embedded LLM provider).
+    /// Supports `~` expansion. Defaults to `~/.local/share/sigint/models`.
+    #[serde(default)]
+    pub models_dir: Option<String>,
+
+    /// Number of model layers to offload to GPU (-1 = all, 0 = CPU-only).
+    /// Only used by the embedded LLM provider.
+    #[serde(default)]
+    pub gpu_layers: Option<i32>,
 }
 
 /// SQLite store configuration.
@@ -146,6 +156,8 @@ impl Default for LlmConfig {
             temperature: default_temperature(),
             context_window: 0,
             api_key: None,
+            models_dir: None,
+            gpu_layers: None,
         }
     }
 }
@@ -254,6 +266,20 @@ impl Config {
         let config: Self = toml::from_str(&contents)
             .map_err(|e| crate::Error::Config(format!("Cannot parse {:?}: {}", path, e)))?;
         Ok(config)
+    }
+
+    /// Resolve `llm.models_dir` to an absolute path with `~` expansion.
+    ///
+    /// Falls back to `~/.local/share/sigint/models` when the field is absent.
+    pub fn resolved_models_dir(&self) -> PathBuf {
+        let raw = self.llm.models_dir.as_deref()
+            .unwrap_or("~/.local/share/sigint/models");
+        if let Some(stripped) = raw.strip_prefix("~/") {
+            if let Some(home) = dirs_home() {
+                return home.join(stripped);
+            }
+        }
+        PathBuf::from(raw)
     }
 
     /// Expand `~` in `store.db_path` to the actual home directory.
@@ -462,5 +488,78 @@ output_cap = 5000
         assert_eq!(cfg.tools.output_cap_for("nmap"), 5000);
         assert_eq!(cfg.tools.output_cap_for("shell"), 1000);
         assert_eq!(cfg.tools.output_cap_for("nonexistent"), 1000);
+    }
+
+    #[test]
+    fn llm_config_new_fields_default_to_none() {
+        let cfg = Config::default();
+        assert_eq!(cfg.llm.models_dir, None);
+        assert_eq!(cfg.llm.gpu_layers, None);
+    }
+
+    #[test]
+    fn llm_config_new_fields_parse_from_toml() {
+        let toml_str = r#"
+[llm]
+models_dir = "/data/models"
+gpu_layers = 32
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.llm.models_dir, Some("/data/models".to_string()));
+        assert_eq!(cfg.llm.gpu_layers, Some(32));
+    }
+
+    #[test]
+    fn resolved_models_dir_default_expands_tilde() {
+        let cfg = Config::default();
+        let path = cfg.resolved_models_dir();
+        // Default should expand ~ to home dir — no literal tilde in result.
+        assert!(!path.to_string_lossy().contains('~'));
+        // Default path ends with sigint/models.
+        assert!(path.ends_with("sigint/models"));
+    }
+
+    #[test]
+    fn resolved_models_dir_explicit_tilde_path() {
+        let toml_str = r#"
+[llm]
+models_dir = "~/.local/share/custom-models"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        let path = cfg.resolved_models_dir();
+        assert!(!path.to_string_lossy().contains('~'));
+        assert!(path.ends_with("custom-models"));
+    }
+
+    #[test]
+    fn resolved_models_dir_absolute_path_unchanged() {
+        let toml_str = r#"
+[llm]
+models_dir = "/opt/models"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        let path = cfg.resolved_models_dir();
+        assert_eq!(path.to_str().unwrap(), "/opt/models");
+    }
+
+    #[test]
+    fn llm_config_gpu_layers_zero() {
+        let toml_str = r#"
+[llm]
+gpu_layers = 0
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.llm.gpu_layers, Some(0));
+    }
+
+    #[test]
+    fn llm_config_gpu_layers_negative_one() {
+        // -1 means "offload all layers to GPU"
+        let toml_str = r#"
+[llm]
+gpu_layers = -1
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.llm.gpu_layers, Some(-1));
     }
 }
