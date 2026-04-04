@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 16 completed — Web UI Rebuild (Preact + TypeScript + esbuild)
+**Current Phase:** Phase 18 completed — User Readiness (docs, config template, license, build automation)
 
 ### Architecture
 
@@ -55,6 +55,7 @@ sigint/
 - Phase 15D completed — post-exploitation tools: msfconsole (Metasploit Framework), linpeas (privilege escalation enumeration), enum4linux-ng (SMB enumeration)
 - Phase 15E completed — cloud/container security tools: trivy (vulnerability scanning), ScoutSuite (cloud auditing), CloudSploit (cloud misconfigurations)
 - Phase 16 completed — Web UI rebuild: Preact + TypeScript + esbuild, 9 pages, 8 components, 62KB JS + 5KB CSS bundle
+- Phase 18 completed — User readiness: README.md, ARCHITECTURE.md, USER_GUIDE.md, config.example.toml, LICENSE (MIT), crates/sigint-web/build.rs (frontend bundling)
 
 ---
 
@@ -1002,6 +1003,26 @@ Sub-phases:
 - [x] Sub-Phase 16D: Dashboard.tsx (stat cards, session list, recent findings), NewScan.tsx (form), ScanLive.tsx (live log + approval)
 - [x] Sub-Phase 16E: SessionDetail.tsx, ReportViewer.tsx, FindingsDetail.tsx, AttackPlanView.tsx
 - [x] Sub-Phase 16F: ScanDiff.tsx, Settings.tsx
+
+---
+
+### Phase 18: User Readiness — Docs, Config, License, Build Automation
+**Status:** completed
+**Branch:** feature/phase18-user-readiness (merged)
+**Definition of Done:**
+- README.md with quickstart, features, CLI reference, tool catalog, architecture overview
+- ARCHITECTURE.md with 12-crate system design, agent pipeline, tool system, data model
+- USER_GUIDE.md with operator guide — TUI, Web UI, CLI workflows, troubleshooting
+- config.example.toml with documented configuration template
+- LICENSE (MIT)
+- crates/sigint-web/build.rs for automated frontend bundling with graceful degradation
+
+- [x] README.md: project overview, quickstart, feature list, CLI reference, 26-tool catalog, architecture
+- [x] ARCHITECTURE.md: crate dependency graph, agent pipeline, tool system, sandbox model, data model
+- [x] USER_GUIDE.md: installation, configuration, TUI guide, Web UI guide, CLI workflows, troubleshooting
+- [x] config.example.toml: annotated configuration template with all sections
+- [x] LICENSE: MIT license
+- [x] crates/sigint-web/build.rs: build script for frontend asset bundling (esbuild + Preact)
 
 ---
 
