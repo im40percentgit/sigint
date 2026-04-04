@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 19 completed — Embedded LLM infrastructure (GGUF reader, EmbeddedProvider stub, Model CLI, web API)
+**Current Phase:** Phase 20 completed — Ship readiness (CI/CD with frontend build + security audit, Docker, Makefile)
 
 ### Architecture
 
@@ -58,6 +58,7 @@ sigint/
 - Phase 17 completed — E2E validation infrastructure: MockProvider extraction to sigint-llm, provider injection via ScanService::with_provider(), 4 new E2E scan pipeline tests
 - Phase 18 completed — User readiness: README.md, ARCHITECTURE.md, USER_GUIDE.md, config.example.toml, LICENSE (MIT), crates/sigint-web/build.rs (frontend bundling)
 - Phase 19 completed — Embedded LLM infrastructure: GGUF reader, EmbeddedProvider stub, Model CLI (list/pull/info), GET /api/models, web UI model selector, doctor checks
+- Phase 20 completed — Ship readiness: CI/CD with frontend build + security audit, multi-stage Dockerfile, docker-compose with Ollama sidecar, Makefile, CONTAINER.md
 
 ---
 
@@ -822,6 +823,9 @@ Sub-phases:
 | DEC-P19-004 | HuggingFace as model source for pull | accepted | HuggingFace is the de facto hub for GGUF model distribution; model pull resolves repo IDs to direct download URLs; reqwest streaming with byte-counter progress avoids adding the indicatif crate. Phase 19. |
 | DEC-P19-005 | Compile-time GPU flags via Cargo features | accepted | GPU acceleration (CUDA, Metal, Vulkan) requires compile-time linking of vendor SDKs; Cargo feature flags (cuda, metal, vulkan) map cleanly to llama-cpp-2's build configuration; default build is CPU-only for maximum portability. Phase 19. |
 | DEC-P19-006 | Standalone GGUF reader (no llama-cpp dependency) | accepted | Model discovery only needs architecture/quantisation metadata, not multi-GB weight tensors; a pure-Rust GGUF v3 header reader keeps the listing/info path free of C dependencies and compiles in the default build without the embedded-llm feature. Phase 19. |
+| DEC-P20-001 | Multi-stage Dockerfile with Debian slim runtime | accepted | Builder stage compiles Rust + frontend; slim runtime keeps image small while including essential pentest tools (nmap, gobuster, nikto); two-stage build avoids shipping compiler toolchain. Phase 20. |
+| DEC-P20-002 | CI frontend build before Rust test/clippy jobs | accepted | sigint-web's build.rs expects pre-built frontend assets; CI must run npm ci + npm run build before cargo test/clippy to avoid build failures on the frontend embedding step. Phase 20. |
+| DEC-P20-003 | docker-compose with Ollama sidecar on bridge network | accepted | Ollama runs as a separate container so sigint can reach it at http://ollama:11434; bridge network isolates services; persistent volumes for model weights and sigint data survive container restarts. Phase 20. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -1084,6 +1088,28 @@ Sub-phases:
 - [x] Task 4: `sigint model list/pull/info` CLI subcommands (sigint-cli/src/model.rs)
 - [x] Task 5: `GET /api/models` web endpoint (sigint-web/src/routes.rs)
 - [x] Task 6: Doctor embedded check + config.example.toml + README.md
+
+---
+
+### Phase 20: Ship Readiness — CI/CD, Docker, Makefile
+**Status:** completed
+**Branch:** feature/phase20-ship-ready (merged)
+**Decision IDs:** DEC-P20-001, DEC-P20-002, DEC-P20-003
+**Definition of Done:**
+- CI workflow builds frontend before Rust tests/clippy (Node.js 20 + npm ci + npm run build)
+- Security audit job via cargo-audit in CI pipeline
+- Multi-stage Dockerfile: Rust builder + Debian slim runtime with pentest tools
+- docker-compose.yml with sigint + Ollama sidecar on shared bridge network
+- Makefile with build/test/lint/fmt/docker/up/clean targets
+- CONTAINER.md documenting Docker usage
+
+- [x] CI/CD: frontend build step before test + clippy, cargo cache, security audit job
+- [x] Dockerfile: multi-stage (rust:1.82-bookworm builder, debian:bookworm-slim runtime), Node.js for frontend, nmap/gobuster/nikto/curl/dnsutils/whois in runtime
+- [x] docker-compose.yml: sigint service + Ollama sidecar, persistent volumes, bridge network
+- [x] Makefile: build, frontend, test, lint, fmt, docker, up, clean targets
+- [x] CONTAINER.md: Docker quickstart and docker-compose usage docs
+- [x] config.example.toml: added Docker Ollama URL comment
+- [x] .dockerignore: target, node_modules, .git, .claude exclusions
 
 ---
 
