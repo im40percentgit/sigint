@@ -415,16 +415,28 @@ mod inner {
             )));
         }
 
-        // 6. Prefill batch — add all prompt tokens, request logits only for the last.
-        let mut batch = LlamaBatch::new(DEFAULT_BATCH_SIZE as usize, 1);
-        let last_idx = tokens.len() - 1;
-        for (i, &token) in tokens.iter().enumerate() {
-            batch
-                .add(token, i as i32, &[0], i == last_idx)
-                .map_err(|e| Error::Llm(format!("batch add (prefill): {}", e)))?;
+        // 6. Prefill — process prompt tokens in chunks of DEFAULT_BATCH_SIZE.
+        //    Agent prompts (system + tool definitions + context) commonly exceed
+        //    512 tokens. Chunked prefill processes them in multiple decode calls.
+        //    `batch` is reused after prefill for the generation loop (single-
+        //    token decode steps), so it is declared in the outer scope.
+        let batch_size = DEFAULT_BATCH_SIZE as usize;
+        let n_tokens = tokens.len();
+        let mut batch = LlamaBatch::new(batch_size, 1);
+        let mut pos = 0;
+        while pos < n_tokens {
+            batch.clear();
+            let chunk_end = (pos + batch_size).min(n_tokens);
+            for i in pos..chunk_end {
+                let is_last = i == n_tokens - 1;
+                batch
+                    .add(tokens[i], i as i32, &[0], is_last)
+                    .map_err(|e| Error::Llm(format!("batch add (prefill): {}", e)))?;
+            }
+            ctx.decode(&mut batch)
+                .map_err(|e| Error::Llm(format!("decode (prefill): {}", e)))?;
+            pos = chunk_end;
         }
-        ctx.decode(&mut batch)
-            .map_err(|e| Error::Llm(format!("decode (prefill): {}", e)))?;
 
         // 7. Sample loop — one token at a time until EOS or context limit.
         let mut sampler = LlamaSampler::chain_simple([
