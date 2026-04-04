@@ -3182,6 +3182,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigint-core",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",

@@ -513,6 +513,8 @@ mod tests {
             temperature: 0.7,
             context_window: 0,
             api_key,
+            models_dir: None,
+            gpu_layers: None,
         }
     }
 

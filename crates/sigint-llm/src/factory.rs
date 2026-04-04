@@ -27,8 +27,14 @@ pub fn create_provider(config: &LlmConfig) -> Result<Box<dyn LlmProvider>, Error
         "llama-cpp" | "llama.cpp" | "llamacpp" => {
             Ok(Box::new(OpenAiProvider::from_config_local(config)?))
         }
+        #[cfg(feature = "embedded-llm")]
+        "embedded" => Ok(Box::new(crate::embedded::EmbeddedProvider::load(config)?)),
+        #[cfg(not(feature = "embedded-llm"))]
+        "embedded" => Err(Error::Config(
+            "Embedded LLM requires the 'embedded-llm' feature. Rebuild with: cargo build --features embedded-llm".into()
+        )),
         other => Err(Error::Config(format!(
-            "Unknown LLM provider '{}'. Supported: ollama, openai, llama-cpp",
+            "Unknown LLM provider '{}'. Supported: ollama, openai, llama-cpp, embedded",
             other
         ))),
     }
@@ -48,6 +54,8 @@ mod tests {
             temperature: 0.7,
             context_window: 0,
             api_key,
+            models_dir: None,
+            gpu_layers: None,
         }
     }
 
@@ -128,5 +136,27 @@ mod tests {
         cfg.base_url = "http://localhost:8080".into();
         let provider = create_provider(&cfg).expect("llama.cpp alias should work");
         assert_eq!(provider.name(), "openai");
+    }
+
+    #[test]
+    fn factory_rejects_embedded_without_feature() {
+        #[cfg(not(feature = "embedded-llm"))]
+        {
+            let cfg = make_config("embedded", None);
+            let result = create_provider(&cfg);
+            assert!(result.is_err());
+            let msg = result.err().unwrap().to_string();
+            assert!(msg.contains("embedded-llm"), "error should mention feature flag: {msg}");
+        }
+    }
+
+    #[test]
+    fn factory_error_mentions_embedded_in_supported_list() {
+        // Unknown provider error should now list "embedded" as a supported option.
+        let cfg = make_config("bogus-provider", None);
+        let result = create_provider(&cfg);
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        assert!(msg.contains("embedded"), "supported list should mention embedded: {msg}");
     }
 }
