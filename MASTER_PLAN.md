@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 18 completed — User Readiness (docs, config template, license, build automation)
+**Current Phase:** Phase 19 completed — Embedded LLM infrastructure (GGUF reader, EmbeddedProvider stub, Model CLI, web API)
 
 ### Architecture
 
@@ -57,6 +57,7 @@ sigint/
 - Phase 16 completed — Web UI rebuild: Preact + TypeScript + esbuild, 9 pages, 8 components, 62KB JS + 5KB CSS bundle
 - Phase 17 completed — E2E validation infrastructure: MockProvider extraction to sigint-llm, provider injection via ScanService::with_provider(), 4 new E2E scan pipeline tests
 - Phase 18 completed — User readiness: README.md, ARCHITECTURE.md, USER_GUIDE.md, config.example.toml, LICENSE (MIT), crates/sigint-web/build.rs (frontend bundling)
+- Phase 19 completed — Embedded LLM infrastructure: GGUF reader, EmbeddedProvider stub, Model CLI (list/pull/info), GET /api/models, web UI model selector, doctor checks
 
 ---
 
@@ -253,6 +254,12 @@ Phase 2 transforms SIGINT from a passive chat interface into an autonomous multi
 | DEC-AGENT-007-REV | 2026-03-14 | Tool loop switched from chat() to chat_stream() for all iterations (Phase 8A) | Streaming every iteration enables AgentThinking event emission for real-time reasoning visibility. Tool calls still arrive on the done=true chunk per DEC-LLM-003. Phase 8A. |
 | DEC-P17-001 | 2026-04-02 | MockProvider extracted as public sigint-llm module (mock.rs) | MockProvider was defined locally in orchestrator.rs tests; extracting to sigint-llm makes it reusable by E2E tests without circular crate dependencies. Phase 17. |
 | DEC-P17-002 | 2026-04-02 | ScanService::with_provider() builder for test-time LLM injection | Provider injection via builder method lets E2E tests supply a MockProvider to ScanService without changing production code paths. Phase 17. |
+| DEC-P19-001 | 2026-04-04 | llama-cpp-2 crate for embedded inference | Safe Rust bindings to llama.cpp with GPU acceleration support; chosen over candle/burn for GGUF ecosystem compatibility and quantised model support. Phase 19. |
+| DEC-P19-002 | 2026-04-04 | Feature flag gating (embedded-llm) | llama-cpp-2 requires C/C++ toolchain and takes minutes to compile; feature flag keeps default builds fast; factory returns descriptive error when feature absent. Phase 19. |
+| DEC-P19-003 | 2026-04-04 | spawn_blocking for inference calls | llama-cpp-2 inference is synchronous/CPU-bound; spawn_blocking prevents async runtime blocking, consistent with DEC-SAND-002 pattern. Phase 19. |
+| DEC-P19-004 | 2026-04-04 | HuggingFace as model source | De facto hub for GGUF model distribution; model pull resolves repo IDs to download URLs; reqwest streaming with byte-counter progress. Phase 19. |
+| DEC-P19-005 | 2026-04-04 | Compile-time GPU flags via Cargo features | GPU acceleration (CUDA, Metal, Vulkan) requires compile-time vendor SDK linking; Cargo features map to llama-cpp-2 build config; default is CPU-only. Phase 19. |
+| DEC-P19-006 | 2026-04-04 | Standalone GGUF reader (no llama-cpp dependency) | Model discovery needs only header metadata, not multi-GB weights; pure-Rust reader avoids C dependencies for list/info path. Phase 19. |
 
 ### Implementation Issues (Inline — No GitHub Remote)
 
@@ -809,6 +816,12 @@ Sub-phases:
 | DEC-WEB-033 | EventLog auto-scroll uses a sentinel div + scrollIntoView | accepted | Zero-height sentinel div at bottom combined with scrollIntoView({ behavior: "smooth" }) is the idiomatic Preact pattern; avoids manual scrollTop arithmetic and handles dynamic item heights correctly. Phase 16D. |
 | DEC-WEB-034 | ApprovalModal is a pure presentational component — parent owns WS send | accepted | Keeping the modal free of WebSocket knowledge makes it testable in isolation and reusable; parent (ScanLive) constructs approval payload and calls wsManager.send(); modal fires onApprove/onDeny callbacks. Phase 16D. |
 | DEC-WEB-035 | Settings page is read-only, sourced from /api/health + hardcoded defaults | accepted | No /api/config endpoint exists; health check provides server status; hardcoding known defaults is preferable to omitting the section or adding a new endpoint solely for display; read-only avoids accidental misconfiguration from UI. Phase 16F. |
+| DEC-P19-001 | llama-cpp-2 crate for embedded inference | accepted | llama-cpp-2 provides safe Rust bindings to llama.cpp with GPU acceleration support; chosen over alternatives (candle, burn) for compatibility with the GGUF ecosystem and quantised model support. Phase 19. |
+| DEC-P19-002 | Feature flag gating (embedded-llm) | accepted | llama-cpp-2 compilation requires a C/C++ toolchain and takes several minutes; feature flag keeps default builds fast and dependency-free; factory returns a descriptive error when provider="embedded" is configured but the feature is absent. Phase 19. |
+| DEC-P19-003 | spawn_blocking for inference calls | accepted | llama-cpp-2 inference is synchronous and CPU/GPU-bound; wrapping in tokio::task::spawn_blocking prevents blocking the async runtime, consistent with DEC-SAND-002 pattern for synchronous operations. Phase 19. |
+| DEC-P19-004 | HuggingFace as model source for pull | accepted | HuggingFace is the de facto hub for GGUF model distribution; model pull resolves repo IDs to direct download URLs; reqwest streaming with byte-counter progress avoids adding the indicatif crate. Phase 19. |
+| DEC-P19-005 | Compile-time GPU flags via Cargo features | accepted | GPU acceleration (CUDA, Metal, Vulkan) requires compile-time linking of vendor SDKs; Cargo feature flags (cuda, metal, vulkan) map cleanly to llama-cpp-2's build configuration; default build is CPU-only for maximum portability. Phase 19. |
+| DEC-P19-006 | Standalone GGUF reader (no llama-cpp dependency) | accepted | Model discovery only needs architecture/quantisation metadata, not multi-GB weight tensors; a pure-Rust GGUF v3 header reader keeps the listing/info path free of C dependencies and compiles in the default build without the embedded-llm feature. Phase 19. |
 
 ### Phase 10: akaei SDR Integration
 **Status:** completed
@@ -1044,6 +1057,33 @@ Sub-phases:
 - [x] config.example.toml: annotated configuration template with all sections
 - [x] LICENSE: MIT license
 - [x] crates/sigint-web/build.rs: build script for frontend asset bundling (esbuild + Preact)
+
+---
+
+### Phase 19: Embedded LLM — GGUF Reader, EmbeddedProvider, Config Extensions
+**Status:** completed (infrastructure — full llama-cpp-2 inference wiring is Phase 19B)
+**Branch:** feature/phase19-embedded-llm (merged)
+**Decision IDs:** DEC-P19-001, DEC-P19-002, DEC-P19-003, DEC-P19-004, DEC-P19-005, DEC-P19-006
+**Sub-phases:**
+- 19A: EmbeddedProvider stub + GGUF reader (foundation)
+- 19B: Model CLI (list/pull/info) + web API + doctor checks
+- 19C: Web UI model selector (future — full inference wiring when embedded-llm feature enabled at build time)
+**Definition of Done:**
+- `GgufMetadata::read(path)` parses GGUF v3 headers without loading weights
+- `EmbeddedProvider` gated behind `--features embedded-llm` feature flag
+- `sigint model list/pull/info` CLI subcommands for local model management
+- `GET /api/models` endpoint returning JSON array of available GGUF models
+- `sigint doctor` checks for embedded provider config (models_dir + model file)
+- `config.example.toml` includes commented embedded provider example
+- `README.md` documents embedded LLM workflow
+- All `cargo test -p sigint-cli` and `cargo test -p sigint-web` tests pass
+
+- [x] Task 1: `GgufMetadata::read()` pure-Rust GGUF v3 header reader (sigint-llm/src/gguf.rs)
+- [x] Task 2: `EmbeddedProvider` behind `embedded-llm` feature flag (sigint-llm/src/embedded.rs)
+- [x] Task 3: `resolved_models_dir()` config helper + `gpu_layers` field (sigint-core/src/config.rs)
+- [x] Task 4: `sigint model list/pull/info` CLI subcommands (sigint-cli/src/model.rs)
+- [x] Task 5: `GET /api/models` web endpoint (sigint-web/src/routes.rs)
+- [x] Task 6: Doctor embedded check + config.example.toml + README.md
 
 ---
 
