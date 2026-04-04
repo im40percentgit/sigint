@@ -7,7 +7,11 @@ edition.workspace = true
 # Enable in-process GGUF inference via llama-cpp-2.
 # Requires a C/C++ toolchain; compile with:
 #   cargo build --features embedded-llm
-embedded-llm = []
+embedded-llm = ["dep:llama-cpp-2", "dep:encoding_rs"]
+# GPU acceleration sub-features — forwarded to llama-cpp-2's own feature flags.
+cuda    = ["llama-cpp-2?/cuda"]
+metal   = ["llama-cpp-2?/metal"]
+vulkan  = ["llama-cpp-2?/vulkan"]
 
 [dependencies]
 sigint-core = { workspace = true }
@@ -22,6 +26,8 @@ tracing = { workspace = true }
 async-trait = "0.1"
 async-stream = "0.3"
 bytes = "1"
+encoding_rs = { version = "0.8", optional = true }
+llama-cpp-2 = { version = "0.1.141", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
