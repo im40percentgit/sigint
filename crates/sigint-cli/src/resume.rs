@@ -22,7 +22,7 @@ use sigint_agents::{Orchestrator, ToolRegistry};
 use sigint_core::diff::diff_findings;
 use sigint_core::event::Event;
 use sigint_core::{AppCore, Error};
-use sigint_llm::OllamaProvider;
+use sigint_llm::{create_provider, LlmProvider};
 use sigint_memory::MemoryService;
 use sigint_store::{embedding_worker, Database, EmbeddingService, ScanRecord};
 use tracing::warn;
@@ -130,7 +130,7 @@ pub async fn run(
     }
 
     // ── LLM provider ──────────────────────────────────────────────────────────
-    let provider: Arc<OllamaProvider> = Arc::new(OllamaProvider::from_config(&core.config.llm));
+    let provider: Arc<dyn LlmProvider> = create_provider(&core.config.llm)?.into();
 
     // ── Child session — create upfront so per-tool ScanRecords reference it ──
     let mut child_session = sigint_core::types::Session::new(&format!("Resume of {}", prior.name));
