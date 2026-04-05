@@ -52,6 +52,7 @@ mod inner {
     use std::num::NonZeroU32;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
     use tokio::sync::mpsc;
     use tracing::{debug, warn};
 
@@ -85,6 +86,23 @@ mod inner {
 
     /// Channel buffer depth for streaming token pieces.
     const STREAM_CHANNEL_CAPACITY: usize = 256;
+
+    /// How often to emit a no-op heartbeat chunk during chunked prefill.
+    ///
+    /// @decision DEC-P19-EMBEDDED-004
+    /// @title Emit heartbeat chunks during prefill to prevent stream idle timeout
+    /// @status accepted
+    /// @rationale The tool loop enforces a 30s idle timeout on the LLM stream
+    /// (`crates/sigint-agents/src/loop_engine.rs:225`). For large prompts on CPU,
+    /// chunked prefill takes 24-40s before sampling begins, during which the
+    /// stream channel is silent. The idle timeout fires, partial output is
+    /// returned, and agents with large tool schemas (executor, strategist) never
+    /// produce real responses. Emitting an empty `StreamChunk { delta: "" }`
+    /// every 10 seconds during prefill keeps the consumer's `StreamExt::next()`
+    /// returning promptly, so the 30s idle budget is continuously reset. Empty
+    /// deltas are invisible to text accumulation — loop_engine.rs guards
+    /// `push_str` behind `if !chunk.delta.is_empty()`, so no output is polluted.
+    const PREFILL_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
     // ── EmbeddedProvider ─────────────────────────────────────────────────────
 
@@ -437,6 +455,7 @@ mod inner {
         let n_tokens = tokens.len();
         let mut batch = LlamaBatch::new(batch_size, 1);
         let mut pos = 0;
+        let mut last_heartbeat = Instant::now();
         while pos < n_tokens {
             batch.clear();
             let chunk_end = (pos + batch_size).min(n_tokens);
@@ -449,6 +468,13 @@ mod inner {
             ctx.decode(&mut batch)
                 .map_err(|e| Error::Llm(format!("decode (prefill): {}", e)))?;
             pos = chunk_end;
+
+            // Heartbeat: keep the consumer's idle timeout alive during long prefill.
+            // DEC-P19-EMBEDDED-004: empty delta is a no-op at the accumulation layer.
+            if last_heartbeat.elapsed() >= PREFILL_HEARTBEAT_INTERVAL && pos < n_tokens {
+                on_token("");
+                last_heartbeat = Instant::now();
+            }
         }
 
         // 7. Sample loop — one token at a time until EOS or context limit.
