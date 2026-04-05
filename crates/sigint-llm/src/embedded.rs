@@ -51,8 +51,24 @@ mod inner {
     };
     use std::num::NonZeroU32;
     use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
     use tokio::sync::mpsc;
     use tracing::{debug, warn};
+
+    /// Process-global llama.cpp backend handle.
+    ///
+    /// @decision DEC-P19-EMBEDDED-003
+    /// @title Backend initialized once per process via OnceLock
+    /// @status accepted
+    /// @rationale llama-cpp-2's `LlamaBackend::init()` is a process-global
+    /// singleton — the second call returns `BackendAlreadyInitialized`. The
+    /// previous per-call init-with-retry pattern failed deterministically on
+    /// the second agent turn. OnceLock gives us exactly-once initialization
+    /// with thread-safe access. The backend reference is `'static`, which
+    /// model load calls accept by reference (no lifetime parameters needed).
+    /// DEC-P19-EMBEDDED-002 (model loaded fresh per inference) is preserved:
+    /// only the backend is shared, models remain per-call.
+    static LLAMA_BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
 
     use crate::provider::ChunkStream;
     use crate::types::{ChatRequest, ChatResponse, FunctionCall, StreamChunk, ToolCall};
@@ -310,6 +326,7 @@ mod inner {
     /// 5. Samples tokens one-at-a-time until EOS or context overflow
     /// 6. Parses tool calls from the output when tools were provided
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::needless_range_loop)] // loop uses `i` as both index and position value (i as i32)
     fn run_generation_streaming<F>(
         model_path: &PathBuf,
         context_window: u32,
@@ -323,23 +340,16 @@ mod inner {
     where
         F: FnMut(&str),
     {
-        // 1. Initialise the llama.cpp backend (idempotent across calls).
-        let backend = match LlamaBackend::init() {
-            Ok(b) => b,
-            Err(llama_cpp_2::LlamaCppError::BackendAlreadyInitialized) => {
-                // Already initialised in this process — idempotent, safe to ignore.
-                // The backend static state is still available; init() failure here
-                // just means we raced with another call. Try once more.
-                LlamaBackend::init()
-                    .map_err(|e| Error::Llm(format!("llama backend init: {}", e)))?
-            }
-            Err(e) => return Err(Error::Llm(format!("llama backend init: {}", e))),
-        };
+        // 1. Initialise the llama.cpp backend exactly once per process.
+        // DEC-P19-EMBEDDED-003: OnceLock-based singleton.
+        let backend = LLAMA_BACKEND.get_or_init(|| {
+            LlamaBackend::init().expect("llama backend init (first call must succeed)")
+        });
 
         // 2. Load the model.
         let model_params =
             std::pin::pin!(LlamaModelParams::default().with_n_gpu_layers(gpu_layers));
-        let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
+        let model = LlamaModel::load_from_file(backend, model_path, &model_params)
             .map_err(|e| Error::Llm(format!("Failed to load model {:?}: {}", model_path, e)))?;
 
         // 3. Create inference context.
@@ -356,7 +366,7 @@ mod inner {
             ctx_params = ctx_params.with_flash_attention_policy(1);
         }
         let mut ctx = model
-            .new_context(&backend, ctx_params)
+            .new_context(backend, ctx_params)
             .map_err(|e| Error::Llm(format!("Failed to create llama context: {}", e)))?;
 
         // 4. Format the prompt using the model's built-in chat template.
