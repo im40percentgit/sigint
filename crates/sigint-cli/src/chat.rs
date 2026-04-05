@@ -19,8 +19,8 @@ use sigint_core::{
     AppCore, Error,
 };
 use sigint_llm::{
+    create_provider,
     types::{ChatMessage, ChatRequest},
-    LlmProvider, OllamaProvider,
 };
 use sigint_store::Database;
 
@@ -73,7 +73,7 @@ pub async fn run(core: AppCore, args: ChatArgs) -> Result<(), Error> {
 
     // ── LLM provider ───────────────────────────────────────────────────────
 
-    let provider = OllamaProvider::from_config(&core.config.llm);
+    let provider = create_provider(&core.config.llm)?;
 
     // ── Conversation history (in-memory + persisted) ───────────────────────
 

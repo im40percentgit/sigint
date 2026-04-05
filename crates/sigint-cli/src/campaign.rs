@@ -18,7 +18,7 @@ use sigint_core::campaign::CampaignFile;
 use sigint_core::event::Event;
 use sigint_core::types::Campaign;
 use sigint_core::{AppCore, Error};
-use sigint_llm::OllamaProvider;
+use sigint_llm::{create_provider, LlmProvider};
 use sigint_memory::MemoryService;
 use sigint_store::{embedding_worker, Database, EmbeddingService, ScanRecord};
 use tracing::warn;
@@ -107,7 +107,7 @@ pub async fn run(
     println!();
 
     // ── LLM provider (shared across targets) ────────────────────────────────
-    let provider: Arc<OllamaProvider> = Arc::new(OllamaProvider::from_config(&core.config.llm));
+    let provider: Arc<dyn LlmProvider> = create_provider(&core.config.llm)?.into();
 
     // ── Iterate targets ──────────────────────────────────────────────────────
     let mut completed = 0usize;

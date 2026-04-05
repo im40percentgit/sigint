@@ -1,7 +1,7 @@
 //! `sigint scan <target>` — multi-agent penetration scan command.
 //!
 //! Wires together the full Phase 2 pipeline:
-//! 1. Initialise OllamaProvider from config (with optional model override).
+//! 1. Initialise LLM provider via factory (ollama/openai/embedded/llama-cpp from config, with optional model override).
 //! 2. Register NmapTool and ShellTool in a ToolRegistry.
 //! 3. Subscribe to the EventBus and print tool events to stdout as they arrive.
 //! 4. Run the Orchestrator's five-agent pipeline against the target.
@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use sigint_agents::{Orchestrator, ToolRegistry};
 use sigint_core::{event::Event, AppCore, Error};
-use sigint_llm::OllamaProvider;
+use sigint_llm::{create_provider, LlmProvider};
 use sigint_memory::MemoryService;
 use sigint_store::{embedding_worker, Database, EmbeddingService, ScanRecord};
 use tracing::warn;
@@ -185,7 +185,7 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
     // Wrapped in Arc so it can be cheaply shared with the interactive session
     // orchestrator (DEC-AGENT-014: Arc avoids lifetime parameters and enables
     // cheap fan-out to concurrent orchestrators).
-    let provider: Arc<OllamaProvider> = Arc::new(OllamaProvider::from_config(&core.config.llm));
+    let provider: Arc<dyn LlmProvider> = create_provider(&core.config.llm)?.into();
 
     // ── Session — create upfront so per-tool ScanRecords can reference it ─────
     // The session row MUST exist before the orchestrator runs because per-tool

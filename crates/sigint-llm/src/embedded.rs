@@ -50,7 +50,7 @@ mod inner {
         sampling::LlamaSampler,
     };
     use std::num::NonZeroU32;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tokio::sync::mpsc;
     use tracing::{debug, warn};
 
@@ -214,6 +214,7 @@ mod inner {
     // ── Inference implementation ──────────────────────────────────────────────
 
     /// Full non-streaming inference: returns a complete `ChatResponse`.
+    #[allow(clippy::too_many_arguments)]
     fn run_inference(
         model_path: &PathBuf,
         model_name: &str,
@@ -245,6 +246,7 @@ mod inner {
     }
 
     /// Streaming inference: sends `StreamChunk` items over `tx` as they are produced.
+    #[allow(clippy::too_many_arguments)]
     fn run_inference_streaming(
         model_path: &PathBuf,
         _model_name: &str,
@@ -307,6 +309,7 @@ mod inner {
     /// 4. Tokenises the prompt and runs the prefill decode
     /// 5. Samples tokens one-at-a-time until EOS or context overflow
     /// 6. Parses tool calls from the output when tools were provided
+    #[allow(clippy::too_many_arguments)]
     fn run_generation_streaming<F>(
         model_path: &PathBuf,
         context_window: u32,
@@ -508,7 +511,7 @@ mod inner {
     ///
     /// Tries the name as-is first, then appends `.gguf` if the name has no
     /// `.gguf` suffix and the direct path does not exist.
-    fn find_model_file(models_dir: &PathBuf, model_name: &str) -> Result<PathBuf, Error> {
+    fn find_model_file(models_dir: &Path, model_name: &str) -> Result<PathBuf, Error> {
         let direct = models_dir.join(model_name);
         if direct.exists() {
             return Ok(direct);

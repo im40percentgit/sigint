@@ -7,6 +7,21 @@ edition.workspace = true
 name = "sigint"
 path = "src/main.rs"
 
+# @decision DEC-CLI-004
+# @title embedded-llm is a default feature of sigint-cli
+# @status accepted
+# @rationale The sigint CLI is the user-facing binary; embedded (in-process GGUF)
+# is the primary LLM path shipped in Phase 19B. Making it default means plain
+# `cargo build --release` (Makefile, Dockerfile, CI) produces a fully functional
+# binary without extra flags. The Docker base (rust:1.82-bookworm) and
+# ubuntu-latest CI runners both have GCC, so the llama-cpp-2 C build succeeds.
+# Users without a C toolchain can opt out: cargo build --release --no-default-features
+[features]
+default = ["embedded-llm"]
+# In-process GGUF inference. Requires a C/C++ toolchain at build time.
+# Opt out with: cargo build --release --no-default-features
+embedded-llm = ["sigint-llm/embedded-llm"]
+
 [dependencies]
 sigint-core = { workspace = true }
 sigint-llm = { workspace = true }
