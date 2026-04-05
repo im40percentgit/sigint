@@ -25,6 +25,23 @@ use tracing::warn;
 
 use crate::agent::Agent;
 
+/// Tools that are intentionally excluded from the execution registry because
+/// they are output-only (structured output channels, not execution tools).
+/// These are registered per-scan as `extra_tools` by the orchestrator.
+///
+/// @decision DEC-AGENT-019
+/// @title Output-only tools bypass execution registry
+/// @status accepted
+/// @rationale `create_attack_plan` and `create_finding` are output channels
+/// that capture structured data from agent LLM calls (attack plans, findings)
+/// into orchestrator-owned collectors. They are not executable tools — they
+/// only record data. They're declared in agent ACLs to preserve declarative
+/// intent, and passed via `extra_tools` by the orchestrator when running
+/// those agents. This constant lets `for_agent()` suppress the "unregistered
+/// tool" warning for these known exceptions without weakening the check for
+/// actual ACL typos.
+const KNOWN_OUTPUT_TOOLS: &[&str] = &["create_attack_plan", "create_finding"];
+
 /// Stores `Tool` implementations and vends filtered subsets by agent ACL.
 ///
 /// Use `register` to add tools at startup. The Orchestrator then calls
@@ -82,7 +99,7 @@ impl ToolRegistry {
             if let Some(tool) = self.tools.get(name) {
                 tool_refs.push(tool.as_ref());
                 tool_defs.push(tool.definition());
-            } else {
+            } else if !KNOWN_OUTPUT_TOOLS.contains(&name.as_str()) {
                 warn!(
                     agent = agent.name(),
                     tool = %name,
