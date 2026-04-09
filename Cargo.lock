@@ -3417,10 +3417,13 @@ dependencies = [
 name = "sigint-tui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "crossterm",
  "ratatui",
  "serde_json",
  "sigint-core",
+ "sigint-report",
+ "sigint-store",
  "thiserror",
  "tokio",
  "tracing",

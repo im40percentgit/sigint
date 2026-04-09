@@ -38,7 +38,28 @@ use std::time::Instant;
 
 use sigint_core::diff::ScanDiff;
 use sigint_core::event::Event;
-use sigint_core::types::{Asset, Finding};
+use sigint_core::types::{Asset, Finding, Session};
+
+/// Which top-level view (tab) is currently shown.
+///
+/// Number keys 1-6 switch views. Each view owns a distinct set of panels
+/// that participate in the Tab cycle (see `AppState::next_panel`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum View {
+    /// Live scan activity: Chat, ToolOutput, Findings, Assets, Input.
+    #[default]
+    Scan,
+    /// Aggregate stats and recent sessions.
+    Dashboard,
+    /// Historical session list + per-session message replay.
+    Sessions,
+    /// All findings across sessions, filterable by severity.
+    Findings,
+    /// Report generation and preview.
+    Reports,
+    /// TUI-local settings (shadows Arc<Config> without mutating it).
+    Settings,
+}
 
 /// Diff classification for a finding relative to the previous scan.
 ///
@@ -58,13 +79,86 @@ pub enum DiffStatus {
 }
 
 /// Which panel currently has keyboard focus.
+///
+/// Panel variants are grouped by view — Tab cycles only through panels relevant
+/// to the active view (see `AppState::next_panel`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Panel {
+    // ── Scan view ──────────────────────────────────────────────────────────────
     Chat,
     ToolOutput,
     Findings,
     Assets,
     Input,
+    // ── Sessions view ──────────────────────────────────────────────────────────
+    SessionList,
+    SessionDetail,
+    // ── Findings view ──────────────────────────────────────────────────────────
+    FindingList,
+    FindingDetail,
+    // ── Reports view ───────────────────────────────────────────────────────────
+    ReportList,
+    ReportPreview,
+    // ── Settings view ──────────────────────────────────────────────────────────
+    SettingsForm,
+}
+
+/// Aggregate dashboard statistics.
+///
+/// Populated by TuiApp from DB queries on Dashboard view activation.
+/// All fields are optional so the dashboard renders gracefully before data loads.
+#[derive(Debug, Clone, Default)]
+pub struct DashboardData {
+    pub total_sessions: usize,
+    pub total_findings: usize,
+    pub critical_count: usize,
+    pub high_count: usize,
+    pub medium_count: usize,
+    pub low_count: usize,
+    pub total_assets: usize,
+    /// Most recent sessions (up to 5) for the recent-activity table.
+    pub recent_sessions: Vec<Session>,
+}
+
+/// A row in the Sessions view session list.
+pub type SessionRow = Session;
+
+/// Detail data for a selected session (messages + tool log snapshot).
+#[derive(Debug, Clone, Default)]
+pub struct SessionDetail {
+    pub session: Option<Session>,
+    /// Messages loaded from DB for this session.
+    pub messages: Vec<DisplayMessage>,
+    /// Tool records loaded from DB for this session.
+    pub tool_summaries: Vec<String>,
+}
+
+/// A row in the Findings view finding list (flattened from DB query).
+pub type FindingRow = Finding;
+
+/// Detail data for a selected finding.
+#[derive(Debug, Clone, Default)]
+pub struct FindingDetailData {
+    pub finding: Option<Finding>,
+}
+
+/// TUI-local settings that shadow the global `Arc<Config>` without mutating it.
+///
+/// @decision DEC-P21-SETTINGS-001
+/// @title TuiSettings shadows Arc<Config> without mutating it
+/// @status accepted
+/// @rationale AppState must remain pure (no IO, no Arc mutation). TuiSettings
+/// holds TUI-specific overrides set via `:set key value` commands. The TuiApp
+/// event loop applies these settings when dispatching actions. This avoids the
+/// need for interior mutability on the shared Config.
+#[derive(Debug, Clone)]
+pub struct TuiSettings {
+    /// Auto-approve low-risk tool calls without prompting.
+    pub auto_approve_low: bool,
+    /// Show agent reasoning (<think> blocks) in the Chat panel.
+    pub show_reasoning: bool,
+    /// Maximum lines of tool output shown per entry.
+    pub tool_output_lines: usize,
 }
 
 /// Current editor/navigation mode (vi-inspired).
@@ -114,7 +208,33 @@ pub struct ToolEntry {
 }
 
 /// All mutable state owned by the TUI runtime.
+///
+/// @decision DEC-P21-STATE-001
+/// @title AppState extended with multi-view fields; IO ownership stays in TuiApp
+/// @status accepted
+/// @rationale The pure-state-machine invariant (no IO in AppState) is preserved.
+/// TuiApp owns Arc<Database> and pushes query results into the new view-specific
+/// fields here (dashboard, session_list, etc.). AppState only holds the cached
+/// data and selection indices. This keeps all state transitions unit-testable
+/// without a real database or terminal.
 pub struct AppState {
+    // ── Global ────────────────────────────────────────────────────────────────
+    /// Which tab is currently shown.
+    pub current_view: View,
+    /// Set to true when the TUI should exit.
+    pub should_quit: bool,
+    /// Whether the `?` help overlay is visible.
+    pub show_help: bool,
+    /// Current interaction mode.
+    pub mode: Mode,
+    /// Active session ID (nil until a real session is created by the scan pipeline).
+    pub session_id: uuid::Uuid,
+    /// Active search query (set by Mode::Search on Enter).
+    pub search_query: Option<String>,
+    /// TUI-local settings (shadows Arc<Config>).
+    pub tui_settings: TuiSettings,
+
+    // ── Scan view ─────────────────────────────────────────────────────────────
     /// Currently active agent name and when it started.
     pub active_agent: Option<(String, Instant)>,
     /// Tool-call iteration counter within the current agent turn.
@@ -136,20 +256,46 @@ pub struct AppState {
     pub findings: Vec<Finding>,
     /// Discovered attack-surface assets from sigint-recon.
     pub assets: Vec<Asset>,
+    /// Text entered in the Input bar.
+    pub input: String,
+
+    // ── Dashboard view ────────────────────────────────────────────────────────
+    /// Aggregate stats populated by TuiApp from DB queries on view activation.
+    pub dashboard: DashboardData,
+
+    // ── Sessions view ─────────────────────────────────────────────────────────
+    /// Session list loaded from DB on Sessions view activation.
+    pub session_list: Vec<SessionRow>,
+    /// Currently selected row in the session list.
+    pub selected_session_idx: usize,
+    /// Detail data for the selected session (messages, tool log snapshot).
+    pub session_detail: SessionDetail,
+
+    // ── Findings view ─────────────────────────────────────────────────────────
+    /// All findings from DB (all sessions), loaded on Findings view activation.
+    pub finding_list: Vec<FindingRow>,
+    /// Currently selected row in the findings list.
+    pub selected_finding_idx: usize,
+    /// Detail data for the selected finding.
+    pub finding_detail: FindingDetailData,
+
+    // ── Reports view ──────────────────────────────────────────────────────────
+    /// Sessions available for report generation, mirrored from session_list.
+    pub report_list: Vec<SessionRow>,
+    /// Currently generated report text (Markdown), empty until generated.
+    pub report_preview: String,
+    /// Currently selected session index in the report list.
+    pub selected_report_idx: usize,
+
+    // ── Navigation / rendering ────────────────────────────────────────────────
     /// Panel that currently receives keyboard events.
     pub focused_panel: Panel,
     /// Per-panel scroll offset (lines scrolled up from bottom).
     pub scroll_offsets: HashMap<Panel, usize>,
     /// Per-panel auto-scroll flag; set to false when user scrolls up.
     pub auto_scroll: HashMap<Panel, bool>,
-    /// Text entered in the Input bar.
-    pub input: String,
-    /// Current interaction mode.
-    pub mode: Mode,
-    /// Set to true when the TUI should exit.
-    pub should_quit: bool,
-    /// Whether the `?` help overlay is visible.
-    pub show_help: bool,
+
+    // ── Approval / diff ───────────────────────────────────────────────────────
     /// A tool execution waiting for operator approval (y/n).
     ///
     /// When `Some`, the UI renders an approval bar and keypresses 'y'/'n'
@@ -173,12 +319,32 @@ impl AppState {
             Panel::Findings,
             Panel::Assets,
             Panel::Input,
+            Panel::SessionList,
+            Panel::SessionDetail,
+            Panel::FindingList,
+            Panel::FindingDetail,
+            Panel::ReportList,
+            Panel::ReportPreview,
+            Panel::SettingsForm,
         ] {
             scroll_offsets.insert(panel, 0);
             auto_scroll.insert(panel, true);
         }
 
         Self {
+            // ── Global ───────────────────────────────────────────────────────
+            current_view: View::Scan,
+            should_quit: false,
+            show_help: false,
+            mode: Mode::Normal,
+            session_id: uuid::Uuid::nil(),
+            search_query: None,
+            tui_settings: TuiSettings {
+                auto_approve_low: false,
+                show_reasoning: true,
+                tool_output_lines: 3,
+            },
+            // ── Scan view ────────────────────────────────────────────────────
             active_agent: None,
             iteration: 0,
             messages: Vec::new(),
@@ -188,13 +354,26 @@ impl AppState {
             tool_log: Vec::new(),
             findings: Vec::new(),
             assets: Vec::new(),
+            input: String::new(),
+            // ── Dashboard ────────────────────────────────────────────────────
+            dashboard: DashboardData::default(),
+            // ── Sessions ─────────────────────────────────────────────────────
+            session_list: Vec::new(),
+            selected_session_idx: 0,
+            session_detail: SessionDetail::default(),
+            // ── Findings ─────────────────────────────────────────────────────
+            finding_list: Vec::new(),
+            selected_finding_idx: 0,
+            finding_detail: FindingDetailData::default(),
+            // ── Reports ──────────────────────────────────────────────────────
+            report_list: Vec::new(),
+            report_preview: String::new(),
+            selected_report_idx: 0,
+            // ── Navigation / rendering ────────────────────────────────────────
             focused_panel: Panel::Input,
             scroll_offsets,
             auto_scroll,
-            input: String::new(),
-            mode: Mode::Normal,
-            should_quit: false,
-            show_help: false,
+            // ── Approval / diff ───────────────────────────────────────────────
             pending_approval: None,
             scan_diff: None,
         }
@@ -384,13 +563,46 @@ impl AppState {
     }
 
     /// Cycle focus to the next panel in order.
+    ///
+    /// Tab cycles only through panels relevant to the current view.
+    /// Panels from other views are unreachable via Tab but may be focused
+    /// programmatically (e.g. when switching views).
     pub fn next_panel(&mut self) {
-        self.focused_panel = match self.focused_panel {
-            Panel::Chat => Panel::ToolOutput,
-            Panel::ToolOutput => Panel::Findings,
-            Panel::Findings => Panel::Assets,
-            Panel::Assets => Panel::Input,
-            Panel::Input => Panel::Chat,
+        self.focused_panel = match self.current_view {
+            View::Scan => match self.focused_panel {
+                Panel::Chat => Panel::ToolOutput,
+                Panel::ToolOutput => Panel::Findings,
+                Panel::Findings => Panel::Assets,
+                Panel::Assets => Panel::Input,
+                _ => Panel::Chat,
+            },
+            View::Dashboard => Panel::SessionList,
+            View::Sessions => match self.focused_panel {
+                Panel::SessionList => Panel::SessionDetail,
+                _ => Panel::SessionList,
+            },
+            View::Findings => match self.focused_panel {
+                Panel::FindingList => Panel::FindingDetail,
+                _ => Panel::FindingList,
+            },
+            View::Reports => match self.focused_panel {
+                Panel::ReportList => Panel::ReportPreview,
+                _ => Panel::ReportList,
+            },
+            View::Settings => Panel::SettingsForm,
+        };
+    }
+
+    /// Switch to a view and reset focus to the primary panel for that view.
+    pub fn switch_view(&mut self, view: View) {
+        self.current_view = view;
+        self.focused_panel = match view {
+            View::Scan => Panel::Input,
+            View::Dashboard => Panel::SessionList,
+            View::Sessions => Panel::SessionList,
+            View::Findings => Panel::FindingList,
+            View::Reports => Panel::ReportList,
+            View::Settings => Panel::SettingsForm,
         };
     }
 }
