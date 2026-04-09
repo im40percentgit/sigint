@@ -124,13 +124,28 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
         std::io::stdout().is_terminal()
     };
 
+    // ── Database for TUI historical views ──────────────────────────────────
+    let db_path = core.config.resolved_db_path();
+    let tui_db = if use_tui {
+        Database::open(&db_path).ok().map(std::sync::Arc::new)
+    } else {
+        None
+    };
+
     let tui_handle = if use_tui {
         match sigint_tui::TuiApp::new(core.events.subscribe(), core.events.sender()) {
-            Ok(tui) => Some(tokio::spawn(async move {
-                if let Err(e) = tui.run().await {
-                    tracing::error!("TUI error: {e}");
-                }
-            })),
+            Ok(tui) => {
+                let tui = if let Some(db) = tui_db {
+                    tui.with_db(db)
+                } else {
+                    tui
+                };
+                Some(tokio::spawn(async move {
+                    if let Err(e) = tui.run().await {
+                        tracing::error!("TUI error: {e}");
+                    }
+                }))
+            }
             Err(e) => {
                 warn!("TUI init failed, falling back to stdout: {e}");
                 spawn_stdout_printer(core.events.subscribe());
@@ -143,7 +158,6 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
     };
 
     // ── Database + Memory + Embedding worker ──────────────────────────────────
-    let db_path = core.config.resolved_db_path();
 
     let context_window = if core.config.llm.context_window > 0 {
         core.config.llm.context_window
