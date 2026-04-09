@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 sigint-core = { workspace = true }
+sigint-store = { workspace = true }
+sigint-report = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -12,3 +14,4 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 uuid = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
