@@ -3269,6 +3269,7 @@ dependencies = [
  "sigint-report",
  "sigint-store",
  "sigint-tools",
+ "sigint-train",
  "sigint-tui",
  "sigint-web",
  "tempfile",
@@ -3435,6 +3436,20 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "sigint-train"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sigint-core",
+ "sigint-store",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

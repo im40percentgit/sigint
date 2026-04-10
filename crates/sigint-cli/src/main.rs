@@ -32,6 +32,7 @@ mod report;
 mod scan;
 mod serve;
 mod sessions;
+mod train;
 
 use std::io::IsTerminal;
 use std::sync::Mutex;
@@ -148,6 +149,47 @@ enum Commands {
     Plugin {
         #[command(subcommand)]
         command: PluginCommands,
+    },
+    /// Extract and manage model fine-tuning training data.
+    Train {
+        #[command(subcommand)]
+        command: TrainCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TrainCommands {
+    /// Extract tool-calling training data from scan history and write JSONL files.
+    Export {
+        /// Output directory (default: ~/.local/share/sigint/training/).
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Minimum number of examples required before writing output.
+        #[arg(long, default_value = "1")]
+        min_examples: usize,
+    },
+    /// Generate an Ollama Modelfile for `ollama create`.
+    Create {
+        /// Base model tag (e.g. "llama3.2:8b").
+        #[arg(long, default_value = "llama3.2:8b")]
+        base_model: String,
+        /// Name for the fine-tuned model (used in `ollama create <name>`).
+        #[arg(long, default_value = "sigint-ft")]
+        name: String,
+        /// Path to training JSONL (default: ~/.local/share/sigint/training/train.jsonl).
+        #[arg(long)]
+        data: Option<String>,
+    },
+    /// Print training data statistics without writing files.
+    Stats,
+    /// Evaluate model accuracy against held-out test data.
+    Assess {
+        /// Model to evaluate (not yet used — placeholder for future inference).
+        #[arg(long)]
+        model: Option<String>,
+        /// Path to test JSONL (default: ~/.local/share/sigint/training/test.jsonl).
+        #[arg(long)]
+        data: Option<String>,
     },
 }
 
@@ -351,6 +393,18 @@ async fn main() {
                 .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
             PluginCommands::New { name } => plugin::run_new(&name)
                 .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
+        },
+        Commands::Train { command } => match command {
+            TrainCommands::Export { output, min_examples } => {
+                train::run_export(core, output, min_examples).await
+            }
+            TrainCommands::Create { base_model, name, data } => {
+                train::run_create(core, base_model, name, data).await
+            }
+            TrainCommands::Stats => train::run_stats(core).await,
+            TrainCommands::Assess { model, data } => {
+                train::run_assess(core, model, data).await
+            }
         },
     };
 
