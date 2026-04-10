@@ -472,6 +472,7 @@ mod tests {
             log: sigint_core::config::LogConfig::default(),
             agent: sigint_core::config::AgentConfig::default(),
             tools: sigint_core::config::ToolsConfig::default(),
+            plugins: sigint_core::config::PluginsConfig::default(),
         }
     }
 

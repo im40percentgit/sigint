@@ -189,9 +189,17 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
         None
     };
 
-    // ── Tool registry ─────────────────────────────────────────────────────────
+    // ── Tool registry (built-in + plugins) ───────────────────────────────────
+    let mut tools = sigint_tools::all_executor_tools_with_config(&core.config.tools);
+    tools.extend(sigint_plugin::collect_plugin_tools());
+
+    // Apply disabled_tools filter from config.plugins
+    if !core.config.plugins.disabled_tools.is_empty() {
+        tools.retain(|t| !core.config.plugins.disabled_tools.contains(&t.name().to_string()));
+    }
+
     let mut registry = ToolRegistry::new();
-    for tool in sigint_tools::all_executor_tools_with_config(&core.config.tools) {
+    for tool in tools {
         registry.register(tool);
     }
 
@@ -271,6 +279,19 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
     // Best-effort: if the DB can't be opened, the scan still runs without persistence.
     if let Ok(scan_db) = Database::open(&db_path) {
         orchestrator = orchestrator.with_db(Arc::new(scan_db));
+    }
+
+    // Apply prompt pack from config (if not "default")
+    if core.config.plugins.prompt_pack != "default" {
+        if let Some(pack) = sigint_plugin::find_prompt_pack(&core.config.plugins.prompt_pack) {
+            orchestrator = orchestrator
+                .with_prompt_override(sigint_plugin::prompt_pack_override_fn(pack));
+        } else {
+            tracing::warn!(
+                "prompt pack '{}' not found, using defaults",
+                core.config.plugins.prompt_pack
+            );
+        }
     }
 
     // ── Interactive session (TUI mode only) ───────────────────────────────────

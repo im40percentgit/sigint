@@ -25,6 +25,7 @@ embedded-llm = ["sigint-llm/embedded-llm"]
 [dependencies]
 sigint-core = { workspace = true }
 sigint-llm = { workspace = true }
+sigint-plugin = { workspace = true }
 sigint-store = { workspace = true }
 sigint-agents = { workspace = true }
 sigint-tools = { workspace = true }
@@ -33,6 +34,7 @@ sigint-memory = { workspace = true }
 sigint-recon = { workspace = true }
 sigint-report = { workspace = true }
 sigint-web = { workspace = true }
+anyhow = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 uuid = { workspace = true }
