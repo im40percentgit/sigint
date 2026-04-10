@@ -184,6 +184,13 @@ pub struct Orchestrator {
     /// so agent prompts include baseline asset intelligence from the recon
     /// pre-step. Defaults to an empty Vec.
     discovered_assets: Vec<sigint_core::types::Asset>,
+    /// Optional prompt override function for agent system prompt overrides.
+    ///
+    /// When `Some`, each `run_agent_with_extras` call passes the agent's role
+    /// to this function. If it returns `Some(s)`, `s` replaces the agent's
+    /// built-in `system_prompt()`. If it returns `None`, the built-in prompt
+    /// is used. Defaults to `None` (built-in prompts for all roles).
+    prompt_override: Option<crate::prompt_pack::PromptOverrideFn>,
 }
 
 /// Parse Strategist output for escalation tier markers (DEC-LOOP-004).
@@ -266,6 +273,7 @@ impl Orchestrator {
             goal: None,
             approval_gates: false,
             discovered_assets: Vec::new(),
+            prompt_override: None,
         }
     }
 
@@ -404,6 +412,19 @@ impl Orchestrator {
     /// subdomains) discovered during the recon pre-step.
     pub fn with_discovered_assets(mut self, assets: Vec<sigint_core::types::Asset>) -> Self {
         self.discovered_assets = assets;
+        self
+    }
+
+    /// Set a prompt override function for agent system prompt overrides.
+    ///
+    /// When set, each agent turn calls `f(agent.role())`. If it returns `Some(s)`,
+    /// `s` replaces the agent's built-in `system_prompt()`. If it returns `None`,
+    /// the built-in prompt is used unchanged.
+    ///
+    /// Callers obtain the function pointer from `sigint_plugin::prompt_pack_override_fn`
+    /// after calling `sigint_plugin::find_prompt_pack()` in the CLI scan path.
+    pub fn with_prompt_override(mut self, f: crate::prompt_pack::PromptOverrideFn) -> Self {
+        self.prompt_override = Some(f);
         self
     }
 
@@ -827,9 +848,15 @@ impl Orchestrator {
         let mut state = ConversationState::new(self.context_window);
 
         // System prompt defines the agent's identity and behavioral constraints.
-        // When a campaign profile specifies a focus area, append it so the agent
-        // prioritises analysis and tool usage relevant to that engagement focus.
-        let mut system_prompt = agent.system_prompt().to_string();
+        // When a prompt override function is active, call it with the agent's role.
+        // A Some(s) return replaces the built-in system_prompt(); None falls back.
+        // Campaign focus is still appended afterward regardless of which base is used.
+        let base_prompt = if let Some(f) = self.prompt_override {
+            f(agent.role()).unwrap_or_else(|| agent.system_prompt())
+        } else {
+            agent.system_prompt()
+        };
+        let mut system_prompt = base_prompt.to_string();
         if let Some(ref profile) = self.profile {
             if !profile.focus.is_empty() {
                 system_prompt.push_str(&format!(
@@ -2471,5 +2498,46 @@ mod tests {
         let orch = make_orchestrator(provider).with_discovered_assets(vec![asset.clone()]);
         assert_eq!(orch.discovered_assets.len(), 1);
         assert_eq!(orch.discovered_assets[0].value, "10.0.0.1");
+    }
+
+    // ── Phase 22: prompt override tests ─────────────────────────────────────
+
+    #[test]
+    fn prompt_override_fn_returns_override_for_strategist() {
+        use crate::role::AgentRole;
+
+        fn web_security_override(role: AgentRole) -> Option<&'static str> {
+            match role {
+                AgentRole::Strategist => Some("You are a web security expert"),
+                _ => None,
+            }
+        }
+
+        assert_eq!(
+            web_security_override(AgentRole::Strategist),
+            Some("You are a web security expert"),
+        );
+        assert!(web_security_override(AgentRole::Reporter).is_none());
+    }
+
+    #[test]
+    fn with_prompt_override_sets_field() {
+        use crate::role::AgentRole;
+
+        fn my_override(role: AgentRole) -> Option<&'static str> {
+            if role == AgentRole::Executor {
+                Some("custom executor prompt")
+            } else {
+                None
+            }
+        }
+
+        let provider = Arc::new(MockProvider::uniform("done", 5));
+        let orch = make_orchestrator(provider).with_prompt_override(my_override);
+        assert!(orch.prompt_override.is_some());
+        // Verify the function returns the expected value
+        let f = orch.prompt_override.unwrap();
+        assert_eq!(f(AgentRole::Executor), Some("custom executor prompt"));
+        assert!(f(AgentRole::Analyst).is_none());
     }
 }

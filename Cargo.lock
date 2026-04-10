@@ -3252,6 +3252,7 @@ dependencies = [
 name = "sigint-cli"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "clap",
  "futures-util",
@@ -3263,6 +3264,7 @@ dependencies = [
  "sigint-core",
  "sigint-llm",
  "sigint-memory",
+ "sigint-plugin",
  "sigint-recon",
  "sigint-report",
  "sigint-store",

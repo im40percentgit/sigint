@@ -26,6 +26,7 @@ mod diff;
 mod doctor;
 mod log;
 mod model;
+mod plugin;
 mod recon;
 mod report;
 mod scan;
@@ -142,6 +143,22 @@ enum Commands {
     Model {
         #[command(subcommand)]
         command: ModelCommands,
+    },
+    /// Manage plugin tool packs.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PluginCommands {
+    /// List all registered tools and prompt packs (built-in + plugins).
+    List,
+    /// Scaffold a new plugin crate in the workspace.
+    New {
+        /// Plugin name (will be prefixed with "sigint-" if not already).
+        name: String,
     },
 }
 
@@ -328,6 +345,12 @@ async fn main() {
             ModelCommands::List => model::run_list(core).await,
             ModelCommands::Pull { source } => model::run_pull(core, source).await,
             ModelCommands::Info { name } => model::run_info(core, name).await,
+        },
+        Commands::Plugin { command } => match command {
+            PluginCommands::List => plugin::run_list()
+                .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
+            PluginCommands::New { name } => plugin::run_new(&name)
+                .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
         },
     };
 
