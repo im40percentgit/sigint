@@ -32,6 +32,10 @@ pub struct Config {
     /// Tool execution settings (output caps, per-tool overrides).
     #[serde(default)]
     pub tools: ToolsConfig,
+
+    /// Plugin system settings (tool packs, prompt packs).
+    #[serde(default)]
+    pub plugins: PluginsConfig,
 }
 
 /// LLM provider configuration.
@@ -153,6 +157,34 @@ pub struct ToolOverrides {
     /// Override the execution timeout for this tool (seconds).
     #[serde(default)]
     pub timeout: Option<u64>,
+}
+
+/// Plugin system settings.
+///
+/// Controls which prompt pack agents use and which tools are excluded from
+/// the registry at startup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginsConfig {
+    /// Which agent prompt pack to use ("default" = built-in prompts).
+    #[serde(default = "default_prompt_pack")]
+    pub prompt_pack: String,
+
+    /// Tool names to exclude from the registry.
+    #[serde(default)]
+    pub disabled_tools: Vec<String>,
+}
+
+fn default_prompt_pack() -> String {
+    "default".to_string()
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            prompt_pack: default_prompt_pack(),
+            disabled_tools: Vec::new(),
+        }
+    }
 }
 
 // ── Default implementations ──────────────────────────────────────────────────
@@ -541,6 +573,24 @@ models_dir = "~/.local/share/custom-models"
         let path = cfg.resolved_models_dir();
         assert!(!path.to_string_lossy().contains('~'));
         assert!(path.ends_with("custom-models"));
+    }
+
+    #[test]
+    fn plugins_config_defaults() {
+        let config: PluginsConfig = toml::from_str("").unwrap();
+        assert_eq!(config.prompt_pack, "default");
+        assert!(config.disabled_tools.is_empty());
+    }
+
+    #[test]
+    fn plugins_config_parses_from_toml() {
+        let toml_str = r#"
+            prompt_pack = "web-security"
+            disabled_tools = ["shell", "msfconsole"]
+        "#;
+        let config: PluginsConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.prompt_pack, "web-security");
+        assert_eq!(config.disabled_tools, vec!["shell", "msfconsole"]);
     }
 
     #[test]

@@ -6,6 +6,7 @@ members = [
     "crates/sigint-sandbox",
     "crates/sigint-store",
     "crates/sigint-tools",
+    "crates/sigint-plugin",
     "crates/sigint-recon",
     "crates/sigint-tui",
     "crates/sigint-web",
@@ -23,6 +24,9 @@ authors = ["SIGINT Contributors"]
 license = "MIT"
 
 [workspace.dependencies]
+# Plugin registration
+inventory = "0.3"
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
@@ -76,6 +80,7 @@ sigint-store = { path = "crates/sigint-store" }
 sigint-agents = { path = "crates/sigint-agents" }
 sigint-sandbox = { path = "crates/sigint-sandbox" }
 sigint-tools = { path = "crates/sigint-tools" }
+sigint-plugin = { path = "crates/sigint-plugin" }
 sigint-recon = { path = "crates/sigint-recon" }
 sigint-tui = { path = "crates/sigint-tui" }
 sigint-web = { path = "crates/sigint-web" }
