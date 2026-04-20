@@ -20,13 +20,13 @@ lint: frontend
 fmt:
 	cargo fmt --all -- --check
 
-# Build Docker image
+# Build container image (works with docker or podman)
 docker:
-	docker build -t sigint .
+	$(if $(shell command -v podman 2>/dev/null),podman,docker) build -t sigint .
 
-# Start with docker-compose
+# Start with compose (auto-detects podman-compose or docker-compose)
 up:
-	docker-compose up -d
+	$(if $(shell command -v podman-compose 2>/dev/null),podman-compose,docker-compose) up -d
 
 # Clean build artifacts
 clean:
