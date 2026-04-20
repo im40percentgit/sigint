@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 20 completed — Ship readiness (CI/CD with frontend build + security audit, Docker, Makefile)
+**Current Phase:** Phase 23 completed — Model fine-tuning pipeline (sigint-train crate: dataset extraction, format conversion, train/val split, Modelfile generation, assessment)
 
 ### Architecture
 
@@ -60,6 +60,9 @@ sigint/
 - Phase 19 completed — Embedded LLM infrastructure: GGUF reader, EmbeddedProvider stub, Model CLI (list/pull/info), GET /api/models, web UI model selector, doctor checks
 - Phase 19B completed — Real llama-cpp-2 inference wiring: EmbeddedProvider generates tokens, threads + flash_attention config, tool-calling support via grammar-constrained JSON
 - Phase 20 completed — Ship readiness: CI/CD with frontend build + security audit, multi-stage Dockerfile, docker-compose with Ollama sidecar, Makefile, CONTAINER.md
+- Phase 21 completed — TUI polish: tab-based multi-view architecture (commits 81c07c5, 2ecf9cb, 3a6a53b)
+- Phase 22 completed — Compile-time plugin system: sigint-plugin crate, PluginsConfig, Orchestrator wiring, CLI plugin subcommand (commits 7691267, a9c6916, 93026e3)
+- Phase 23 completed — Model fine-tuning pipeline: sigint-train crate with dataset extraction, format conversion, train/val split, Modelfile generation, quality assessment (commits 272d2a7, c97cad0)
 
 ---
 
@@ -262,7 +265,11 @@ Phase 2 transforms SIGINT from a passive chat interface into an autonomous multi
 | DEC-P19-004 | 2026-04-04 | HuggingFace as model source | De facto hub for GGUF model distribution; model pull resolves repo IDs to download URLs; reqwest streaming with byte-counter progress. Phase 19. |
 | DEC-P19-005 | 2026-04-04 | Compile-time GPU flags via Cargo features | GPU acceleration (CUDA, Metal, Vulkan) requires compile-time vendor SDK linking; Cargo features map to llama-cpp-2 build config; default is CPU-only. Phase 19. |
 | DEC-P19-006 | 2026-04-04 | Standalone GGUF reader (no llama-cpp dependency) | Model discovery needs only header metadata, not multi-GB weights; pure-Rust reader avoids C dependencies for list/info path. Phase 19. |
+| DEC-P19-EMBEDDED-001 | 2026-04-04 | EmbeddedProvider gated behind embedded-llm Cargo feature flag | llama-cpp-2 compilation requires a C toolchain and takes several minutes; feature flag keeps default builds fast and dependency-free. Factory returns a descriptive error (mentioning the feature flag) when provider=embedded is requested without the flag. Phase 19B. |
+| DEC-P19-EMBEDDED-002 | 2026-04-04 | Load model fresh inside spawn_blocking rather than storing in struct | LlamaModel is not Send+Sync (raw C pointers). Loading fresh per call avoids unsafe Send impls while keeping the async executor happy. Model weights stay in the OS page cache so re-opens are fast. Phase 19B. |
 | DEC-P19-EMBEDDED-003 | 2026-04-04 | threads + flash_attention config fields for embedded inference | Maps to llama.cpp -t and -fa flags; threads=0 means auto-detect (llama.cpp default); flash_attention defaults to false; wired through LlamaContextParams in EmbeddedProvider. Phase 19B. |
+| DEC-P19-GGUF-001 | 2026-04-04 | Pure-Rust GGUF header reader, no weight loading | Model discovery only needs architecture/quantisation metadata, not the multi-GB weight tensors. A bespoke reader keeps the dependency surface minimal and avoids linking llama-cpp-2 for the listing path. Phase 19. |
+| DEC-P19-MODEL-CLI-001 | 2026-04-04 | Model CLI commands (list/pull/info) in sigint-cli | Model management commands added to the CLI binary for offline model workflow; list reads GGUF headers, pull downloads from HuggingFace, info shows metadata. Phase 19. |
 
 ### Implementation Issues (Inline — No GitHub Remote)
 
