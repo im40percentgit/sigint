@@ -10,7 +10,7 @@
 
 **Architecture:** Cargo workspace with 12 crates, shared `AppCore` backend, dual interface (TUI + Web), 6-role agent system with Orchestrator dispatch (5 core + optional RfRecon).
 
-**Current Phase:** Phase 23 completed — Model fine-tuning pipeline (sigint-train crate: dataset extraction, format conversion, train/val split, Modelfile generation, assessment)
+**Current Phase:** Phase 23 completed — Model fine-tuning pipeline (sigint-train crate: dataset extraction, format conversion, train/val split, Modelfile generation, assessment). Phase 24 planned — close the fine-tune loop (harvest opt-in → train shell-out → live A/B evaluate → promote/rollback).
 
 ### Architecture
 
@@ -1120,6 +1120,147 @@ Sub-phases:
 - [x] CONTAINER.md: Docker quickstart and docker-compose usage docs
 - [x] config.example.toml: added Docker Ollama URL comment
 - [x] .dockerignore: target, node_modules, .git, .claude exclusions
+
+---
+
+### Phase 24: Close the Fine-Tune Loop — Harvest → Train → Evaluate → Promote → Rollback
+**Status:** planned
+**Branch:** feature/phase24-finetune-loop
+**Decision IDs:** DEC-P24-001, DEC-P24-002, DEC-P24-003, DEC-P24-004, DEC-P24-005, DEC-P24-006, DEC-P24-007, DEC-P24-008
+**Requirements:** REQ-P24-P0-001 through REQ-P24-P0-005, REQ-P24-P1-001, REQ-P24-P2-001
+**Depends on:** Phase 19/19B (EmbeddedProvider + sigint model CLI), Phase 23 (sigint-train crate)
+
+#### Problem Statement
+
+Phase 23 shipped `crates/sigint-train/` — a dataset extraction and Modelfile-generation pipeline — but produced artifacts that no downstream sigint code consumes. A user today can run `sigint train export` and receive `train.jsonl` / `test.jsonl` / `Modelfile`, but nothing connects those artifacts back to the runtime: no trainer is invoked, no adapter is registered with `EmbeddedProvider` or Ollama, and `config.llm.model` is still edited by hand. The loop is half-built. Phase 24 closes it end-to-end so a pentester can improve sigint's tool-calling accuracy on their own corpus with a single `sigint` command chain.
+
+Evidence: reading `sigint-train/src/lib.rs`, `extract.rs`, `modelfile.rs`, `assess.rs`, and `sigint-cli/src/train.rs` confirms (a) no trainer invocation, (b) `assess::run_assess` is a placeholder that feeds ground-truth as predictions (self-evaluation), and (c) `modelfile::generate_modelfile` incorrectly points ADAPTER at training JSONL rather than a LoRA adapter binary.
+
+#### Goals
+
+- **REQ-P24-GOAL-001** — A pentester can opt an engagement into training, run a fine-tune, evaluate it against a held-out set, and promote it — all via `sigint` CLI commands — without manually editing config.toml.
+- **REQ-P24-GOAL-002** — Base vs fine-tuned models are compared with real inference numbers (tool-selection accuracy, argument-match rate), not ground-truth self-evaluation.
+- **REQ-P24-GOAL-003** — A failed promotion is recoverable via a single `sigint model rollback` command.
+
+#### Non-Goals
+
+- **REQ-P24-NOGO-001** — No GPU requirement. CPU-only baseline; any GPU path is the user's toolchain problem.
+- **REQ-P24-NOGO-002** — No built-in trainer. We do not bundle unsloth / axolotl / HF PEFT; we shell out to a user-configured command.
+- **REQ-P24-NOGO-003** — No web UI for this phase. CLI only. Web integration is Phase 25+ if the user wants.
+- **REQ-P24-NOGO-004** — No role-specific fine-tuning for v1 (flagged as P2). Whole-orchestrator model swap only.
+- **REQ-P24-NOGO-005** — No automatic promotion or live-session A/B. All transitions are user-initiated.
+- **REQ-P24-NOGO-006** — No changes to `sigint-core` Agent trait or Orchestrator. Integration happens at provider-factory and CLI layers.
+
+#### Requirements
+
+**Must-Have (P0)**
+
+- **REQ-P24-P0-001** — Training-data harvest is opt-in per engagement.
+  Acceptance: `sigint train harvest <session_id>` sets `sessions.trainable=1`. `sigint train export` filters to `WHERE trainable=1`. Default for new sessions is `trainable=0`.
+- **REQ-P24-P0-002** — A user can invoke fine-tuning through sigint.
+  Acceptance: `sigint train finetune --base <model> --output <name>` shells out to `config.train.finetune_command` with env vars `SIGINT_TRAIN_JSONL`, `SIGINT_TEST_JSONL`, `SIGINT_BASE_MODEL`, `SIGINT_OUTPUT_PATH`. Job record written to `~/.local/share/sigint/training/jobs.json`. Exit code propagated.
+- **REQ-P24-P0-003** — Evaluation runs real inference against both base and fine-tuned models.
+  Acceptance: `sigint train evaluate --base <tag> --candidate <tag>` loads `test.jsonl`, invokes both providers via the existing LlmProvider trait, runs `assess::assess` on each, prints a side-by-side diff with Δ tool-accuracy and Δ argument-match.
+- **REQ-P24-P0-004** — A fine-tuned model can be promoted to active with a single command.
+  Acceptance: `sigint model promote <tag>` detects output kind (GGUF path → embedded provider; Ollama tag → ollama provider), atomically rewrites `config.llm.model` (and `config.llm.provider` if needed), writes backup of prior config to `config.toml.bak`, appends an entry to `~/.local/share/sigint/promotion.log`.
+- **REQ-P24-P0-005** — Promotion is reversible.
+  Acceptance: `sigint model rollback` reads the last entry in promotion.log and reverses config to the prior model. Handles missing log with actionable error.
+
+**Nice-to-Have (P1)**
+
+- **REQ-P24-P1-001** — Promotion refuses to proceed if eval sample size below a threshold unless `--force` is supplied.
+  Acceptance: `sigint model promote` reads last eval result from a state file; if `total_examples < config.train.min_eval_examples` (default 50), exit 1 with actionable error.
+
+**Future Consideration (P2)**
+
+- **REQ-P24-P2-001** — Role-specific fine-tuning: `config.agents.<role>.model` overrides the global model for that agent role only. Deferred; data model (`agent_role` on ScanRecord and TrainingExample) already supports slicing by role.
+
+#### Definition of Done
+
+- **REQ-P24-GOAL-001 satisfied**: Running `sigint train harvest <id> → sigint train export → sigint train finetune → sigint train evaluate → sigint model promote` on a fixture corpus produces a successful end-to-end run (smoke test with mocked finetune command).
+- **REQ-P24-GOAL-002 satisfied**: `sigint train evaluate` invokes the LLM provider for each test example, collects predictions, and prints diffs (e.g., "Δ tool-accuracy: +4.2pp"). No ground-truth self-evaluation remains.
+- **REQ-P24-GOAL-003 satisfied**: `sigint model rollback` restores the prior `config.llm.model` value; round-trip (promote→rollback→promote) is idempotent.
+- Doctor checks for `config.train.finetune_command` presence, models_dir writability, and `ollama` CLI presence when needed.
+- `config.example.toml` documents the `[train]` section with an example `finetune_command` (unsloth/axolotl placeholder).
+- README adds a "Fine-tuning workflow" section with the full command chain.
+- All `cargo test -p sigint-train`, `-p sigint-cli`, `-p sigint-store` pass.
+- `DEC-TRAIN-005` superseded by `DEC-P24-007` (noted in DECISIONS.md); Phase 23's `modelfile::generate_modelfile` signature updated to take an optional `adapter_path: Option<&Path>` instead of conflating training data with adapter binary.
+
+### Planned Decisions
+
+- **DEC-P24-001**: Fine-tune backend is an external shell-out command, not a built-in trainer — user configures `config.train.finetune_command`, sigint passes env vars and polls for output. Chosen over `ollama create` (which only packages, doesn't train) and llama.cpp finetune (deprecated upstream). — Addresses: REQ-P24-P0-002, REQ-P24-NOGO-002
+- **DEC-P24-002**: Training-data gating via per-engagement opt-in (`sessions.trainable` column + `sigint train harvest <id>` command). Chosen over opt-out-with-redaction because engagement logs contain customer PII and the conservative default must be explicit consent. — Addresses: REQ-P24-P0-001
+- **DEC-P24-003**: Evaluation methodology combines existing 80/20 holdout split with live inference of BOTH base and candidate models against the test set. Chosen over offline-only (doesn't close the loop) and live-session A/B (needs Phase 25 telemetry). — Addresses: REQ-P24-P0-003, REQ-P24-GOAL-002
+- **DEC-P24-004**: Promotion rewrites `config.llm.model` atomically via a CLI command, appending to a promotion log. Chosen over config flag (no audit trail) and background watcher (premature, non-deterministic). — Addresses: REQ-P24-P0-004
+- **DEC-P24-005**: Rollback is manual only (`sigint model rollback`). No auto-rollback on eval-regression threshold. Chosen to keep the user in control and avoid model-swap thrashing. — Addresses: REQ-P24-P0-005
+- **DEC-P24-006**: Fine-tune scope is whole-orchestrator for v1; role-specific support flagged P2. Chosen to avoid Phase 24 touching `sigint-core` agent-config schema. — Addresses: REQ-P24-P2-001, REQ-P24-NOGO-004
+- **DEC-P24-007**: Correct Modelfile ADAPTER semantics — supersedes DEC-TRAIN-005. `generate_modelfile` takes `adapter_path: Option<&Path>`; emits ADAPTER only when a real LoRA adapter binary exists. Rationale: Phase 23 incorrectly pointed ADAPTER at training JSONL; Ollama expects a pre-trained adapter (GGUF or safetensors), not training data. This is the single required change to pre-existing Phase 23 code. — Addresses: REQ-P24-P0-002
+- **DEC-P24-008**: Fine-tune output format is detected, not prescribed. If `$SIGINT_OUTPUT_PATH` resolves to an existing `.gguf` file, the result is treated as embedded-provider input; if the path doesn't exist but the basename appears in `ollama list`, it's treated as an Ollama tag. Rationale: respects user toolchain diversity without forcing one output kind. — Addresses: REQ-P24-P0-004
+
+### Decision Log
+<!-- Guardian appends here after phase completion -->
+
+### Task Breakdown (6 discrete tasks)
+
+- [ ] **Task 1 — Harvest gating + Modelfile fix** (sigint-store migration, sigint-train, sigint-cli)
+  - Add `trainable INTEGER NOT NULL DEFAULT 0` column to `sessions` table via new migration.
+  - Add `Database::set_session_trainable(id, bool)` + `list_trainable_sessions()` methods.
+  - Update `extract::extract_all` to filter `WHERE trainable=1` (add second function `extract_all_unfiltered` for tests and back-compat).
+  - Update `modelfile::generate_modelfile` signature: `(base_model, adapter_path: Option<&Path>, system_prompt_override: Option<&str>, output_path) -> Result<()>`. Emit `ADAPTER` line only when `Some`.
+  - Add `sigint train harvest <session_id>` CLI subcommand.
+  - Acceptance: unit tests cover (a) migration adds column with default 0, (b) `extract_all` with no trainable sessions returns empty, (c) `modelfile` output contains ADAPTER iff `Some`, (d) harvest command toggles column.
+
+- [ ] **Task 2 — Fine-tune shell-out runner** (sigint-train, sigint-cli, sigint-core config)
+  - Add `TrainConfig { finetune_command: String, min_eval_examples: usize, job_dir: PathBuf }` to `sigint-core/src/config.rs`.
+  - Add `sigint-train/src/finetune.rs` module with `run_finetune(cfg, base, output) -> Result<JobRecord>`. Executes the configured command with env vars; records JobRecord (id, command, start/end, exit_code, output_path) to `job_dir/jobs.json`.
+  - Add `sigint train finetune --base <tag> --output <name>` CLI handler.
+  - Add `sigint train jobs` to list job history.
+  - Acceptance: integration test uses a mock finetune_command that `cat $SIGINT_TRAIN_JSONL > $SIGINT_OUTPUT_PATH` (fake training); verifies JobRecord persisted, exit code propagated, output file exists.
+
+- [ ] **Task 3 — Live A/B evaluation** (sigint-train, sigint-cli)
+  - Add `sigint-train/src/evaluate.rs`: `run_evaluation(provider_a, provider_b, test_examples) -> Result<ComparisonReport>`. Iterates test set, calls each provider's `chat()` with system + context from example, parses tool_calls from response, produces two prediction vectors, runs `assess::assess` on each, diffs results.
+  - Add `sigint train evaluate --base <tag> --candidate <tag>` CLI handler. Uses `factory::create_provider` twice with mutated configs.
+  - Persist last eval result to `~/.local/share/sigint/training/last_eval.json` for REQ-P24-P1-001.
+  - Acceptance: integration test with MockProvider (from Phase 17) returns canned predictions; diff shows expected Δ values.
+
+- [ ] **Task 4 — Promote + rollback** (sigint-cli, sigint-core)
+  - Add `sigint-cli/src/model.rs` subcommands `run_promote(tag)` and `run_rollback()`.
+  - Detect output kind per DEC-P24-008: check `models_dir/<tag>` (GGUF) then `ollama list` (Ollama tag).
+  - Atomic config rewrite: write to `config.toml.tmp` then `rename`. Backup to `config.toml.bak` before rewrite.
+  - Promotion log at `~/.local/share/sigint/promotion.log` (JSONL, append-only): `{ts, action, old_provider, old_model, new_provider, new_model, eval_result_ref}`.
+  - Rollback reads last promotion entry, reverses fields.
+  - P1 gate: refuse if `last_eval.json` shows `total_examples < config.train.min_eval_examples`, override with `--force`.
+  - Acceptance: round-trip test (promote → rollback → promote); atomic-write test (simulate crash between tmp and rename, verify original config intact); P1 refusal test.
+
+- [ ] **Task 5 — Doctor + config.example + README** (sigint-cli, repo root)
+  - Extend `sigint doctor` with checks: `config.train.finetune_command` exists and is executable (if set); `models_dir` writable; `ollama` CLI on PATH when any Ollama-tagged promotion exists in log.
+  - Add `[train]` section to `config.example.toml` with commented examples for unsloth/axolotl/MLX finetune_command.
+  - Add "Fine-tuning Workflow" section to README.md (or USER_GUIDE.md): harvest → export → finetune → evaluate → promote → rollback, with one code block per step.
+  - Add warning banner to `sigint train harvest` output: "Training data may contain sensitive engagement data. Review before sharing."
+  - Acceptance: `sigint doctor` passes cleanly on default config without `[train]` section (feature is optional); passes with valid `[train]`; flags bad finetune_command.
+
+- [ ] **Task 6 — End-to-end smoke test + supersedes-doc** (sigint-train integration tests, DECISIONS.md)
+  - Integration test `tests/finetune_loop.rs` that runs the full chain against an in-memory DB: seed sessions with scan records, harvest, export, finetune (mock command), evaluate (MockProvider), promote, rollback. Assert every config-state transition.
+  - Update DECISIONS.md: note that DEC-TRAIN-005 is superseded by DEC-P24-007 (Modelfile ADAPTER semantics corrected).
+  - Update `@decision` annotations in `modelfile.rs` to cite DEC-P24-007 alongside the corrected rationale.
+  - Update ARCHITECTURE.md "Fine-tuning" subsection (if one doesn't exist, add it) describing the closed loop.
+  - Acceptance: smoke test runs end-to-end in CI within 30s (mocked trainer); coverage report shows no regression in sigint-train test coverage.
+
+### Risks
+
+1. **Ollama tooling availability at runtime** — If a user promotes to an Ollama-tagged model but the Ollama daemon isn't running (or the tag was created by `ollama create` that failed silently), the next scan will fail. Mitigation: doctor check for `ollama list` before promotion; promote command probes `ollama list | grep <tag>` and refuses if missing. Risk level: medium.
+2. **Training data sensitivity (engagement logs contain customer PII)** — Opt-in harvest (DEC-P24-002) is the primary defense, but JSONL may still include IP addresses, hostnames, and tool output containing credentials. Mitigation: warning banner; documentation explicitly calls out responsibility to review before sharing; future Phase 25+ can add redaction pass as optional transform. Risk level: high (compliance-grade).
+3. **Eval-regression false negatives** — An 80/20 split from a small engagement may produce a test set of only 10-20 examples, insufficient to detect real quality regressions. Mitigation: `min_eval_examples` threshold (default 50); `sigint model promote` refuses below threshold unless `--force`; doctor warns when test.jsonl has fewer than threshold examples. Risk level: medium.
+4. **Shell-out security (user-configured finetune_command)** — The configured command runs outside any sandbox and inherits sigint's env. Mitigation: documented as a user-trust boundary (same category as `config.tools.shell.command` which is already trusted); command string echoed to stdout before execution; audit-logged. Risk level: medium — user configuration, not attacker-controllable.
+5. **Long-running training processes** — Fine-tuning can take hours. Mitigation: `sigint train finetune` runs synchronously by default (user keeps terminal open) with `--detach` flag for nohup-style detach; `sigint train jobs` and `sigint train status <job_id>` for polling. Risk level: low.
+6. **Config-rewrite corruption** — A crash during `config.toml` rewrite could brick the install. Mitigation: atomic write (temp + rename); backup to `config.toml.bak` before every promotion. Risk level: low.
+
+### Worktree Strategy
+
+- Branch: `feature/phase24-finetune-loop`
+- Worktree: `.claude/worktrees/phase24-finetune-loop`
+- Implementer sequence: Task 1 → Task 2 → Task 3 → Task 4 → (Task 5 ∥ Task 6 in parallel sub-branches optional)
+- Merge to main only after all six tasks pass integration tests and the end-to-end smoke test in Task 6 is green.
 
 ---
 
