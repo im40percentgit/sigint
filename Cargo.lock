@@ -3448,6 +3448,7 @@ dependencies = [
  "serde_json",
  "sigint-core",
  "sigint-store",
+ "tempfile",
  "tracing",
  "uuid",
 ]

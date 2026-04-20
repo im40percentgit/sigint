@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 pub mod assess;
 pub mod extract;
+pub mod finetune;
 pub mod format;
 pub mod modelfile;
 pub mod split;

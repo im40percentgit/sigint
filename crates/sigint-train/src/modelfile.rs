@@ -33,12 +33,12 @@ use anyhow::{Context, Result};
 /// under the ADAPTER directive. Supersedes DEC-TRAIN-005.
 ///
 /// # Arguments
-/// * `base_model`             — base Ollama model tag (e.g. `"llama3.2:8b"`)
-/// * `adapter_path`           — path to a LoRA adapter binary; `None` skips the
-///                              ADAPTER directive entirely
+/// * `base_model` — base Ollama model tag (e.g. `"llama3.2:8b"`)
+/// * `adapter_path` — path to a LoRA adapter binary; `None` skips the
+///   ADAPTER directive entirely
 /// * `system_prompt_override` — if `Some`, replaces the default SIGINT system
-///                              prompt embedded in the Modelfile
-/// * `output_path`            — destination path for the generated Modelfile
+///   prompt embedded in the Modelfile
+/// * `output_path` — destination path for the generated Modelfile
 pub fn generate_modelfile(
     base_model: &str,
     adapter_path: Option<&Path>,

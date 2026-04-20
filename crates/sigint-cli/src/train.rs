@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 
 use sigint_core::{AppCore, Error};
-use sigint_train::{assess, extract, format, modelfile, split, stats};
+use sigint_train::{assess, extract, finetune, format, modelfile, split, stats};
 
 /// Return the default training output directory: `~/.local/share/sigint/training/`.
 fn training_dir() -> Result<PathBuf, Error> {
@@ -252,5 +252,96 @@ pub async fn run_assess(
     println!("Note: predictions above are ground-truth (self-evaluation). Supply");
     println!("model output to assess real accuracy.");
 
+    Ok(())
+}
+
+/// `sigint train finetune --base <tag> --output <name>` — run the configured trainer.
+///
+/// Loads `[train].finetune_command` from config, resolves paths for
+/// `train.jsonl`/`test.jsonl` and the output adapter, and shells out to the
+/// user-configured trainer (DEC-P24-001). Stdout/stderr stream live.
+pub async fn run_finetune(
+    core: AppCore,
+    base: String,
+    output: String,
+    train_dir: Option<String>,
+) -> Result<(), Error> {
+    let cfg = &core.config.train;
+
+    let data_dir = match train_dir {
+        Some(p) => PathBuf::from(p),
+        None => training_dir()?,
+    };
+    let train_jsonl = data_dir.join("train.jsonl");
+    let test_jsonl = data_dir.join("test.jsonl");
+
+    if !train_jsonl.exists() || !test_jsonl.exists() {
+        return Err(Error::Other(format!(
+            "Training data not found in {}. Run `sigint train export` first.",
+            data_dir.display()
+        )));
+    }
+
+    let job_dir = cfg
+        .job_dir
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(training_dir)?;
+    let output_path = job_dir.join(&output);
+
+    let record = finetune::run_finetune(cfg, &base, &output_path, &train_jsonl, &test_jsonl)
+        .map_err(|e| Error::Other(format!("fine-tune failed: {}", e)))?;
+
+    let duration = record
+        .finished_at
+        .map(|f| f.signed_duration_since(record.started_at).num_seconds())
+        .unwrap_or(0);
+
+    println!();
+    println!("Fine-tune job {}", record.id);
+    println!("  status:    {:?}", record.status);
+    println!("  base:      {}", record.base_model);
+    println!("  output:    {}", record.output_path.display());
+    println!("  exit_code: {:?}", record.exit_code);
+    println!("  duration:  {}s", duration);
+    Ok(())
+}
+
+/// `sigint train jobs` — list all recorded fine-tune jobs.
+///
+/// Reads `job_dir/jobs.json` (JSONL) and prints one line per record.
+pub async fn run_jobs(core: AppCore) -> Result<(), Error> {
+    let job_dir = core
+        .config
+        .train
+        .job_dir
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(training_dir)?;
+
+    let records = finetune::list_jobs(&job_dir)
+        .map_err(|e| Error::Other(format!("failed to list jobs: {}", e)))?;
+
+    if records.is_empty() {
+        println!("No training jobs yet. Run `sigint train finetune ...` to start one.");
+        return Ok(());
+    }
+
+    for r in &records {
+        let duration = r
+            .finished_at
+            .map(|f| f.signed_duration_since(r.started_at).num_seconds())
+            .map(|s| format!("{}s", s))
+            .unwrap_or_else(|| "running".to_string());
+        println!(
+            "{}  {:?}  {} -> {}  {}  {}",
+            &r.id[..r.id.len().min(8)],
+            r.status,
+            r.base_model,
+            r.output_path.display(),
+            r.started_at.to_rfc3339(),
+            duration
+        );
+    }
     Ok(())
 }

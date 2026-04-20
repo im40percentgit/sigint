@@ -200,6 +200,24 @@ enum TrainCommands {
         /// Session ID (full UUID or unique prefix, e.g. "a1b2c3d4").
         session_id: String,
     },
+    /// Run the configured fine-tune command against exported training data.
+    ///
+    /// Shells out to `[train].finetune_command` with env vars SIGINT_TRAIN_JSONL,
+    /// SIGINT_TEST_JSONL, SIGINT_BASE_MODEL, SIGINT_OUTPUT_PATH. Records a job
+    /// entry in `jobs.json`. Streams training output live.
+    Finetune {
+        /// Base model tag (e.g. "llama3.2:8b").
+        #[arg(long)]
+        base: String,
+        /// Output adapter/model name (resolved under job_dir).
+        #[arg(long)]
+        output: String,
+        /// Directory containing train.jsonl and test.jsonl (default: training_dir).
+        #[arg(long)]
+        train_dir: Option<String>,
+    },
+    /// List recorded fine-tune jobs from `jobs.json`.
+    Jobs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -417,6 +435,10 @@ async fn main() {
             TrainCommands::Harvest { session_id } => {
                 train::run_harvest(core, session_id).await
             }
+            TrainCommands::Finetune { base, output, train_dir } => {
+                train::run_finetune(core, base, output, train_dir).await
+            }
+            TrainCommands::Jobs => train::run_jobs(core).await,
         },
     };
 
