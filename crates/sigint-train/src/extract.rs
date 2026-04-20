@@ -20,8 +20,29 @@ use sigint_store::db::Database;
 
 use crate::{TrainingExample, TrainingFunction, TrainingMessage, TrainingStats, TrainingToolCall};
 
-/// Extract training examples from all sessions in the database.
+/// Extract training examples from trainable sessions only.
+///
+/// @decision DEC-P24-002
+/// @title Training data extraction filters to `trainable=1` sessions
+/// @status accepted
+/// @rationale Engagement logs may contain customer PII. Only sessions
+/// explicitly opted-in via `sigint train harvest <id>` (`trainable=1`)
+/// are included in fine-tune datasets. This is the default path used
+/// by `sigint train export`. See `extract_all_unfiltered` for unrestricted
+/// access (tests and back-compat only).
 pub fn extract_all(db: &Database) -> Result<(Vec<TrainingExample>, TrainingStats)> {
+    let sessions = db.list_trainable_sessions()?;
+    let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
+    extract_sessions(db, &session_ids)
+}
+
+/// Extract training examples from ALL sessions, regardless of `trainable` flag.
+///
+/// Preserved for back-compat and testing. Production code should use
+/// `extract_all` (which filters to `trainable=1`) to prevent unintended
+/// PII exposure. Callers that want the unfiltered behaviour must opt in
+/// explicitly by name.
+pub fn extract_all_unfiltered(db: &Database) -> Result<(Vec<TrainingExample>, TrainingStats)> {
     let sessions = db.list_sessions()?;
     let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
     extract_sessions(db, &session_ids)
@@ -343,6 +364,64 @@ mod tests {
         assert_eq!(stats.total_examples, 0);
         assert_eq!(stats.total_sessions, 0);
         assert_eq!(stats.skipped_failures, 0);
+    }
+
+    /// DEC-P24-002: when sessions exist but none are marked trainable,
+    /// `extract_all` must return empty without error.
+    #[test]
+    fn extract_all_no_trainable_sessions_returns_empty() {
+        use sigint_core::types::Session;
+        use sigint_store::scans::ScanRecord;
+
+        let db = sigint_store::db::Database::open_in_memory().unwrap();
+        // Session exists with a successful scan record — but trainable=0 (default).
+        let session = Session::new("untrained");
+        db.create_session(&session).unwrap();
+
+        let mut rec = ScanRecord::new(session.id, "nmap_scan", r#"{"target":"10.0.0.1"}"#);
+        rec.exit_code = Some(0);
+        rec.output = Some("PORT 80/tcp open http".to_string());
+        db.create_scan_record(&rec).unwrap();
+
+        // extract_all must return nothing because the session is not trainable.
+        let (examples, stats) = extract_all(&db).unwrap();
+        assert!(
+            examples.is_empty(),
+            "extract_all should skip sessions with trainable=0"
+        );
+        assert_eq!(stats.total_examples, 0);
+
+        // extract_all_unfiltered should still find it.
+        let (unfiltered_examples, _) = extract_all_unfiltered(&db).unwrap();
+        assert_eq!(
+            unfiltered_examples.len(),
+            1,
+            "extract_all_unfiltered should include non-trainable sessions"
+        );
+    }
+
+    /// DEC-P24-002: after `set_session_trainable`, `extract_all` includes the session.
+    #[test]
+    fn extract_all_includes_trainable_sessions() {
+        use sigint_core::types::Session;
+        use sigint_store::scans::ScanRecord;
+
+        let db = sigint_store::db::Database::open_in_memory().unwrap();
+        let session = Session::new("opted-in");
+        db.create_session(&session).unwrap();
+
+        let mut rec = ScanRecord::new(session.id, "gobuster", r#"{"target":"10.0.0.2"}"#);
+        rec.exit_code = Some(0);
+        rec.output = Some("/admin 200 OK".to_string());
+        db.create_scan_record(&rec).unwrap();
+
+        // Opt-in the session.
+        db.set_session_trainable(&session.id.to_string(), true)
+            .unwrap();
+
+        let (examples, stats) = extract_all(&db).unwrap();
+        assert_eq!(examples.len(), 1);
+        assert_eq!(stats.total_examples, 1);
     }
 
     #[test]

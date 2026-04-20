@@ -122,7 +122,9 @@ pub async fn run_create(
 
     let modelfile_path = out_dir.join("Modelfile");
 
-    modelfile::generate_modelfile(&base_model, &train_path, &modelfile_path)
+    // Pass adapter_path = None: at `create` time, no adapter binary exists yet.
+    // The user will replace this after fine-tuning (DEC-P24-007).
+    modelfile::generate_modelfile(&base_model, None, None, &modelfile_path)
         .map_err(|e| Error::Other(format!("failed to generate Modelfile: {}", e)))?;
 
     println!("Generated Modelfile -> {}", modelfile_path.display());
@@ -143,6 +145,52 @@ pub async fn run_stats(core: AppCore) -> Result<(), Error> {
         .map_err(|e| Error::Other(format!("extraction failed: {}", e)))?;
 
     stats::print_stats(&train_stats);
+    Ok(())
+}
+
+/// `sigint train harvest <session_id>` — opt a session into fine-tuning harvest.
+///
+/// Sets `sessions.trainable = 1` for the given session. Only harvested sessions
+/// are included when `sigint train export` extracts training data.
+///
+/// @decision DEC-P24-002
+/// @title Harvest is explicit opt-in; default is trainable=0
+/// @status accepted
+/// @rationale Engagement logs contain customer PII (IPs, hostnames, tool output).
+/// Requiring an explicit harvest step ensures users review data before it enters
+/// the fine-tune pipeline. The warning banner below is mandatory per Task 5 plan.
+pub async fn run_harvest(core: AppCore, session_id: String) -> Result<(), Error> {
+    let db_path = core.config.resolved_db_path();
+    let db = sigint_store::db::Database::open(&db_path)
+        .map_err(|e| Error::Database(format!("Cannot open database: {e}")))?;
+
+    // Verify the session exists before toggling the flag.
+    // Try exact UUID match first; fall back to prefix search.
+    let resolved_id = if let Ok(uuid) = uuid::Uuid::parse_str(&session_id) {
+        match db.get_session(uuid)? {
+            Some(s) => s.id.to_string(),
+            None => {
+                return Err(Error::Other(format!(
+                    "No session found with id '{session_id}'"
+                )))
+            }
+        }
+    } else {
+        // Accept short prefixes (e.g. first 8 hex chars).
+        let s = db
+            .get_session_by_prefix(&session_id)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        s.id.to_string()
+    };
+
+    db.set_session_trainable(&resolved_id, true)
+        .map_err(|e| Error::Other(format!("Failed to mark session as trainable: {e}")))?;
+
+    println!("Session {resolved_id} marked as trainable.");
+    println!();
+    println!(
+        "WARNING: Training data may contain sensitive engagement data. Review before sharing."
+    );
     Ok(())
 }
 

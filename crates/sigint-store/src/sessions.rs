@@ -134,6 +134,61 @@ impl Database {
         }
     }
 
+    /// Mark a session as eligible (or ineligible) for fine-tuning harvest.
+    ///
+    /// @decision DEC-P24-002
+    /// @title Per-engagement opt-in for training data harvest
+    /// @status accepted
+    /// @rationale Engagement logs may contain customer PII (IP addresses,
+    /// hostnames, credential fragments). The conservative default is
+    /// `trainable=0` (opt-out). This method is the only path to `trainable=1`.
+    /// The CLI `sigint train harvest <id>` is the user-facing surface.
+    ///
+    /// Returns `Err` if no session with `session_id` exists (0 rows affected).
+    pub fn set_session_trainable(&self, session_id: &str, trainable: bool) -> Result<(), Error> {
+        self.with_conn(|conn| {
+            let rows_affected = conn
+                .execute(
+                    "UPDATE sessions SET trainable = ?1 WHERE id = ?2",
+                    params![trainable as i64, session_id],
+                )
+                .map_err(|e| Error::Database(format!("set_session_trainable failed: {}", e)))?;
+
+            if rows_affected == 0 {
+                return Err(Error::Other(format!(
+                    "No session found with id '{session_id}'"
+                )));
+            }
+            Ok(())
+        })
+    }
+
+    /// Return all sessions where `trainable = 1`, ordered by creation time descending.
+    ///
+    /// Used by `extract::extract_all` to filter to user-approved engagement data.
+    /// Reuses `row_to_session` — the `trainable` column is a filter predicate,
+    /// not mapped onto the `Session` struct (it remains a DB-internal detail).
+    pub fn list_trainable_sessions(&self) -> Result<Vec<Session>, Error> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id
+                     FROM sessions WHERE trainable = 1 ORDER BY created_at DESC",
+                )
+                .map_err(|e| Error::Database(e.to_string()))?;
+
+            let sessions = stmt
+                .query_map([], |row| {
+                    Ok(row_to_session(row).unwrap_or_else(|_| Session::new("<error>")))
+                })
+                .map_err(|e| Error::Database(e.to_string()))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            Ok(sessions)
+        })
+    }
+
     /// Delete a session and all its messages (CASCADE).
     pub fn delete_session(&self, id: Uuid) -> Result<(), Error> {
         self.with_conn(|conn| {
@@ -310,6 +365,39 @@ mod tests {
         db.create_session(&s).unwrap();
         let fetched = db.get_session(s.id).unwrap().unwrap();
         assert_eq!(fetched.campaign_id, s.campaign_id);
+    }
+
+    #[test]
+    fn set_session_trainable_and_list() {
+        let db = Database::open_in_memory().unwrap();
+        let s1 = Session::new("alpha");
+        let s2 = Session::new("beta");
+        db.create_session(&s1).unwrap();
+        db.create_session(&s2).unwrap();
+
+        // Initially no trainable sessions.
+        let trainable = db.list_trainable_sessions().unwrap();
+        assert!(trainable.is_empty());
+
+        // Mark s1 as trainable.
+        db.set_session_trainable(&s1.id.to_string(), true).unwrap();
+        let trainable = db.list_trainable_sessions().unwrap();
+        assert_eq!(trainable.len(), 1);
+        assert_eq!(trainable[0].id, s1.id);
+
+        // Mark s1 not-trainable again (idempotent toggle).
+        db.set_session_trainable(&s1.id.to_string(), false).unwrap();
+        let trainable = db.list_trainable_sessions().unwrap();
+        assert!(trainable.is_empty());
+    }
+
+    #[test]
+    fn set_session_trainable_unknown_id_errors() {
+        let db = Database::open_in_memory().unwrap();
+        let result = db.set_session_trainable("00000000-0000-0000-0000-000000000000", true);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("No session found"), "got: {msg}");
     }
 
     #[test]

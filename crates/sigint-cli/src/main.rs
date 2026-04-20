@@ -191,6 +191,15 @@ enum TrainCommands {
         #[arg(long)]
         data: Option<String>,
     },
+    /// Opt a session into the fine-tuning data harvest.
+    ///
+    /// Sets the `trainable` flag on the given session so that `sigint train export`
+    /// includes its scan history in the training dataset. Accepts a full UUID or
+    /// a unique prefix (at least 4 characters).
+    Harvest {
+        /// Session ID (full UUID or unique prefix, e.g. "a1b2c3d4").
+        session_id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -404,6 +413,9 @@ async fn main() {
             TrainCommands::Stats => train::run_stats(core).await,
             TrainCommands::Assess { model, data } => {
                 train::run_assess(core, model, data).await
+            }
+            TrainCommands::Harvest { session_id } => {
+                train::run_harvest(core, session_id).await
             }
         },
     };
