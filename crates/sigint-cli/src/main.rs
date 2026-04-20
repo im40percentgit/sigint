@@ -218,6 +218,22 @@ enum TrainCommands {
     },
     /// List recorded fine-tune jobs from `jobs.json`.
     Jobs,
+    /// Compare two LLM providers against held-out test data (live A/B inference).
+    ///
+    /// Calls each provider's chat() for every test example, collects tool-call
+    /// predictions, and reports accuracy deltas (candidate minus base).
+    /// Persists the result to job_dir/last_eval.json for use by `sigint model promote`.
+    Evaluate {
+        /// Base model tag (e.g. "llama3.2:8b").
+        #[arg(long)]
+        base: String,
+        /// Candidate model tag to compare against base (e.g. "sigint-ft:latest").
+        #[arg(long)]
+        candidate: String,
+        /// Path to test JSONL (default: ~/.local/share/sigint/training/test.jsonl).
+        #[arg(long)]
+        test_data: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -439,6 +455,9 @@ async fn main() {
                 train::run_finetune(core, base, output, train_dir).await
             }
             TrainCommands::Jobs => train::run_jobs(core).await,
+            TrainCommands::Evaluate { base, candidate, test_data } => {
+                train::run_evaluate(core, base, candidate, test_data).await
+            }
         },
     };
 

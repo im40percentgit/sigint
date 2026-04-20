@@ -20,7 +20,8 @@
 use std::path::PathBuf;
 
 use sigint_core::{AppCore, Error};
-use sigint_train::{assess, extract, finetune, format, modelfile, split, stats};
+use sigint_llm::factory::create_provider;
+use sigint_train::{assess, evaluate, extract, finetune, format, modelfile, split, stats};
 
 /// Return the default training output directory: `~/.local/share/sigint/training/`.
 fn training_dir() -> Result<PathBuf, Error> {
@@ -343,5 +344,135 @@ pub async fn run_jobs(core: AppCore) -> Result<(), Error> {
             duration
         );
     }
+    Ok(())
+}
+
+/// `sigint train evaluate --base <tag> --candidate <tag>` — live A/B comparison.
+///
+/// Loads test examples from test_data (or the default training dir), builds
+/// two provider configs by cloning core.config.llm and mutating .model,
+/// runs live inference on both, and prints a formatted comparison report.
+/// Persists the result to job_dir/last_eval.json for Task 4's promote gate.
+///
+/// @decision DEC-P24-003
+/// @title CLI drives run_comparison with factory-created providers
+/// @status accepted
+/// @rationale create_provider handles all provider-type dispatch centrally.
+/// Mutating only .model on a cloned config means auth, base_url, and other
+/// provider settings are inherited from the user's live config, so no extra
+/// flags are needed for the common Ollama case. Unknown model tags surface
+/// as a clean error pointing at `sigint doctor`.
+pub async fn run_evaluate(
+    core: AppCore,
+    base: String,
+    candidate: String,
+    test_data: Option<String>,
+) -> Result<(), Error> {
+    let out_dir = training_dir()?;
+
+    let test_path = match test_data {
+        Some(ref p) => PathBuf::from(p),
+        None => out_dir.join("test.jsonl"),
+    };
+
+    if !test_path.exists() {
+        return Err(Error::Other(format!(
+            "Test data not found at {}. Run `sigint train export` first.",
+            test_path.display()
+        )));
+    }
+
+    let examples = format::read_jsonl(&test_path)
+        .map_err(|e| Error::Other(format!("failed to read test JSONL: {}", e)))?;
+
+    if examples.is_empty() {
+        return Err(Error::Other(
+            "Test set is empty — no examples to compare against.".into(),
+        ));
+    }
+
+    // Build two provider configs by cloning the live LLM config and mutating
+    // only the model tag. This preserves base_url, auth, and provider type.
+    let mut base_cfg = core.config.llm.clone();
+    base_cfg.model = base.clone();
+
+    let mut cand_cfg = core.config.llm.clone();
+    cand_cfg.model = candidate.clone();
+
+    let base_provider = create_provider(&base_cfg).map_err(|e| {
+        Error::Other(format!(
+            "Cannot create base provider for '{}': {}. Run `sigint doctor` to check your setup.",
+            base, e
+        ))
+    })?;
+
+    let cand_provider = create_provider(&cand_cfg).map_err(|e| {
+        Error::Other(format!(
+            "Cannot create candidate provider for '{}': {}. Run `sigint doctor` to check your setup.",
+            candidate, e
+        ))
+    })?;
+
+    println!(
+        "Comparing {} examples: base='{}' vs candidate='{}'",
+        examples.len(),
+        base,
+        candidate
+    );
+    println!();
+
+    let report = evaluate::run_comparison(
+        base_provider.as_ref(),
+        cand_provider.as_ref(),
+        &examples,
+        &base,
+        &candidate,
+    )
+    .await
+    .map_err(|e| Error::Other(format!("comparison failed: {}", e)))?;
+
+    // Print formatted report.
+    println!(
+        "Base:         {:<30}  tool_accuracy {:5.1}%  argument_match {:5.1}%",
+        report.base_tag,
+        report.base_results.tool_accuracy * 100.0,
+        report.base_results.argument_accuracy * 100.0,
+    );
+    println!(
+        "Candidate:    {:<30}  tool_accuracy {:5.1}%  argument_match {:5.1}%",
+        report.candidate_tag,
+        report.candidate_results.tool_accuracy * 100.0,
+        report.candidate_results.argument_accuracy * 100.0,
+    );
+    println!();
+
+    let delta_sign = |v: f64| if v >= 0.0 { "+" } else { "" };
+    println!(
+        "delta tool-acc:   {}{:.1}pp",
+        delta_sign(report.tool_accuracy_delta),
+        report.tool_accuracy_delta * 100.0,
+    );
+    println!(
+        "delta arg-match:  {}{:.1}pp",
+        delta_sign(report.argument_match_delta),
+        report.argument_match_delta * 100.0,
+    );
+    println!();
+    println!("Evaluated on {} test examples.", report.total_examples);
+
+    // Persist last_eval.json in job_dir for Task 4's promote gate.
+    let job_dir = core
+        .config
+        .train
+        .job_dir
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(training_dir)?;
+
+    evaluate::persist_last_eval(&job_dir, &report)
+        .map_err(|e| Error::Other(format!("failed to persist last_eval.json: {}", e)))?;
+
+    println!("Saved comparison report to {}/last_eval.json", job_dir.display());
+
     Ok(())
 }

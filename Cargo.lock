@@ -3447,8 +3447,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sigint-core",
+ "sigint-llm",
  "sigint-store",
  "tempfile",
+ "tokio",
  "tracing",
  "uuid",
 ]
