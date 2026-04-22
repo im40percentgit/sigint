@@ -36,4 +36,9 @@ pub struct AppState {
     pub approval_registry: Arc<ApprovalRegistry>,
     /// Manages concurrent scan pipelines (start, status, cancel, list).
     pub scan_service: Arc<ScanService>,
+    /// Resolved Bearer API key for this server instance.
+    ///
+    /// Set once at startup by [`crate::auth::resolve_api_key`] and used by
+    /// [`crate::auth::auth_middleware`] on every authenticated request.
+    pub api_key: String,
 }

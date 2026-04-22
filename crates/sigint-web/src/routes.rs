@@ -378,6 +378,14 @@ mod tests {
 
     use crate::create_router;
 
+    /// Test API key — must match the one set in `test_state().api_key`.
+    const TEST_KEY: &str = "test-key";
+
+    /// Return the `Authorization: Bearer <token>` header value for test requests.
+    fn auth_header() -> String {
+        format!("Bearer {}", TEST_KEY)
+    }
+
     fn test_state() -> AppState {
         let db = Database::open_in_memory().expect("in-memory db");
         let event_bus = EventBus::new();
@@ -394,6 +402,7 @@ mod tests {
             config,
             approval_registry,
             scan_service,
+            api_key: "test-key".to_string(),
         }
     }
 
@@ -409,6 +418,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/health")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -424,6 +434,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/sessions")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -439,6 +450,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/sessions/00000000-0000-0000-0000-000000000000")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -450,6 +462,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/sessions/bad-id")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -468,6 +481,7 @@ mod tests {
         let app = create_router(state);
         let req = Request::builder()
             .uri(format!("/api/sessions/{}/assets", session.id))
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -483,6 +497,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/sessions/00000000-0000-0000-0000-000000000000/assets")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -500,6 +515,7 @@ mod tests {
         let app = create_router(state);
         let req = Request::builder()
             .uri(format!("/api/sessions/{}/findings", session.id))
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -514,6 +530,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/sessions/00000000-0000-0000-0000-000000000000/findings")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -527,6 +544,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/report/00000000-0000-0000-0000-000000000000")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -542,6 +560,7 @@ mod tests {
         let app = create_router(state);
         let req = Request::builder()
             .uri(format!("/api/report/{}?format=markdown", session.id))
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -558,6 +577,7 @@ mod tests {
             .method("POST")
             .uri("/api/scan")
             .header("content-type", "application/json")
+            .header("Authorization", auth_header())
             .body(Body::from(r#"{"target":"example.com"}"#))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -579,6 +599,7 @@ mod tests {
             .method("POST")
             .uri("/api/scan")
             .header("content-type", "application/json")
+            .header("Authorization", auth_header())
             .body(Body::from(r#"{"target":""}"#))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -624,6 +645,7 @@ mod tests {
         let app = create_router(state);
         let req = Request::builder()
             .uri(format!("/api/diff/{}/{}", s1.id, s2.id))
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -646,6 +668,7 @@ mod tests {
         let fake_id = "00000000-0000-0000-0000-000000000000";
         let req = Request::builder()
             .uri(format!("/api/diff/{}/{}", s1.id, fake_id))
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -661,6 +684,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/models")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -677,6 +701,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/scan/00000000-0000-0000-0000-000000000000/status")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -689,6 +714,7 @@ mod tests {
         let req = Request::builder()
             .method("DELETE")
             .uri("/api/scan/00000000-0000-0000-0000-000000000000")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -700,6 +726,7 @@ mod tests {
         let app = create_router(test_state());
         let req = Request::builder()
             .uri("/api/scans")
+            .header("Authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();

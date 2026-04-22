@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 fn default_min_eval_examples() -> usize {
@@ -66,6 +67,74 @@ impl Default for TrainConfig {
     }
 }
 
+/// Web server security configuration.
+///
+/// Controls API authentication, allowed CORS origins, and bind address.
+///
+/// @decision DEC-WEB-AUTH-001
+/// @title Bearer token + shared secret for API auth (vs OAuth/JWT/mTLS)
+/// @status accepted
+/// @rationale SIGINT is a single-operator pentest tool, not a multi-tenant
+/// service. A shared Bearer secret is the simplest defensible posture: no
+/// token rotation infra, no key distribution ceremony, no third-party IDP
+/// dependency. OAuth/JWT would add significant complexity for zero practical
+/// benefit in a local/VPN-bound deployment. The secret is auto-generated on
+/// first boot (DEC-WEB-AUTH-002) so default installs are immediately secure.
+///
+/// @decision DEC-WEB-AUTH-002
+/// @title Auto-generate and persist API key on first boot
+/// @status accepted
+/// @rationale If no key is configured the server generates a 32-byte
+/// URL-safe random token, prints it once to stderr, and persists it to
+/// ~/.config/sigint/.api_key (mode 0600). Subsequent restarts load the
+/// persisted key so the operator isn't locked out. This beats both
+/// "ship with no auth" (insecure) and "refuse to start without a key"
+/// (bad UX that causes operators to disable auth entirely).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WebConfig {
+    /// Shared Bearer secret for all REST and WebSocket endpoints.
+    ///
+    /// Resolution order:
+    /// 1. This field (from `[web]` in config.toml)
+    /// 2. `SIGINT_API_KEY_AUTH` environment variable
+    /// 3. Key persisted at `~/.config/sigint/.api_key` (written on first boot)
+    /// 4. Auto-generate a 32-byte URL-safe random token; persist + print to stderr
+    ///
+    /// Note: do NOT set `SIGINT_API_KEY` — that env var is the LLM provider key.
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    /// Allowed CORS origins for the web UI.
+    ///
+    /// Defaults to `["http://localhost:8080", "http://127.0.0.1:8080"]` when
+    /// the list is empty, preventing cross-origin access in the default config.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
+
+    /// TCP address the web server binds to.
+    ///
+    /// `None` keeps the CLI's current default (set in the `serve` subcommand).
+    /// Setting this in config.toml overrides the CLI default without requiring
+    /// a flag on every invocation.
+    #[serde(default)]
+    pub bind_addr: Option<SocketAddr>,
+}
+
+impl WebConfig {
+    /// Return the list of allowed CORS origins, falling back to localhost
+    /// when the configured list is empty.
+    pub fn effective_cors_origins(&self) -> Vec<String> {
+        if self.cors_origins.is_empty() {
+            vec![
+                "http://localhost:8080".to_string(),
+                "http://127.0.0.1:8080".to_string(),
+            ]
+        } else {
+            self.cors_origins.clone()
+        }
+    }
+}
+
 /// Top-level configuration for SIGINT.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -97,6 +166,11 @@ pub struct Config {
     /// all fields default to no-ops until `finetune_command` is set.
     #[serde(default)]
     pub train: TrainConfig,
+
+    /// Web server security settings (auth key, CORS, bind address).
+    /// The `[web]` section is optional — safe defaults apply when absent.
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 /// LLM provider configuration.
@@ -377,7 +451,10 @@ impl Config {
     ///
     /// Falls back to `~/.local/share/sigint/models` when the field is absent.
     pub fn resolved_models_dir(&self) -> PathBuf {
-        let raw = self.llm.models_dir.as_deref()
+        let raw = self
+            .llm
+            .models_dir
+            .as_deref()
             .unwrap_or("~/.local/share/sigint/models");
         if let Some(stripped) = raw.strip_prefix("~/") {
             if let Some(home) = dirs_home() {
@@ -592,13 +669,16 @@ model = "mistral"
 
     #[test]
     fn tools_config_resolve_output_cap() {
-        let cfg: Config = toml::from_str(r#"
+        let cfg: Config = toml::from_str(
+            r#"
 [tools]
 default_output_cap = 1000
 
 [tools.overrides.nmap]
 output_cap = 5000
-"#).expect("parse failed");
+"#,
+        )
+        .expect("parse failed");
         assert_eq!(cfg.tools.output_cap_for("nmap"), 5000);
         assert_eq!(cfg.tools.output_cap_for("shell"), 1000);
         assert_eq!(cfg.tools.output_cap_for("nonexistent"), 1000);
@@ -693,5 +773,68 @@ gpu_layers = -1
 "#;
         let cfg: Config = toml::from_str(toml_str).expect("parse failed");
         assert_eq!(cfg.llm.gpu_layers, Some(-1));
+    }
+
+    #[test]
+    fn web_config_defaults_to_empty() {
+        let cfg = Config::default();
+        assert!(cfg.web.api_key.is_none());
+        assert!(cfg.web.cors_origins.is_empty());
+        assert!(cfg.web.bind_addr.is_none());
+    }
+
+    #[test]
+    fn web_config_effective_cors_origins_fallback() {
+        let cfg = Config::default();
+        let origins = cfg.web.effective_cors_origins();
+        assert_eq!(origins.len(), 2);
+        assert!(origins.contains(&"http://localhost:8080".to_string()));
+        assert!(origins.contains(&"http://127.0.0.1:8080".to_string()));
+    }
+
+    #[test]
+    fn web_config_effective_cors_origins_custom() {
+        let cfg: Config = toml::from_str(
+            r#"
+[web]
+cors_origins = ["https://app.example.com"]
+"#,
+        )
+        .expect("parse failed");
+        let origins = cfg.web.effective_cors_origins();
+        assert_eq!(origins, vec!["https://app.example.com".to_string()]);
+    }
+
+    #[test]
+    fn web_config_parses_api_key_from_toml() {
+        let cfg: Config = toml::from_str(
+            r#"
+[web]
+api_key = "test-secret-token"
+"#,
+        )
+        .expect("parse failed");
+        assert_eq!(cfg.web.api_key, Some("test-secret-token".to_string()));
+    }
+
+    #[test]
+    fn web_config_parses_bind_addr() {
+        let cfg: Config = toml::from_str(
+            r#"
+[web]
+bind_addr = "127.0.0.1:9090"
+"#,
+        )
+        .expect("parse failed");
+        let addr = cfg.web.bind_addr.expect("bind_addr should be set");
+        assert_eq!(addr.port(), 9090);
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
+    }
+
+    #[test]
+    fn web_config_missing_section_uses_defaults() {
+        let cfg: Config = toml::from_str("[llm]\nmodel = \"mistral\"").expect("parse failed");
+        assert!(cfg.web.api_key.is_none());
+        assert!(cfg.web.cors_origins.is_empty());
     }
 }

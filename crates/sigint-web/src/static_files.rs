@@ -114,6 +114,7 @@ mod tests {
             config,
             approval_registry,
             scan_service,
+            api_key: "test-key".to_string(),
         }
     }
 
