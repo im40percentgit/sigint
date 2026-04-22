@@ -22,4 +22,12 @@ pub enum ReconError {
     /// ReconEngine was constructed with no discovery modules.
     #[error("no modules configured")]
     NoModules,
+
+    /// The target failed the SSRF validation guard.
+    ///
+    /// Returned when the target resolves to a private/internal address
+    /// (loopback, link-local, RFC1918) and neither `allow_internal` is set
+    /// nor the target appears in `target_allowlist`. See `validate::validate_target`.
+    #[error("invalid target: {0}")]
+    InvalidTarget(String),
 }

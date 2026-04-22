@@ -67,6 +67,44 @@ impl Default for TrainConfig {
     }
 }
 
+/// Recon engine security configuration.
+///
+/// Controls whether the engine is permitted to scan private/internal
+/// network ranges (loopback, RFC1918, link-local) and provides an
+/// explicit per-operator allowlist for internal pentest environments.
+///
+/// @decision DEC-RECON-VALIDATE-001
+/// @title Deny-by-default SSRF guard with opt-in for internal pentests
+/// @status accepted
+/// @rationale The primary SSRF risk (Finding #3 from the /cso audit) is an
+/// unauthenticated attacker passing 169.254.169.254, 10.x.x.x, or 127.0.0.1
+/// as the scan target to map the host's internal network or exfiltrate cloud
+/// metadata credentials (IMDS). `allow_internal = false` is the default so
+/// default-installed SIGINT instances cannot be weaponised for this attack.
+/// Operators who legitimately need to scan their own internal infrastructure
+/// (VPN-connected lab networks, internal dev servers) can set
+/// `allow_internal = true` in their config.toml. The `target_allowlist`
+/// provides a finer-grained alternative: specific hosts/CIDRs are permitted
+/// even when `allow_internal` is false, which covers staging environments
+/// reachable via VPN without opening the entire RFC1918 space.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReconConfig {
+    /// Allow recon against loopback / link-local / RFC1918 ranges.
+    ///
+    /// Default false — operators doing internal pentests must explicitly opt in.
+    /// Setting this to true bypasses the SSRF guard entirely, so only set it
+    /// when SIGINT is deployed in a trusted, isolated environment.
+    #[serde(default)]
+    pub allow_internal: bool,
+
+    /// Custom allowlist of CIDR ranges or hostnames to permit even when
+    /// `allow_internal` is false. Useful for staging environments behind a VPN.
+    ///
+    /// Examples: `["10.10.10.0/24", "staging.internal"]`
+    #[serde(default)]
+    pub target_allowlist: Vec<String>,
+}
+
 /// Web server security configuration.
 ///
 /// Controls API authentication, allowed CORS origins, and bind address.
@@ -171,6 +209,11 @@ pub struct Config {
     /// The `[web]` section is optional — safe defaults apply when absent.
     #[serde(default)]
     pub web: WebConfig,
+
+    /// Recon engine security settings (SSRF guard, internal allowlist).
+    /// The `[recon]` section is optional — deny-by-default applies when absent.
+    #[serde(default)]
+    pub recon: ReconConfig,
 }
 
 /// LLM provider configuration.

@@ -97,6 +97,30 @@ default_output_cap = 1048576  # 1 MB
 # Default: ~/.local/share/sigint/training/
 # job_dir = "~/.local/share/sigint/training"
 
+# ── Recon engine security (optional) ─────────────────────────────────────────
+#
+# The [recon] section controls the SSRF guard on ReconEngine::run().
+# By default, loopback (127.0.0.0/8, ::1), link-local (169.254.0.0/16,
+# fe80::/10), RFC1918 (10/8, 172.16/12, 192.168/16), and unspecified/
+# broadcast addresses are all rejected. This prevents an unauthenticated
+# caller (or a prompt-injected agent) from scanning the host's own network
+# or cloud metadata endpoints such as 169.254.169.254 (AWS/GCP IMDS).
+#
+# For operators who need to scan internal infrastructure:
+#   - Set allow_internal = true to bypass all range checks. Only do this
+#     when SIGINT is deployed in a trusted, isolated environment.
+#   - Use target_allowlist to permit specific hosts or CIDRs while keeping
+#     the rest of the private space blocked (preferred for VPN-connected labs).
+
+[recon]
+# Allow scanning loopback, link-local, and RFC1918 targets.
+# Default: false — must be explicitly enabled for internal pentests.
+# allow_internal = false
+
+# Explicitly permitted targets even when allow_internal is false.
+# Supports bare IPs, hostnames, and CIDR notation.
+# target_allowlist = ["10.10.10.0/24", "staging.internal"]
+
 # ── Web server security (optional) ───────────────────────────────────────────
 #
 # Authentication: every REST endpoint and WebSocket upgrade requires a Bearer

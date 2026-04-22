@@ -23,6 +23,7 @@ pub mod error;
 pub mod module;
 pub mod osint;
 pub mod port;
+pub mod validate;
 pub mod web;
 
 use sigint_core::{
@@ -35,9 +36,15 @@ use uuid::Uuid;
 
 use crate::{
     change::ChangeDetector, correlator::Correlator, error::ReconError, module::DiscoveryModule,
+    validate::validate_target,
 };
 
 /// Orchestrates discovery modules, asset persistence, correlation, and change detection.
+///
+/// The engine enforces an SSRF guard via `validate_target()` before any module
+/// is invoked. By default, loopback, link-local, and RFC1918 targets are
+/// rejected. Operators can opt in via `[recon] allow_internal = true` or via
+/// the `target_allowlist` field in their config.
 ///
 /// # Example
 ///
@@ -57,10 +64,17 @@ pub struct ReconEngine<'a> {
     modules: Vec<Box<dyn DiscoveryModule>>,
     store: &'a Database,
     event_bus: &'a EventBus,
+    /// Whether to allow recon against internal/private ranges (opt-in).
+    allow_internal: bool,
+    /// Explicit allowlist that bypasses the SSRF guard regardless of `allow_internal`.
+    target_allowlist: Vec<String>,
 }
 
 impl<'a> ReconEngine<'a> {
     /// Create a ReconEngine with all built-in discovery modules enabled.
+    ///
+    /// Uses deny-by-default SSRF settings (`allow_internal = false`, empty allowlist).
+    /// To enable internal scanning, use [`ReconEngine::with_config`].
     pub fn new(store: &'a Database, event_bus: &'a EventBus) -> Self {
         let modules: Vec<Box<dyn DiscoveryModule>> = vec![
             Box::new(dns::DnsModule),
@@ -73,6 +87,8 @@ impl<'a> ReconEngine<'a> {
             modules,
             store,
             event_bus,
+            allow_internal: false,
+            target_allowlist: vec![],
         }
     }
 
@@ -80,6 +96,7 @@ impl<'a> ReconEngine<'a> {
     ///
     /// `module_names` is a slice of names like `["dns", "cert", "web"]`.
     /// Unknown names are silently skipped (they may be future modules).
+    /// Uses deny-by-default SSRF settings.
     pub fn with_modules(
         store: &'a Database,
         event_bus: &'a EventBus,
@@ -102,12 +119,42 @@ impl<'a> ReconEngine<'a> {
             modules,
             store,
             event_bus,
+            allow_internal: false,
+            target_allowlist: vec![],
+        }
+    }
+
+    /// Create a ReconEngine wiring in the `[recon]` config section.
+    ///
+    /// This is the preferred constructor when the full `sigint_core::Config` is
+    /// available (e.g. in the CLI and web service). It applies the operator's
+    /// `allow_internal` flag and `target_allowlist` to the SSRF guard.
+    pub fn with_config(
+        store: &'a Database,
+        event_bus: &'a EventBus,
+        recon_cfg: &sigint_core::ReconConfig,
+    ) -> Self {
+        let modules: Vec<Box<dyn DiscoveryModule>> = vec![
+            Box::new(dns::DnsModule),
+            Box::new(port::PortModule),
+            Box::new(web::WebModule),
+            Box::new(cert::CertModule),
+            Box::new(osint::OsintModule),
+        ];
+        Self {
+            modules,
+            store,
+            event_bus,
+            allow_internal: recon_cfg.allow_internal,
+            target_allowlist: recon_cfg.target_allowlist.clone(),
         }
     }
 
     /// Run all configured modules against `target` for `session_id`.
     ///
     /// Steps:
+    /// 0. Validate `target` against the SSRF guard (reject internal ranges
+    ///    unless `allow_internal` is set or the target is in `target_allowlist`)
     /// 1. Emit `ReconStarted`
     /// 2. Run each module's `discover()`, collecting all assets
     /// 3. Correlate (deduplicate and link) the raw results
@@ -120,6 +167,9 @@ impl<'a> ReconEngine<'a> {
         if self.modules.is_empty() {
             return Err(ReconError::NoModules);
         }
+
+        // SSRF guard — reject internal/private targets before any module runs.
+        validate_target(target, self.allow_internal, &self.target_allowlist)?;
 
         info!(target, session_id = %session_id, "recon engine: starting");
 
@@ -297,16 +347,28 @@ mod tests {
         }
     }
 
+    /// Helper: build a ReconEngine with allow_internal=true so orchestration
+    /// tests can use internal IPs without hitting the SSRF guard.
+    fn make_engine_internal<'a>(
+        modules: Vec<Box<dyn DiscoveryModule>>,
+        store: &'a Database,
+        event_bus: &'a EventBus,
+    ) -> ReconEngine<'a> {
+        ReconEngine {
+            modules,
+            store,
+            event_bus,
+            allow_internal: true,
+            target_allowlist: vec![],
+        }
+    }
+
     #[tokio::test]
     async fn engine_no_modules_returns_error() {
         let (db, session_id) = setup_db();
         let bus = EventBus::new();
 
-        let engine = ReconEngine {
-            modules: vec![],
-            store: &db,
-            event_bus: &bus,
-        };
+        let engine = make_engine_internal(vec![], &db, &bus);
 
         let result = engine.run("example.com", session_id).await;
         assert!(matches!(result, Err(ReconError::NoModules)));
@@ -322,11 +384,8 @@ mod tests {
             make_asset(AssetKind::Domain, "example.com", session_id),
         ];
 
-        let engine = ReconEngine {
-            modules: vec![Box::new(MockModule::new("mock", assets))],
-            store: &db,
-            event_bus: &bus,
-        };
+        let engine =
+            make_engine_internal(vec![Box::new(MockModule::new("mock", assets))], &db, &bus);
 
         let result = engine.run("example.com", session_id).await.unwrap();
         assert_eq!(result.len(), 2);
@@ -342,11 +401,7 @@ mod tests {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
 
-        let engine = ReconEngine {
-            modules: vec![Box::new(MockModule::empty("mock"))],
-            store: &db,
-            event_bus: &bus,
-        };
+        let engine = make_engine_internal(vec![Box::new(MockModule::empty("mock"))], &db, &bus);
 
         engine.run("example.com", session_id).await.unwrap();
 
@@ -370,14 +425,14 @@ mod tests {
 
         let good_assets = vec![make_asset(AssetKind::Host, "10.0.0.1", session_id)];
 
-        let engine = ReconEngine {
-            modules: vec![
+        let engine = make_engine_internal(
+            vec![
                 Box::new(FailingModule),
                 Box::new(MockModule::new("good", good_assets)),
             ],
-            store: &db,
-            event_bus: &bus,
-        };
+            &db,
+            &bus,
+        );
 
         // Should not return an error — failing module is skipped
         let result = engine.run("example.com", session_id).await.unwrap();
@@ -390,18 +445,20 @@ mod tests {
         let (db, session_id) = setup_db();
         let bus = EventBus::new();
 
-        // Two modules return the same host — should be deduplicated
+        // Two modules return the same host — should be deduplicated.
+        // allow_internal=true because we use 10.x addresses as test fixtures,
+        // not because SSRF is disabled in production.
         let assets1 = vec![make_asset(AssetKind::Host, "10.0.0.1", session_id)];
         let assets2 = vec![make_asset(AssetKind::Host, "10.0.0.1", session_id)];
 
-        let engine = ReconEngine {
-            modules: vec![
+        let engine = make_engine_internal(
+            vec![
                 Box::new(MockModule::new("module1", assets1)),
                 Box::new(MockModule::new("module2", assets2)),
             ],
-            store: &db,
-            event_bus: &bus,
-        };
+            &db,
+            &bus,
+        );
 
         let result = engine.run("10.0.0.1", session_id).await.unwrap();
         assert_eq!(result.len(), 1, "duplicates should be merged");
@@ -418,11 +475,8 @@ mod tests {
 
         let assets = vec![make_asset(AssetKind::Host, "10.0.0.1", session_id)];
 
-        let engine = ReconEngine {
-            modules: vec![Box::new(MockModule::new("mock", assets))],
-            store: &db,
-            event_bus: &bus,
-        };
+        let engine =
+            make_engine_internal(vec![Box::new(MockModule::new("mock", assets))], &db, &bus);
 
         engine.run("10.0.0.1", session_id).await.unwrap();
 
@@ -463,5 +517,111 @@ mod tests {
 
         let engine = ReconEngine::new(&db, &bus);
         assert_eq!(engine.modules.len(), 5);
+    }
+
+    // ── SSRF guard integration tests ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn engine_ssrf_guard_rejects_loopback_by_default() {
+        let (db, session_id) = setup_db();
+        let bus = EventBus::new();
+        // ReconEngine::new uses allow_internal=false — loopback must be rejected.
+        let engine = ReconEngine {
+            modules: vec![Box::new(MockModule::empty("mock"))],
+            store: &db,
+            event_bus: &bus,
+            allow_internal: false,
+            target_allowlist: vec![],
+        };
+        let result = engine.run("127.0.0.1", session_id).await;
+        assert!(
+            matches!(result, Err(ReconError::InvalidTarget(_))),
+            "127.0.0.1 must be rejected by default SSRF guard, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn engine_ssrf_guard_rejects_metadata_endpoint() {
+        let (db, session_id) = setup_db();
+        let bus = EventBus::new();
+        let engine = ReconEngine {
+            modules: vec![Box::new(MockModule::empty("mock"))],
+            store: &db,
+            event_bus: &bus,
+            allow_internal: false,
+            target_allowlist: vec![],
+        };
+        // 169.254.169.254 is the AWS/GCP IMDS address — primary SSRF vector.
+        let result = engine.run("169.254.169.254", session_id).await;
+        assert!(
+            matches!(result, Err(ReconError::InvalidTarget(_))),
+            "169.254.169.254 (IMDS) must be rejected, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn engine_ssrf_guard_allows_public_target() {
+        let (db, session_id) = setup_db();
+        let bus = EventBus::new();
+        let engine = make_engine_internal(vec![Box::new(MockModule::empty("mock"))], &db, &bus);
+        // Use allow_internal=true so the public-target test doesn't need network.
+        // Separately, test with allow_internal=false and a public IP.
+        let engine2 = ReconEngine {
+            modules: vec![Box::new(MockModule::empty("mock"))],
+            store: &db,
+            event_bus: &bus,
+            allow_internal: false,
+            target_allowlist: vec![],
+        };
+        let result = engine2.run("8.8.8.8", session_id).await;
+        assert!(
+            result.is_ok(),
+            "8.8.8.8 (public IP) must be allowed, got: {:?}",
+            result
+        );
+        // Suppress unused variable warning.
+        drop(engine);
+    }
+
+    #[tokio::test]
+    async fn engine_ssrf_guard_allow_internal_flag_bypasses() {
+        let (db, session_id) = setup_db();
+        let bus = EventBus::new();
+        let engine = ReconEngine {
+            modules: vec![Box::new(MockModule::empty("mock"))],
+            store: &db,
+            event_bus: &bus,
+            allow_internal: true,
+            target_allowlist: vec![],
+        };
+        // With allow_internal=true, even loopback must be accepted.
+        let result = engine.run("127.0.0.1", session_id).await;
+        assert!(
+            result.is_ok(),
+            "127.0.0.1 must be allowed when allow_internal=true, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn engine_ssrf_guard_allowlist_permits_internal_target() {
+        let (db, session_id) = setup_db();
+        let bus = EventBus::new();
+        let engine = ReconEngine {
+            modules: vec![Box::new(MockModule::empty("mock"))],
+            store: &db,
+            event_bus: &bus,
+            allow_internal: false,
+            target_allowlist: vec!["10.5.5.5".to_string()],
+        };
+        // 10.5.5.5 is RFC1918 but is in the allowlist.
+        let result = engine.run("10.5.5.5", session_id).await;
+        assert!(
+            result.is_ok(),
+            "10.5.5.5 must be allowed when in target_allowlist, got: {:?}",
+            result
+        );
     }
 }
