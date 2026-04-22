@@ -257,10 +257,7 @@ impl TaskContext {
                     let step_lines: Vec<String> = sorted
                         .iter()
                         .map(|s| {
-                            let mitre = s
-                                .mitre_technique
-                                .as_deref()
-                                .unwrap_or("N/A");
+                            let mitre = s.mitre_technique.as_deref().unwrap_or("N/A");
                             format!(
                                 "{}. {} [risk:{}, MITRE:{}] — tools: {} — {}",
                                 s.priority,
@@ -797,10 +794,7 @@ mod tests {
         // Verify priority ordering: "1. Port scan" before "2. Directory brute-force"
         let pos1 = prompt.find("1. Port scan").unwrap();
         let pos2 = prompt.find("2. Directory brute-force").unwrap();
-        assert!(
-            pos1 < pos2,
-            "steps should be sorted by priority: {prompt}"
-        );
+        assert!(pos1 < pos2, "steps should be sorted by priority: {prompt}");
     }
 
     #[test]

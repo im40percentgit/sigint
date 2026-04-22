@@ -202,10 +202,7 @@ impl Tool for CreateAttackPlanTool {
 
         {
             // Scope the lock to minimise hold time.
-            let mut guard = self
-                .collector
-                .lock()
-                .expect("plan collector lock poisoned");
+            let mut guard = self.collector.lock().expect("plan collector lock poisoned");
             guard.push(step);
         }
 
@@ -415,10 +412,7 @@ mod tests {
                 "priority": 1
             });
             let result = tool.execute(args).await;
-            assert!(
-                result.is_ok(),
-                "risk_score={score} should be accepted"
-            );
+            assert!(result.is_ok(), "risk_score={score} should be accepted");
         }
     }
 

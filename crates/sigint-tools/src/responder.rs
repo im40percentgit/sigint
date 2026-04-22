@@ -21,7 +21,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -105,10 +105,7 @@ impl Tool for ResponderTool {
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         // Extract optional parameters with defaults.
-        let interface = args["interface"]
-            .as_str()
-            .unwrap_or("eth0")
-            .to_string();
+        let interface = args["interface"].as_str().unwrap_or("eth0").to_string();
 
         // Default to analyze-only (passive) for safety.
         let analyze_only = args["analyze_only"].as_bool().unwrap_or(true);
@@ -363,7 +360,10 @@ mod tests {
 
         // No required fields
         let required = params["required"].as_array().unwrap();
-        assert!(required.is_empty(), "responder should have no required args");
+        assert!(
+            required.is_empty(),
+            "responder should have no required args"
+        );
 
         // interface and analyze_only exist
         assert!(params["properties"]["interface"].is_object());

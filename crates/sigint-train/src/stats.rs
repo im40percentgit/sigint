@@ -54,7 +54,9 @@ mod tests {
         stats.total_sessions = 5;
         stats.skipped_failures = 3;
         stats.examples_per_agent.insert("executor".to_string(), 30);
-        stats.examples_per_agent.insert("researcher".to_string(), 12);
+        stats
+            .examples_per_agent
+            .insert("researcher".to_string(), 12);
         stats.examples_per_tool.insert("nmap_scan".to_string(), 20);
         stats.examples_per_tool.insert("shell".to_string(), 22);
         // Should not panic.

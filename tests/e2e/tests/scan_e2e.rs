@@ -62,9 +62,8 @@ async fn wait_for_terminal_status(
             let status = body["status"].as_str().unwrap_or("").to_string();
             // Normalise: serde serialises ScanStatus::Failed("msg") as
             // {"failed":"msg"} (an object), so check the string OR object.
-            let is_terminal = status == "completed"
-                || status == "cancelled"
-                || body["status"].is_object(); // failed variant
+            let is_terminal =
+                status == "completed" || status == "cancelled" || body["status"].is_object(); // failed variant
             if is_terminal {
                 return status;
             }
@@ -187,11 +186,10 @@ async fn scan_with_mock_tool_calls() {
 #[tokio::test]
 async fn scan_cancel_stops_execution() {
     // Use a very large response queue so the scan takes time to process.
-    let many_responses: Vec<MockResponse> = std::iter::repeat_with(|| {
-        MockResponse::Text("processing...".into())
-    })
-    .take(100)
-    .collect();
+    let many_responses: Vec<MockResponse> =
+        std::iter::repeat_with(|| MockResponse::Text("processing...".into()))
+            .take(100)
+            .collect();
 
     let (addr, _db) = start_server_with_mock(many_responses).await;
     let client = reqwest::Client::new();

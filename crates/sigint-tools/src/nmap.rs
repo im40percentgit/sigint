@@ -35,7 +35,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 
 /// Default 1 MB output cap for nmap. Scans against large CIDR ranges can produce many
@@ -467,8 +467,8 @@ impl Tool for NmapTool {
         // point and returns whatever hosts were fully committed before it.
         // If XML parse returns None (no <nmaprun> marker at all) and we have
         // stdout content, try the regex-based text fallback.
-        let structured_data = parse_nmap_xml(&output.stdout)
-            .or_else(|| parse_nmap_text_fallback(&output.stdout));
+        let structured_data =
+            parse_nmap_xml(&output.stdout).or_else(|| parse_nmap_text_fallback(&output.stdout));
 
         let truncation = output.was_truncated.then_some(TruncationInfo {
             original_bytes: output.original_stdout_len,
@@ -492,7 +492,10 @@ mod tests {
 
     #[test]
     fn nmap_risk_level_is_low() {
-        assert_eq!(NmapTool::new().risk_level(), sigint_core::types::ToolRisk::Low);
+        assert_eq!(
+            NmapTool::new().risk_level(),
+            sigint_core::types::ToolRisk::Low
+        );
     }
 
     #[test]

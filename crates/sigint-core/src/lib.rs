@@ -21,5 +21,5 @@ pub mod types;
 
 pub use app::AppCore;
 pub use approval::ApprovalRegistry;
-pub use config::Config;
+pub use config::{Config, WebConfig};
 pub use error::{Error, Result};

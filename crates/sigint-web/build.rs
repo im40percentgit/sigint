@@ -35,10 +35,7 @@ fn main() {
     match status {
         Ok(s) if s.success() => {}
         Ok(s) => {
-            println!(
-                "cargo:warning=Frontend build failed with exit code: {}",
-                s
-            );
+            println!("cargo:warning=Frontend build failed with exit code: {}", s);
         }
         Err(e) => {
             println!(

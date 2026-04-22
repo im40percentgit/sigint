@@ -156,11 +156,10 @@ pub fn persist_last_eval(job_dir: &Path, report: &ComparisonReport) -> Result<()
         .with_context(|| format!("failed to create job_dir: {}", job_dir.display()))?;
 
     let path = job_dir.join("last_eval.json");
-    let json = serde_json::to_string_pretty(report)
-        .context("failed to serialize ComparisonReport")?;
+    let json =
+        serde_json::to_string_pretty(report).context("failed to serialize ComparisonReport")?;
 
-    std::fs::write(&path, json)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, json).with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(())
 }

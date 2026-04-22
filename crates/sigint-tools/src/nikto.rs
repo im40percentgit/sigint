@@ -27,7 +27,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -198,8 +198,7 @@ pub(crate) fn parse_nikto_output(stdout: &str) -> Option<Value> {
     // Pattern for a finding without an OSVDB ref.
     // e.g.  `/admin/: Directory indexing found.`
     //       `Retrieved x-powered-by header: PHP/7.4`
-    let re_path = Regex::new(r#"^(/[^ \t]*?):[ \t]+(.+)$"#)
-        .expect("nikto path regex is valid");
+    let re_path = Regex::new(r#"^(/[^ \t]*?):[ \t]+(.+)$"#).expect("nikto path regex is valid");
 
     let mut findings: Vec<Value> = Vec::new();
 
@@ -213,13 +212,33 @@ pub(crate) fn parse_nikto_output(stdout: &str) -> Option<Value> {
         };
 
         if let Some(caps) = re_osvdb.captures(body) {
-            let osvdb = caps.get(1).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
-            let path = caps.get(2).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
-            let text = caps.get(3).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
+            let osvdb = caps
+                .get(1)
+                .map(|m: regex::Match| m.as_str())
+                .unwrap_or("")
+                .to_string();
+            let path = caps
+                .get(2)
+                .map(|m: regex::Match| m.as_str())
+                .unwrap_or("")
+                .to_string();
+            let text = caps
+                .get(3)
+                .map(|m: regex::Match| m.as_str())
+                .unwrap_or("")
+                .to_string();
             findings.push(json!({"text": text, "osvdb": osvdb, "path": path}));
         } else if let Some(caps) = re_path.captures(body) {
-            let path = caps.get(1).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
-            let text = caps.get(2).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
+            let path = caps
+                .get(1)
+                .map(|m: regex::Match| m.as_str())
+                .unwrap_or("")
+                .to_string();
+            let text = caps
+                .get(2)
+                .map(|m: regex::Match| m.as_str())
+                .unwrap_or("")
+                .to_string();
             findings.push(json!({"text": text, "path": path}));
         } else {
             // Finding line without a parseable path — store the full body as text.
@@ -246,7 +265,10 @@ mod tests {
 
     #[test]
     fn nikto_risk_level_is_high() {
-        assert_eq!(NiktoTool::new().risk_level(), sigint_core::types::ToolRisk::High);
+        assert_eq!(
+            NiktoTool::new().risk_level(),
+            sigint_core::types::ToolRisk::High
+        );
     }
 
     #[test]
@@ -321,7 +343,9 @@ mod tests {
     fn parse_nikto_finding_with_osvdb() {
         let input = "+ OSVDB-3092: /test/: This might be interesting...";
         let result = parse_nikto_output(input).expect("should return Some");
-        let findings = result["findings"].as_array().expect("findings should be array");
+        let findings = result["findings"]
+            .as_array()
+            .expect("findings should be array");
         assert_eq!(findings.len(), 1);
         assert_eq!(result["total"], 1);
         assert_eq!(findings[0]["osvdb"], "OSVDB-3092");
@@ -338,7 +362,10 @@ mod tests {
         assert_eq!(findings[0]["path"], "/admin/");
         assert_eq!(findings[0]["text"], "Directory indexing found.");
         // no osvdb key when not present
-        assert!(findings[0].get("osvdb").is_none(), "osvdb key should be absent");
+        assert!(
+            findings[0].get("osvdb").is_none(),
+            "osvdb key should be absent"
+        );
     }
 
     #[test]

@@ -55,7 +55,7 @@ fn session_in_train(session_id: &uuid::Uuid) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TrainingMessage};
+    use crate::TrainingMessage;
     use uuid::Uuid;
 
     fn make_example(session_id: Uuid) -> TrainingExample {
@@ -72,7 +72,8 @@ mod tests {
 
     #[test]
     fn split_is_deterministic() {
-        let examples: Vec<TrainingExample> = (0..20).map(|_| make_example(Uuid::new_v4())).collect();
+        let examples: Vec<TrainingExample> =
+            (0..20).map(|_| make_example(Uuid::new_v4())).collect();
 
         let (train1, test1) = train_test_split(&examples);
         let (train2, test2) = train_test_split(&examples);
@@ -87,7 +88,8 @@ mod tests {
 
     #[test]
     fn split_partitions_all_examples() {
-        let examples: Vec<TrainingExample> = (0..100).map(|_| make_example(Uuid::new_v4())).collect();
+        let examples: Vec<TrainingExample> =
+            (0..100).map(|_| make_example(Uuid::new_v4())).collect();
         let (train, test) = train_test_split(&examples);
         assert_eq!(train.len() + test.len(), 100);
     }
@@ -95,7 +97,8 @@ mod tests {
     #[test]
     fn split_roughly_80_20() {
         // With 1000 random UUIDs the split should be within ±5% of 80/20.
-        let examples: Vec<TrainingExample> = (0..1000).map(|_| make_example(Uuid::new_v4())).collect();
+        let examples: Vec<TrainingExample> =
+            (0..1000).map(|_| make_example(Uuid::new_v4())).collect();
         let (train, test) = train_test_split(&examples);
 
         let train_pct = train.len() as f64 / 1000.0;

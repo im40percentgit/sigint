@@ -212,9 +212,15 @@ fn promote_rollback_roundtrip() {
 
     // ── Verify promotion.log has 3 entries ────────────────────────────────────
     let log_path = training_dir.join("promotion.log");
-    assert!(log_path.exists(), "promotion.log should exist after operations");
+    assert!(
+        log_path.exists(),
+        "promotion.log should exist after operations"
+    );
     let log_contents = fs::read_to_string(&log_path).expect("read promotion.log");
-    let entry_count = log_contents.lines().filter(|l| !l.trim().is_empty()).count();
+    let entry_count = log_contents
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
     assert_eq!(
         entry_count, 3,
         "promotion.log should have 3 entries (promote, rollback, promote), got: {}",
@@ -387,11 +393,26 @@ fn promotion_log_entry_shape() {
 
     // Verify all 6 required fields are present.
     assert!(entry["ts"].is_string(), "Entry must have a 'ts' field");
-    assert!(entry["action"].is_string(), "Entry must have an 'action' field");
-    assert!(entry["old_provider"].is_string(), "Entry must have an 'old_provider' field");
-    assert!(entry["old_model"].is_string(), "Entry must have an 'old_model' field");
-    assert!(entry["new_provider"].is_string(), "Entry must have a 'new_provider' field");
-    assert!(entry["new_model"].is_string(), "Entry must have a 'new_model' field");
+    assert!(
+        entry["action"].is_string(),
+        "Entry must have an 'action' field"
+    );
+    assert!(
+        entry["old_provider"].is_string(),
+        "Entry must have an 'old_provider' field"
+    );
+    assert!(
+        entry["old_model"].is_string(),
+        "Entry must have an 'old_model' field"
+    );
+    assert!(
+        entry["new_provider"].is_string(),
+        "Entry must have a 'new_provider' field"
+    );
+    assert!(
+        entry["new_model"].is_string(),
+        "Entry must have a 'new_model' field"
+    );
 
     // Verify field values are sensible.
     assert_eq!(entry["action"].as_str().unwrap(), "promote");
@@ -399,7 +420,10 @@ fn promotion_log_entry_shape() {
     assert_eq!(entry["old_model"].as_str().unwrap(), "llama3.2");
     assert_eq!(entry["new_provider"].as_str().unwrap(), "embedded");
     assert!(
-        entry["new_model"].as_str().unwrap().contains("fake-model-q4"),
+        entry["new_model"]
+            .as_str()
+            .unwrap()
+            .contains("fake-model-q4"),
         "new_model should reference the promoted GGUF, got: {}",
         entry["new_model"]
     );
@@ -432,7 +456,8 @@ fn rollback_empty_log_is_actionable_error() {
     let out = run_rollback(home);
     let exit_code = out.status.code().unwrap_or(-1);
     assert_ne!(
-        exit_code, 0,
+        exit_code,
+        0,
         "rollback with no history must exit non-zero; got {}\nstderr: {}",
         exit_code,
         String::from_utf8_lossy(&out.stderr)

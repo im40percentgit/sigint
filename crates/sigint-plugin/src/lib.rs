@@ -28,13 +28,13 @@
 //! `orchestrator.with_prompt_override()`. No shared concrete types cross the crate
 //! boundary — only a function pointer, which is Copy + 'static + zero-cost.
 
-pub use sigint_tools::tool::Tool;
-pub use sigint_tools::result::ToolResult;
-pub use sigint_tools::error::{Result, ToolError};
+pub use sigint_agents::prompt_pack::PromptOverrideFn;
+pub use sigint_agents::role::AgentRole;
 pub use sigint_core::types::ToolRisk;
 pub use sigint_llm::ToolDefinition;
-pub use sigint_agents::role::AgentRole;
-pub use sigint_agents::prompt_pack::PromptOverrideFn;
+pub use sigint_tools::error::{Result, ToolError};
+pub use sigint_tools::result::ToolResult;
+pub use sigint_tools::tool::Tool;
 
 /// Factory that produces a boxed Tool instance.
 ///
@@ -171,7 +171,10 @@ pub fn list_prompt_packs() -> Vec<(&'static str, &'static str)> {
 /// ```
 pub fn prompt_pack_override_fn(pack: &'static PromptPack) -> PromptOverrideFn {
     use std::sync::atomic::Ordering;
-    ACTIVE_PROMPT_PACK.store(pack as *const PromptPack as *mut PromptPack, Ordering::Release);
+    ACTIVE_PROMPT_PACK.store(
+        pack as *const PromptPack as *mut PromptPack,
+        Ordering::Release,
+    );
     active_pack_override
 }
 

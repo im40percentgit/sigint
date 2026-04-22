@@ -26,10 +26,7 @@ use crate::{AssessResults, ToolAssessMetrics, TrainingExample};
 /// * `ground_truth` — the test-set TrainingExamples to evaluate against.
 ///
 /// Returns an `AssessResults` with accuracy metrics and per-tool statistics.
-pub fn assess(
-    predictions: &[(String, String)],
-    ground_truth: &[TrainingExample],
-) -> AssessResults {
+pub fn assess(predictions: &[(String, String)], ground_truth: &[TrainingExample]) -> AssessResults {
     let total = ground_truth.len();
     let mut correct_tool = 0usize;
     let mut argument_exact_match = 0usize;
@@ -58,10 +55,7 @@ pub fn assess(
 
                 // True positive: predicted the right tool.
                 if tool_correct {
-                    per_tool
-                        .entry(exp_tool.clone())
-                        .or_default()
-                        .true_positives += 1;
+                    per_tool.entry(exp_tool.clone()).or_default().true_positives += 1;
                 } else {
                     // False negative on expected tool (we missed it).
                     per_tool
@@ -128,10 +122,7 @@ fn extract_tool_call(example: &TrainingExample) -> Option<(String, String)> {
         if msg.role == "assistant" {
             if let Some(calls) = &msg.tool_calls {
                 if let Some(call) = calls.first() {
-                    return Some((
-                        call.function.name.clone(),
-                        call.function.arguments.clone(),
-                    ));
+                    return Some((call.function.name.clone(), call.function.arguments.clone()));
                 }
             }
         }
@@ -232,7 +223,10 @@ mod tests {
             make_example("shell", r#"{"cmd":"whoami"}"#),
         ];
         let predictions = vec![
-            ("nmap_scan".to_string(), r#"{"target":"10.0.0.1"}"#.to_string()),
+            (
+                "nmap_scan".to_string(),
+                r#"{"target":"10.0.0.1"}"#.to_string(),
+            ),
             ("shell".to_string(), r#"{"cmd":"whoami"}"#.to_string()),
         ];
 
@@ -270,9 +264,10 @@ mod tests {
     #[test]
     fn correct_tool_wrong_args_counts_only_tool_correct() {
         let examples = vec![make_example("nmap_scan", r#"{"target":"10.0.0.1"}"#)];
-        let predictions = vec![
-            ("nmap_scan".to_string(), r#"{"target":"192.168.1.1"}"#.to_string()),
-        ];
+        let predictions = vec![(
+            "nmap_scan".to_string(),
+            r#"{"target":"192.168.1.1"}"#.to_string(),
+        )];
 
         let results = assess(&predictions, &examples);
 
@@ -298,7 +293,10 @@ mod tests {
             make_example("nmap_scan", r#"{"target":"10.0.0.2"}"#),
         ];
         let predictions = vec![
-            ("nmap_scan".to_string(), r#"{"target":"10.0.0.1"}"#.to_string()),
+            (
+                "nmap_scan".to_string(),
+                r#"{"target":"10.0.0.1"}"#.to_string(),
+            ),
             ("shell".to_string(), r#"{"cmd":"ls"}"#.to_string()),
         ];
 
@@ -316,7 +314,10 @@ mod tests {
     #[test]
     fn print_results_does_not_panic() {
         let examples = vec![make_example("nmap_scan", r#"{"target":"10.0.0.1"}"#)];
-        let predictions = vec![("nmap_scan".to_string(), r#"{"target":"10.0.0.1"}"#.to_string())];
+        let predictions = vec![(
+            "nmap_scan".to_string(),
+            r#"{"target":"10.0.0.1"}"#.to_string(),
+        )];
         let results = assess(&predictions, &examples);
         // Should not panic.
         print_results(&results);

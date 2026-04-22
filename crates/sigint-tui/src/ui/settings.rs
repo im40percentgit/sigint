@@ -118,16 +118,17 @@ fn setting_row<'a>(key: &'a str, value: &str, desc: &'a str) -> Line<'a> {
             format!("  {key}  "),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("{:<8}", value),
-            Style::default().fg(Color::Yellow),
-        ),
+        Span::styled(format!("{:<8}", value), Style::default().fg(Color::Yellow)),
         Span::styled(format!("  {desc}"), Style::default().fg(Color::DarkGray)),
     ])
 }
 
 fn bool_display(v: bool) -> String {
-    if v { "true".into() } else { "false".into() }
+    if v {
+        "true".into()
+    } else {
+        "false".into()
+    }
 }
 
 #[cfg(test)]

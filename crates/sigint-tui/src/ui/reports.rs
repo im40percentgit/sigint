@@ -53,9 +53,7 @@ fn render_report_list(frame: &mut Frame, state: &AppState, area: Rect) {
         .collect();
 
     let table = Table::new(rows, [Constraint::Min(14), Constraint::Length(6)])
-        .header(
-            Row::new(["TARGET", "DATE"]).style(Style::default().add_modifier(Modifier::BOLD)),
-        )
+        .header(Row::new(["TARGET", "DATE"]).style(Style::default().add_modifier(Modifier::BOLD)))
         .block(
             Block::default()
                 .title(" Sessions ")
@@ -125,7 +123,9 @@ fn render_report_preview(frame: &mut Frame, state: &AppState, area: Rect) {
             } else if l.starts_with("### ") {
                 Line::from(Span::styled(
                     l.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ))
             } else if l.starts_with("- ") || l.starts_with("* ") {
                 Line::from(vec![

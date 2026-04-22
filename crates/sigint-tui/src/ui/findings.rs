@@ -90,9 +90,11 @@ fn render_finding_detail(frame: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let finding = state.finding_detail.finding.as_ref().or_else(|| {
-        state.finding_list.get(state.selected_finding_idx)
-    });
+    let finding = state
+        .finding_detail
+        .finding
+        .as_ref()
+        .or_else(|| state.finding_list.get(state.selected_finding_idx));
 
     let Some(f) = finding else {
         let placeholder = Paragraph::new("No finding selected — press j/k to navigate")
@@ -162,13 +164,12 @@ fn render_finding_detail(frame: &mut Frame, state: &AppState, area: Rect) {
         lines.push(Line::default());
         lines.push(Line::from(vec![
             Span::styled("Chain:  ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(
-                chain_id.to_string(),
-                Style::default().fg(Color::Magenta),
-            ),
+            Span::styled(chain_id.to_string(), Style::default().fg(Color::Magenta)),
             Span::raw(format!(
                 " (step {})",
-                f.chain_order.map(|o| o.to_string()).unwrap_or_else(|| "?".into())
+                f.chain_order
+                    .map(|o| o.to_string())
+                    .unwrap_or_else(|| "?".into())
             )),
         ]));
     }
@@ -254,7 +255,9 @@ mod tests {
             Severity::Low,
             Severity::Info,
         ] {
-            state.finding_list.push(Finding::new(sid, "test", "desc", sev));
+            state
+                .finding_list
+                .push(Finding::new(sid, "test", "desc", sev));
         }
         terminal
             .draw(|frame| render(frame, &state, frame.area()))

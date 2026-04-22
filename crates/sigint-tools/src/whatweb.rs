@@ -20,7 +20,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -425,6 +425,9 @@ mod tests {
             .expect("whatweb execution should not error");
         // whatweb may exit non-zero if nothing is listening, but it should not
         // error at the sandbox level.
-        println!("whatweb exit_code={}, stderr={}", result.exit_code, result.stderr);
+        println!(
+            "whatweb exit_code={}, stderr={}",
+            result.exit_code, result.stderr
+        );
     }
 }

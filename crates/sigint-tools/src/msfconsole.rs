@@ -21,7 +21,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -144,10 +144,8 @@ impl Tool for MsfconsoleTool {
         //
         // Pattern: "use <module>; set RHOSTS <target>; [set PAYLOAD <payload>;]
         //           [set KEY1 VAL1; set KEY2 VAL2;] run; exit"
-        let mut cmd_parts: Vec<String> = vec![
-            format!("use {}", module),
-            format!("set RHOSTS {}", target),
-        ];
+        let mut cmd_parts: Vec<String> =
+            vec![format!("use {}", module), format!("set RHOSTS {}", target)];
 
         if let Some(ref p) = payload {
             cmd_parts.push(format!("set PAYLOAD {}", p));
@@ -255,9 +253,7 @@ pub(crate) fn parse_msf_output(stdout: &str, module: &str) -> Option<Value> {
         // "Exploit completed, but no session was created." is a failure message
         // from msfconsole — do NOT count it as success. Only count lines that
         // contain "Exploit completed" without the "no session" qualifier.
-        if line_trimmed.contains("Exploit completed")
-            && !line_trimmed.contains("no session")
-        {
+        if line_trimmed.contains("Exploit completed") && !line_trimmed.contains("no session") {
             exploit_completed = true;
         }
 
@@ -311,7 +307,11 @@ mod tests {
             required.iter().any(|v| v == "target"),
             "target should be required"
         );
-        assert_eq!(required.len(), 2, "only module and target should be required");
+        assert_eq!(
+            required.len(),
+            2,
+            "only module and target should be required"
+        );
 
         // Optional fields exist.
         assert!(params["properties"]["payload"].is_object());
@@ -388,8 +388,7 @@ Exploit completed, but no session was created.\n\
 [*] Exploit completed with 0 sessions created.\n\
 Exploit completed\n\
 ";
-        let result =
-            parse_msf_output(input, "exploit/multi/handler").expect("should return Some");
+        let result = parse_msf_output(input, "exploit/multi/handler").expect("should return Some");
         assert_eq!(result["exploit_completed"], true);
     }
 

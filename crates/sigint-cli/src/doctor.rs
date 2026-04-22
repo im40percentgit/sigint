@@ -286,7 +286,10 @@ pub fn check_sandbox_tool(name: &str, package: &str) -> CheckResult {
 ///    verify that the `ollama` CLI is on PATH.
 ///
 /// All three pass cleanly on a default config without a `[train]` section.
-pub fn check_train_config(config: &sigint_core::config::Config, promo_dir: &std::path::Path) -> Vec<CheckResult> {
+pub fn check_train_config(
+    config: &sigint_core::config::Config,
+    promo_dir: &std::path::Path,
+) -> Vec<CheckResult> {
     let mut results = Vec::new();
 
     // ── Check 1: finetune_command binary is executable if set ─────────────────
@@ -484,8 +487,7 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
 
     // 2 & 3. Ollama reachability + model availability (skip when using embedded provider)
     if core.config.llm.provider != "embedded" {
-        let (ollama, model) =
-            check_ollama(&core.config.llm.base_url, &core.config.llm.model).await;
+        let (ollama, model) = check_ollama(&core.config.llm.base_url, &core.config.llm.model).await;
         results.push(ollama);
         results.push(model);
     }
@@ -530,7 +532,10 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
             "wget https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh",
         ),
         ("enum4linux-ng", "pip install enum4linux-ng"),
-        ("trivy", "sudo apt install trivy OR see https://aquasecurity.github.io/trivy"),
+        (
+            "trivy",
+            "sudo apt install trivy OR see https://aquasecurity.github.io/trivy",
+        ),
         ("scout", "pip install scoutsuite"),
         ("cloudsploit", "npm install -g cloudsploit"),
         ("dig", "sudo apt install dnsutils"),
@@ -558,7 +563,10 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
             let home = std::env::var("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("."));
-            home.join(".local").join("share").join("sigint").join("training")
+            home.join(".local")
+                .join("share")
+                .join("sigint")
+                .join("training")
         }
     };
     results.extend(check_train_config(&core.config, &promo_dir));
@@ -821,7 +829,8 @@ mod tests {
     #[test]
     fn check_train_config_bad_command_fails() {
         let mut cfg = make_train_config_default();
-        cfg.train.finetune_command = "sigint-xyzzy-trainer-definitely-not-installed --train".to_string();
+        cfg.train.finetune_command =
+            "sigint-xyzzy-trainer-definitely-not-installed --train".to_string();
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let results = check_train_config(&cfg, tmp.path());
         let cmd_check = results

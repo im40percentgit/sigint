@@ -119,7 +119,8 @@ mod tests {
         let mut cfg = make_config("llama-cpp", None);
         // Override base_url to llama.cpp default port
         cfg.base_url = "http://localhost:8080".into();
-        let provider = create_provider(&cfg).expect("llama-cpp provider should succeed without key");
+        let provider =
+            create_provider(&cfg).expect("llama-cpp provider should succeed without key");
         // Uses OpenAI provider under the hood (OpenAI-compatible API)
         assert_eq!(provider.name(), "openai");
     }
@@ -148,7 +149,10 @@ mod tests {
             let result = create_provider(&cfg);
             assert!(result.is_err());
             let msg = result.err().unwrap().to_string();
-            assert!(msg.contains("embedded-llm"), "error should mention feature flag: {msg}");
+            assert!(
+                msg.contains("embedded-llm"),
+                "error should mention feature flag: {msg}"
+            );
         }
     }
 
@@ -159,6 +163,9 @@ mod tests {
         let result = create_provider(&cfg);
         assert!(result.is_err());
         let msg = result.err().unwrap().to_string();
-        assert!(msg.contains("embedded"), "supported list should mention embedded: {msg}");
+        assert!(
+            msg.contains("embedded"),
+            "supported list should mention embedded: {msg}"
+        );
     }
 }

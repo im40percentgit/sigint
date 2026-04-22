@@ -134,7 +134,10 @@ impl GgufMetadata {
             .map_err(|e| Error::Llm(format!("Cannot open {:?}: {}", path, e)))?;
         let mut reader = io::BufReader::new(file);
 
-        let mut ctx = ReadCtx { reader: &mut reader, path };
+        let mut ctx = ReadCtx {
+            reader: &mut reader,
+            path,
+        };
 
         // Magic
         let magic = ctx.read_u32()?;
@@ -172,7 +175,13 @@ impl GgufMetadata {
             metadata.insert(key, value);
         }
 
-        Ok(GgufMetadata { filename, file_size, version, tensor_count, metadata })
+        Ok(GgufMetadata {
+            filename,
+            file_size,
+            version,
+            tensor_count,
+            metadata,
+        })
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
@@ -218,10 +227,7 @@ impl GgufMetadata {
             }
         }
         // Strip extension(s) from filename to get the stem.
-        let stem = self.filename
-            .split('.')
-            .next()
-            .unwrap_or(&self.filename);
+        let stem = self.filename.split('.').next().unwrap_or(&self.filename);
         stem.to_owned()
     }
 
@@ -289,9 +295,9 @@ struct ReadCtx<'a, 'p, R: Read> {
 
 impl<'a, 'p, R: Read> ReadCtx<'a, 'p, R> {
     fn read_exact_buf(&mut self, buf: &mut [u8]) -> Result<(), Error> {
-        self.reader.read_exact(buf).map_err(|e| {
-            Error::Llm(format!("IO error reading {:?}: {}", self.path, e))
-        })
+        self.reader
+            .read_exact(buf)
+            .map_err(|e| Error::Llm(format!("IO error reading {:?}: {}", self.path, e)))
     }
 
     fn read_u8(&mut self) -> Result<u8, Error> {
@@ -363,9 +369,8 @@ impl<'a, 'p, R: Read> ReadCtx<'a, 'p, R> {
         }
         let mut buf = vec![0u8; len as usize];
         self.read_exact_buf(&mut buf)?;
-        String::from_utf8(buf).map_err(|e| {
-            Error::Llm(format!("{:?}: invalid UTF-8 in string: {}", self.path, e))
-        })
+        String::from_utf8(buf)
+            .map_err(|e| Error::Llm(format!("{:?}: invalid UTF-8 in string: {}", self.path, e)))
     }
 
     /// Read a single value given its type discriminant.
@@ -431,9 +436,10 @@ mod tests {
 
     #[test]
     fn architecture_present() {
-        let m = make_meta(vec![
-            ("general.architecture", GgufValue::Str("llama".into())),
-        ]);
+        let m = make_meta(vec![(
+            "general.architecture",
+            GgufValue::Str("llama".into()),
+        )]);
         assert_eq!(m.architecture(), Some("llama"));
     }
 
@@ -465,17 +471,16 @@ mod tests {
 
     #[test]
     fn context_length_falls_back_to_llama_when_arch_missing() {
-        let m = make_meta(vec![
-            ("llama.context_length", GgufValue::U32(2048)),
-        ]);
+        let m = make_meta(vec![("llama.context_length", GgufValue::U32(2048))]);
         assert_eq!(m.context_length(), Some(2048));
     }
 
     #[test]
     fn context_length_absent() {
-        let m = make_meta(vec![
-            ("general.architecture", GgufValue::Str("llama".into())),
-        ]);
+        let m = make_meta(vec![(
+            "general.architecture",
+            GgufValue::Str("llama".into()),
+        )]);
         assert_eq!(m.context_length(), None);
     }
 
@@ -502,9 +507,7 @@ mod tests {
             (18, "Q6_K"),
         ];
         for (ft, expected) in cases {
-            let m = make_meta(vec![
-                ("general.file_type", GgufValue::U32(*ft)),
-            ]);
+            let m = make_meta(vec![("general.file_type", GgufValue::U32(*ft))]);
             assert_eq!(
                 m.quantization_name().as_deref(),
                 Some(*expected),
@@ -517,9 +520,7 @@ mod tests {
 
     #[test]
     fn quantization_name_unknown_value() {
-        let m = make_meta(vec![
-            ("general.file_type", GgufValue::U32(99)),
-        ]);
+        let m = make_meta(vec![("general.file_type", GgufValue::U32(99))]);
         assert_eq!(m.quantization_name().as_deref(), Some("unknown"));
     }
 
@@ -533,9 +534,10 @@ mod tests {
 
     #[test]
     fn model_name_from_general_name() {
-        let m = make_meta(vec![
-            ("general.name", GgufValue::Str("Llama-3.1-8B-Instruct".into())),
-        ]);
+        let m = make_meta(vec![(
+            "general.name",
+            GgufValue::Str("Llama-3.1-8B-Instruct".into()),
+        )]);
         assert_eq!(m.model_name(), "Llama-3.1-8B-Instruct");
     }
 
@@ -548,9 +550,7 @@ mod tests {
 
     #[test]
     fn model_name_empty_general_name_falls_back() {
-        let m = make_meta(vec![
-            ("general.name", GgufValue::Str("".into())),
-        ]);
+        let m = make_meta(vec![("general.name", GgufValue::Str("".into()))]);
         assert_eq!(m.model_name(), "test-model-Q4_K_M");
     }
 
@@ -643,12 +643,15 @@ mod tests {
         let path = dir.path().join("v2.gguf");
         let mut f = std::fs::File::create(&path).expect("create");
         f.write_all(&0x4647_4755u32.to_le_bytes()).unwrap(); // correct magic
-        f.write_all(&2u32.to_le_bytes()).unwrap();           // version 2 (unsupported)
+        f.write_all(&2u32.to_le_bytes()).unwrap(); // version 2 (unsupported)
         drop(f);
 
         let result = GgufMetadata::read(&path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unsupported GGUF version"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported GGUF version"));
     }
 
     // ── GgufValue accessors ───────────────────────────────────────────────────

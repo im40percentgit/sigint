@@ -62,10 +62,7 @@ fn render_session_list(frame: &mut Frame, state: &AppState, area: Rect) {
             Constraint::Length(12),
         ],
     )
-    .header(
-        Row::new(["ID", "TARGET", "DATE"])
-            .style(Style::default().add_modifier(Modifier::BOLD)),
-    )
+    .header(Row::new(["ID", "TARGET", "DATE"]).style(Style::default().add_modifier(Modifier::BOLD)))
     .block(
         Block::default()
             .title(title)

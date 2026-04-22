@@ -44,9 +44,7 @@ mod inner {
         context::params::LlamaContextParams,
         llama_backend::LlamaBackend,
         llama_batch::LlamaBatch,
-        model::{
-            params::LlamaModelParams, AddBos, LlamaChatMessage, LlamaModel,
-        },
+        model::{params::LlamaModelParams, AddBos, LlamaChatMessage, LlamaModel},
         sampling::LlamaSampler,
     };
     use std::num::NonZeroU32;
@@ -214,8 +212,7 @@ mod inner {
             let threads = self.threads;
             let flash_attention = self.flash_attention;
 
-            let (tx, mut rx) =
-                mpsc::channel::<Result<StreamChunk, Error>>(STREAM_CHANNEL_CAPACITY);
+            let (tx, mut rx) = mpsc::channel::<Result<StreamChunk, Error>>(STREAM_CHANNEL_CAPACITY);
 
             tokio::task::spawn_blocking(move || {
                 run_inference_streaming(
@@ -413,9 +410,7 @@ mod inner {
                     None, // no extra JSON schema constraint
                     true, // add_generation_prompt
                 )
-                .map_err(|e| {
-                    Error::Llm(format!("apply_chat_template_with_tools: {}", e))
-                })?;
+                .map_err(|e| Error::Llm(format!("apply_chat_template_with_tools: {}", e)))?;
             let p = result.prompt.clone();
             debug!(
                 "embedded: tools-aware template, parse_tool_calls={}",
@@ -677,10 +672,7 @@ mod tests {
     /// `load()` should fail with a clear message when the model file does not exist.
     #[test]
     fn load_fails_when_model_missing() {
-        let cfg = make_config(
-            "nonexistent-model",
-            Some("/tmp/no-such-models-dir".into()),
-        );
+        let cfg = make_config("nonexistent-model", Some("/tmp/no-such-models-dir".into()));
         let result = EmbeddedProvider::load(&cfg);
         assert!(result.is_err(), "Expected Err when model file is absent");
         let msg = result.unwrap_err().to_string();
@@ -693,10 +685,7 @@ mod tests {
     /// `load()` with a `.gguf` extension already present should not double-append.
     #[test]
     fn load_fails_with_descriptive_path_when_gguf_extension_given() {
-        let cfg = make_config(
-            "mymodel.gguf",
-            Some("/tmp/no-such-models-dir".into()),
-        );
+        let cfg = make_config("mymodel.gguf", Some("/tmp/no-such-models-dir".into()));
         let result = EmbeddedProvider::load(&cfg);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -718,12 +707,13 @@ mod tests {
             .write_all(b"placeholder")
             .unwrap();
 
-        let cfg = make_config(
-            "test.gguf",
-            Some(dir.path().to_string_lossy().into_owned()),
-        );
+        let cfg = make_config("test.gguf", Some(dir.path().to_string_lossy().into_owned()));
         let result = EmbeddedProvider::load(&cfg);
-        assert!(result.is_ok(), "Expected Ok when model file exists: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Expected Ok when model file exists: {:?}",
+            result
+        );
     }
 
     /// `load()` should find a model by appending `.gguf` automatically.
@@ -737,10 +727,7 @@ mod tests {
             .write_all(b"placeholder")
             .unwrap();
 
-        let cfg = make_config(
-            "mymodel",
-            Some(dir.path().to_string_lossy().into_owned()),
-        );
+        let cfg = make_config("mymodel", Some(dir.path().to_string_lossy().into_owned()));
         let result = EmbeddedProvider::load(&cfg);
         assert!(
             result.is_ok(),
@@ -759,10 +746,7 @@ mod tests {
             .unwrap()
             .write_all(b"x")
             .unwrap();
-        let cfg = make_config(
-            "test.gguf",
-            Some(dir.path().to_string_lossy().into_owned()),
-        );
+        let cfg = make_config("test.gguf", Some(dir.path().to_string_lossy().into_owned()));
         let provider = EmbeddedProvider::load(&cfg).unwrap();
         assert_eq!(provider.name(), "embedded");
     }
@@ -777,10 +761,7 @@ mod tests {
             .unwrap()
             .write_all(b"x")
             .unwrap();
-        let mut cfg = make_config(
-            "test.gguf",
-            Some(dir.path().to_string_lossy().into_owned()),
-        );
+        let mut cfg = make_config("test.gguf", Some(dir.path().to_string_lossy().into_owned()));
         cfg.context_window = 0;
         let provider = EmbeddedProvider::load(&cfg).unwrap();
         assert_eq!(provider.context_window, 4096);
@@ -796,10 +777,7 @@ mod tests {
             .unwrap()
             .write_all(b"x")
             .unwrap();
-        let mut cfg = make_config(
-            "test.gguf",
-            Some(dir.path().to_string_lossy().into_owned()),
-        );
+        let mut cfg = make_config("test.gguf", Some(dir.path().to_string_lossy().into_owned()));
         cfg.context_window = 8192;
         let provider = EmbeddedProvider::load(&cfg).unwrap();
         assert_eq!(provider.context_window, 8192);

@@ -52,8 +52,8 @@ pub async fn run_export(
         .map_err(|e| Error::Database(format!("Cannot open database: {e}")))?;
 
     println!("Extracting training data from scan history...");
-    let (examples, train_stats) = extract::extract_all(&db)
-        .map_err(|e| Error::Other(format!("extraction failed: {}", e)))?;
+    let (examples, train_stats) =
+        extract::extract_all(&db).map_err(|e| Error::Other(format!("extraction failed: {}", e)))?;
 
     if examples.is_empty() {
         println!("No training examples found. Run some scans first.");
@@ -89,8 +89,16 @@ pub async fn run_export(
     let test_count = format::write_jsonl(&test_examples, &test_path)
         .map_err(|e| Error::Other(format!("failed to write test.jsonl: {}", e)))?;
 
-    println!("Exported {} training examples -> {}", train_count, train_path.display());
-    println!("Exported {} test examples     -> {}", test_count, test_path.display());
+    println!(
+        "Exported {} training examples -> {}",
+        train_count,
+        train_path.display()
+    );
+    println!(
+        "Exported {} test examples     -> {}",
+        test_count,
+        test_path.display()
+    );
     println!();
     stats::print_stats(&train_stats);
 
@@ -142,8 +150,8 @@ pub async fn run_stats(core: AppCore) -> Result<(), Error> {
     let db = sigint_store::db::Database::open(&db_path)
         .map_err(|e| Error::Database(format!("Cannot open database: {e}")))?;
 
-    let (_, train_stats) = extract::extract_all(&db)
-        .map_err(|e| Error::Other(format!("extraction failed: {}", e)))?;
+    let (_, train_stats) =
+        extract::extract_all(&db).map_err(|e| Error::Other(format!("extraction failed: {}", e)))?;
 
     stats::print_stats(&train_stats);
     Ok(())
@@ -222,7 +230,11 @@ pub async fn run_assess(
     let examples = format::read_jsonl(&test_path)
         .map_err(|e| Error::Other(format!("failed to read test JSONL: {}", e)))?;
 
-    println!("Loaded {} test examples from {}", examples.len(), test_path.display());
+    println!(
+        "Loaded {} test examples from {}",
+        examples.len(),
+        test_path.display()
+    );
     println!();
 
     // Placeholder: no live model inference yet. Show what a perfect-prediction
@@ -235,10 +247,7 @@ pub async fn run_assess(
                 if msg.role == "assistant" {
                     if let Some(calls) = &msg.tool_calls {
                         if let Some(call) = calls.first() {
-                            return (
-                                call.function.name.clone(),
-                                call.function.arguments.clone(),
-                            );
+                            return (call.function.name.clone(), call.function.arguments.clone());
                         }
                     }
                 }
@@ -283,11 +292,7 @@ pub async fn run_finetune(
         )));
     }
 
-    let job_dir = cfg
-        .job_dir
-        .clone()
-        .map(Ok)
-        .unwrap_or_else(training_dir)?;
+    let job_dir = cfg.job_dir.clone().map(Ok).unwrap_or_else(training_dir)?;
     let output_path = job_dir.join(&output);
 
     let record = finetune::run_finetune(cfg, &base, &output_path, &train_jsonl, &test_jsonl)
@@ -472,7 +477,10 @@ pub async fn run_evaluate(
     evaluate::persist_last_eval(&job_dir, &report)
         .map_err(|e| Error::Other(format!("failed to persist last_eval.json: {}", e)))?;
 
-    println!("Saved comparison report to {}/last_eval.json", job_dir.display());
+    println!(
+        "Saved comparison report to {}/last_eval.json",
+        job_dir.display()
+    );
 
     Ok(())
 }

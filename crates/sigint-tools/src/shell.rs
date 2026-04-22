@@ -24,7 +24,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -236,7 +236,10 @@ mod tests {
 
     #[test]
     fn shell_risk_level_is_high() {
-        assert_eq!(ShellTool::new().risk_level(), sigint_core::types::ToolRisk::High);
+        assert_eq!(
+            ShellTool::new().risk_level(),
+            sigint_core::types::ToolRisk::High
+        );
     }
 
     #[test]

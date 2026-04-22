@@ -23,7 +23,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -263,9 +263,7 @@ mod tests {
         );
 
         // provider has enum with all 4 providers
-        let provider_enum = params["properties"]["provider"]["enum"]
-            .as_array()
-            .unwrap();
+        let provider_enum = params["properties"]["provider"]["enum"].as_array().unwrap();
         assert!(provider_enum.iter().any(|v| v == "aws"));
         assert!(provider_enum.iter().any(|v| v == "azure"));
         assert!(provider_enum.iter().any(|v| v == "gcp"));
@@ -278,10 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn cloudsploit_missing_provider_errors() {
-        let err = CloudsploitTool::new()
-            .execute(json!({}))
-            .await
-            .unwrap_err();
+        let err = CloudsploitTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"

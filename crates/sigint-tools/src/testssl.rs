@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -272,10 +272,7 @@ pub(crate) fn parse_testssl_output(stdout: &str, min_severity: Option<&str>) -> 
     }
 
     let total_issues = findings.len() as u64;
-    let protocols_json: Value = protocols
-        .into_iter()
-        .map(|(k, v)| (k, json!(v)))
-        .collect();
+    let protocols_json: Value = protocols.into_iter().map(|(k, v)| (k, json!(v))).collect();
     let by_severity_json: Value = by_severity
         .into_iter()
         .map(|(k, v)| (k, json!(v)))
@@ -371,7 +368,9 @@ mod tests {
         assert_eq!(protocols["TLSv1.3"], "offered");
 
         // OK findings should be filtered out (HEARTBLEED OK).
-        let findings = result["findings"].as_array().expect("findings should be array");
+        let findings = result["findings"]
+            .as_array()
+            .expect("findings should be array");
 
         // POODLE_SSL (HIGH) + cert_trust (LOW) + SSLv3 (NOT OK, non-protocol) = at least 2
         assert!(
@@ -402,8 +401,13 @@ mod tests {
 
         let result =
             parse_testssl_output(input, None).expect("should parse output with all OK findings");
-        let findings = result["findings"].as_array().expect("findings should be array");
-        assert!(findings.is_empty(), "all OK findings should be filtered out");
+        let findings = result["findings"]
+            .as_array()
+            .expect("findings should be array");
+        assert!(
+            findings.is_empty(),
+            "all OK findings should be filtered out"
+        );
         assert_eq!(result["total_issues"], 0);
     }
 
@@ -432,12 +436,10 @@ mod tests {
         // Protocol entries should NOT appear in findings.
         let findings = result["findings"].as_array().unwrap();
         assert!(
-            !findings
-                .iter()
-                .any(|f| f["id"]
-                    .as_str()
-                    .map(|s| s.starts_with("TLSv") || s.starts_with("SSLv"))
-                    .unwrap_or(false)),
+            !findings.iter().any(|f| f["id"]
+                .as_str()
+                .map(|s| s.starts_with("TLSv") || s.starts_with("SSLv"))
+                .unwrap_or(false)),
             "TLS/SSL entries should not appear in findings"
         );
     }

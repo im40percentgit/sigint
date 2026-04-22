@@ -20,7 +20,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -302,10 +302,7 @@ mod tests {
 
     #[tokio::test]
     async fn enum4linux_missing_target_errors() {
-        let err = Enum4linuxTool::new()
-            .execute(json!({}))
-            .await
-            .unwrap_err();
+        let err = Enum4linuxTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"
