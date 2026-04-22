@@ -276,6 +276,144 @@ pub fn check_sandbox_tool(name: &str, package: &str) -> CheckResult {
     }
 }
 
+/// Check fine-tuning configuration (Task 5, Phase 24).
+///
+/// Three sub-checks:
+/// 1. If `finetune_command` is set, verify the first word of the command is
+///    executable (found via PATH). Warns but does not fail if unset (optional).
+/// 2. If `models_dir` resolves to a path, test that it is writable.
+/// 3. If `promotion.log` exists and any entry has `new_provider = "ollama"`,
+///    verify that the `ollama` CLI is on PATH.
+///
+/// All three pass cleanly on a default config without a `[train]` section.
+pub fn check_train_config(config: &sigint_core::config::Config, promo_dir: &std::path::Path) -> Vec<CheckResult> {
+    let mut results = Vec::new();
+
+    // ── Check 1: finetune_command binary is executable if set ─────────────────
+    let cmd = config.train.finetune_command.trim();
+    if cmd.is_empty() {
+        // Unset is fine — fine-tuning is optional.
+        results.push(CheckResult {
+            label: "Train: finetune_command".to_string(),
+            passed: true,
+            detail: Some("not set (fine-tuning is optional)".to_string()),
+            hint: None,
+        });
+    } else {
+        // Resolve the first word of the command string as the binary name.
+        let binary = cmd.split_whitespace().next().unwrap_or(cmd);
+        let status = std::process::Command::new("which")
+            .arg(binary)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                results.push(CheckResult::pass(
+                    "Train: finetune_command executable",
+                    binary.to_string(),
+                ));
+            }
+            _ => {
+                results.push(CheckResult::fail(
+                    format!("Train: finetune_command binary '{}' not found", binary),
+                    format!(
+                        "The first word of [train].finetune_command ('{}') is not on PATH. \
+                         Install the trainer or update finetune_command.",
+                        binary
+                    ),
+                ));
+            }
+        }
+    }
+
+    // ── Check 2: models_dir is writable ──────────────────────────────────────
+    let models_dir = config.resolved_models_dir();
+    if !models_dir.exists() {
+        // Dir doesn't exist yet — try to create it to test writability.
+        match std::fs::create_dir_all(&models_dir) {
+            Ok(_) => {
+                results.push(CheckResult::pass(
+                    "Train: models_dir writable",
+                    format!("created {}", models_dir.display()),
+                ));
+            }
+            Err(e) => {
+                results.push(CheckResult::fail(
+                    "Train: models_dir writable",
+                    format!(
+                        "Cannot create {}: {} — check permissions",
+                        models_dir.display(),
+                        e
+                    ),
+                ));
+            }
+        }
+    } else {
+        // Dir exists — probe write access with a temp file.
+        let probe = models_dir.join(".sigint-doctor-write-probe");
+        match std::fs::write(&probe, b"probe") {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe);
+                results.push(CheckResult::pass(
+                    "Train: models_dir writable",
+                    models_dir.display().to_string(),
+                ));
+            }
+            Err(e) => {
+                results.push(CheckResult::fail(
+                    "Train: models_dir writable",
+                    format!(
+                        "{} is not writable: {} — check permissions",
+                        models_dir.display(),
+                        e
+                    ),
+                ));
+            }
+        }
+    }
+
+    // ── Check 3: ollama CLI on PATH if any Ollama-tagged promotion exists ─────
+    let log_path = promo_dir.join("promotion.log");
+    if log_path.exists() {
+        let contents = std::fs::read_to_string(&log_path).unwrap_or_default();
+        let has_ollama_promotion = contents.lines().any(|line| {
+            // Promotion log entries are JSONL; look for new_provider = "ollama".
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                v["new_provider"].as_str() == Some("ollama")
+            } else {
+                false
+            }
+        });
+        if has_ollama_promotion {
+            let status = std::process::Command::new("which")
+                .arg("ollama")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    results.push(CheckResult::pass(
+                        "Train: ollama CLI found (required by promotion.log)",
+                        "found",
+                    ));
+                }
+                _ => {
+                    results.push(CheckResult::fail(
+                        "Train: ollama CLI not found",
+                        "promotion.log references an ollama model but 'ollama' is not on PATH. \
+                         Install Ollama: https://ollama.ai or run `sigint doctor` after installing.",
+                    ));
+                }
+            }
+        }
+        // No Ollama promotion in log → skip the check silently.
+    }
+    // No promotion.log yet → skip the check silently.
+
+    results
+}
+
 /// Open the database and read the current schema version.
 ///
 /// Returns a `CheckResult` with the version number and resolved path.
@@ -412,7 +550,20 @@ pub async fn run(core: AppCore) -> Result<(), Error> {
     results.push(check_sandbox_tool("newuidmap", "uidmap"));
     results.push(check_sandbox_tool("pasta", "passt"));
 
-    // 6. Database check
+    // 6. Fine-tuning config checks (Task 5, Phase 24)
+    let promo_dir = {
+        if let Some(ref dir) = core.config.train.job_dir {
+            dir.clone()
+        } else {
+            let home = std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("."));
+            home.join(".local").join("share").join("sigint").join("training")
+        }
+    };
+    results.extend(check_train_config(&core.config, &promo_dir));
+
+    // 7. Database check
     let db_path = core.config.resolved_db_path();
     results.push(check_database(&db_path));
 
@@ -623,5 +774,132 @@ mod tests {
         // also acceptable — the important thing is we don't panic.
         // We just verify the result type is coherent.
         let _ = result; // no assertion — just verify no panic
+    }
+
+    // ── check_train_config ────────────────────────────────────────────────────
+
+    fn make_train_config_default() -> Config {
+        make_config("http://localhost:11434", "llama3.2")
+    }
+
+    /// On default config (no [train] section / finetune_command empty), all
+    /// three checks must pass without a models_dir or promotion.log present.
+    #[test]
+    fn check_train_config_default_config_passes() {
+        let cfg = make_train_config_default();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // No promotion.log exists — passes silently.
+        let results = check_train_config(&cfg, tmp.path());
+        // Two results: finetune_command (optional, pass) + models_dir writable.
+        // (Ollama check is skipped when no promotion.log.)
+        assert!(
+            results.iter().all(|r| r.passed),
+            "default config should produce only passing checks: {:?}",
+            results
+        );
+    }
+
+    /// When finetune_command points to a real binary (e.g. "ls"), the check passes.
+    #[test]
+    fn check_train_config_valid_command_passes() {
+        let mut cfg = make_train_config_default();
+        cfg.train.finetune_command = "ls --help".to_string();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let results = check_train_config(&cfg, tmp.path());
+        let cmd_check = results
+            .iter()
+            .find(|r| r.label.contains("finetune_command"))
+            .expect("should have finetune_command check");
+        assert!(
+            cmd_check.passed,
+            "valid command 'ls' should pass: {:?}",
+            cmd_check
+        );
+    }
+
+    /// When finetune_command references a non-existent binary, the check fails.
+    #[test]
+    fn check_train_config_bad_command_fails() {
+        let mut cfg = make_train_config_default();
+        cfg.train.finetune_command = "sigint-xyzzy-trainer-definitely-not-installed --train".to_string();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let results = check_train_config(&cfg, tmp.path());
+        let cmd_check = results
+            .iter()
+            .find(|r| r.label.contains("finetune_command") || r.label.contains("binary"))
+            .expect("should have finetune_command check");
+        assert!(
+            !cmd_check.passed,
+            "non-existent binary should fail: {:?}",
+            cmd_check
+        );
+    }
+
+    /// models_dir writable check passes when the directory exists and is writable.
+    #[test]
+    fn check_train_config_writable_models_dir_passes() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let models_dir = tmp.path().join("models");
+        std::fs::create_dir_all(&models_dir).unwrap();
+
+        let mut cfg = make_train_config_default();
+        cfg.llm.models_dir = Some(models_dir.to_str().unwrap().to_string());
+
+        let promo_tmp = tempfile::TempDir::new().expect("tempdir");
+        let results = check_train_config(&cfg, promo_tmp.path());
+        let writable_check = results
+            .iter()
+            .find(|r| r.label.contains("models_dir"))
+            .expect("should have models_dir check");
+        assert!(
+            writable_check.passed,
+            "writable models_dir should pass: {:?}",
+            writable_check
+        );
+    }
+
+    /// ollama CLI check fires when promotion.log contains an ollama new_provider entry.
+    /// We write a fake promotion.log and expect the check to run (pass if ollama is
+    /// found, fail gracefully if not — we only check the label is present).
+    #[test]
+    fn check_train_config_ollama_check_fires_when_log_has_ollama_entry() {
+        let cfg = make_train_config_default();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+
+        // Write a fake promotion.log with new_provider = "ollama"
+        let log_content = r#"{"ts":"2026-01-01T00:00:00Z","action":"promote","old_provider":"embedded","old_model":"base.gguf","new_provider":"ollama","new_model":"sigint-ft:latest"}"#;
+        std::fs::write(tmp.path().join("promotion.log"), log_content).unwrap();
+
+        let results = check_train_config(&cfg, tmp.path());
+        // The ollama check should have been triggered (label contains "ollama").
+        let has_ollama_check = results
+            .iter()
+            .any(|r| r.label.to_lowercase().contains("ollama"));
+        assert!(
+            has_ollama_check,
+            "should have an ollama CLI check when promotion.log has ollama entry: {:?}",
+            results
+        );
+    }
+
+    /// ollama CLI check is silently skipped when promotion.log has no ollama entries.
+    #[test]
+    fn check_train_config_ollama_check_skipped_without_ollama_promotion() {
+        let cfg = make_train_config_default();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+
+        // promotion.log with only an "embedded" new_provider entry.
+        let log_content = r#"{"ts":"2026-01-01T00:00:00Z","action":"promote","old_provider":"ollama","old_model":"llama3.2","new_provider":"embedded","new_model":"adapter.gguf"}"#;
+        std::fs::write(tmp.path().join("promotion.log"), log_content).unwrap();
+
+        let results = check_train_config(&cfg, tmp.path());
+        // Should be exactly 2 results: finetune_command + models_dir.
+        // No ollama CLI check.
+        assert_eq!(
+            results.len(),
+            2,
+            "should skip ollama check when no ollama promotion in log: {:?}",
+            results
+        );
     }
 }

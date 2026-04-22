@@ -60,3 +60,39 @@ default_output_cap = 1048576  # 1 MB
 # [tools.overrides.nuclei]
 # output_cap = 2097152
 # timeout = 600
+
+# ── Fine-tuning pipeline (optional) ──────────────────────────────────────────
+#
+# The [train] section is entirely optional. Leave it out (or keep every line
+# commented) and `sigint train harvest / export` still work; only
+# `sigint train finetune` will refuse to run until finetune_command is set.
+#
+# Environment variables passed to the trainer binary:
+#   SIGINT_TRAIN_JSONL  — path to the training split (JSONL, OpenAI format)
+#   SIGINT_TEST_JSONL   — path to the held-out test split
+#   SIGINT_BASE_MODEL   — base model tag supplied via --base flag
+#   SIGINT_OUTPUT_PATH  — requested output path for the fine-tuned adapter
+#
+# Example finetune_command values (pick one):
+#
+#   unsloth (recommended for consumer GPUs):
+#     finetune_command = "unsloth-cli --train $SIGINT_TRAIN_JSONL --output $SIGINT_OUTPUT_PATH --base $SIGINT_BASE_MODEL"
+#
+#   axolotl (flexible, YAML-config-driven):
+#     finetune_command = "axolotl train --data $SIGINT_TRAIN_JSONL --base-model $SIGINT_BASE_MODEL --output-dir $SIGINT_OUTPUT_PATH"
+#
+#   MLX (Apple Silicon):
+#     finetune_command = "mlx_lm.lora --train --data $SIGINT_TRAIN_JSONL --model $SIGINT_BASE_MODEL --adapter-path $SIGINT_OUTPUT_PATH"
+
+[train]
+# External command used for fine-tuning. Must read env vars listed above.
+# Leaving this empty (the default) disables `sigint train finetune`.
+# finetune_command = "unsloth-cli --train $SIGINT_TRAIN_JSONL --output $SIGINT_OUTPUT_PATH --base $SIGINT_BASE_MODEL"
+
+# Minimum number of test-set examples required before `sigint model promote`
+# will accept a candidate model. Default: 50.
+# min_eval_examples = 50
+
+# Directory where fine-tune job records (jobs.json) and adapter outputs live.
+# Default: ~/.local/share/sigint/training/
+# job_dir = "~/.local/share/sigint/training"

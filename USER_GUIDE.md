@@ -653,3 +653,90 @@ sigint log <session-id>
 
 Prints the chronological engagement log: every agent message, tool call, and
 finding in the order they occurred.
+
+---
+
+## Fine-tuning Workflow
+
+SIGINT supports an optional closed-loop fine-tuning pipeline that adapts the LLM
+to your engagement style and tool-calling patterns. The pipeline is entirely
+opt-in: session data is never harvested automatically.
+
+**Privacy notice:** Training data is derived from your engagement logs. These
+logs may contain sensitive target data (IP addresses, hostnames, credentials,
+tool output). Review all harvested data before fine-tuning or sharing the
+resulting adapter. You are responsible for ensuring you have the right to use
+the data.
+
+### Step 1 — Harvest
+
+Mark a session as approved for fine-tuning:
+
+```bash
+sigint train harvest <session_id>
+```
+
+This sets `trainable=1` on the session. Only harvested sessions are included in
+exported training data. Run this once per session you wish to include.
+
+### Step 2 — Export
+
+Extract training data from all harvested sessions and split 80/20:
+
+```bash
+sigint train export
+```
+
+Writes `train.jsonl` and `test.jsonl` to `~/.local/share/sigint/training/`.
+The minimum required examples threshold (default: 50) is enforced at export
+time. Add more harvested sessions if you fall short.
+
+### Step 3 — Fine-tune
+
+Run your configured trainer with the exported data:
+
+```bash
+sigint train finetune --base <base-model-tag> --output <adapter-name>
+```
+
+Requires `[train].finetune_command` in `config.toml`. The command receives
+training data via environment variables (`SIGINT_TRAIN_JSONL`, `SIGINT_TEST_JSONL`,
+`SIGINT_BASE_MODEL`, `SIGINT_OUTPUT_PATH`). See `config.example.toml` for
+examples using unsloth, axolotl, or MLX.
+
+### Step 4 — Evaluate
+
+Compare the fine-tuned candidate against the base model on the held-out test set:
+
+```bash
+sigint train evaluate --base <base-tag> --candidate <new-tag>
+```
+
+Runs live inference on both models and reports tool-selection accuracy and
+argument match rate. Saves `last_eval.json` to the training directory for the
+promote gate.
+
+### Step 5 — Promote
+
+Promote the candidate model to active use:
+
+```bash
+sigint model promote <tag>
+```
+
+Atomically rewrites `config.toml` to use the new model. Requires at least
+`min_eval_examples` (default: 50) in `last_eval.json`. Use `--force` to
+override the gate. A backup of the previous config is saved as `config.toml.bak`,
+and a `promotion.log` audit entry is appended.
+
+### Step 6 — Rollback
+
+Revert to the previous model if the promoted model underperforms:
+
+```bash
+sigint model rollback
+```
+
+Reads the last entry from `promotion.log` and restores the previous provider
+and model in `config.toml`. A rollback entry is appended to the log for
+auditability.
