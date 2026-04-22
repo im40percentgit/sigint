@@ -332,6 +332,61 @@ prompts before those agents run.
 
 ---
 
+## Fine-tuning Closed Loop
+
+`sigint-train` implements an optional pipeline for adapting the LLM to
+engagement-specific tool-calling patterns. All steps are explicit opt-in:
+no data leaves the local machine without a user-initiated command.
+
+```
+sigint train harvest <session_id>   # mark session trainable=1 in SQLite
+sigint train export                 # extract JSONL, 80/20 split
+sigint train finetune --base <tag> --output <name>  # shell-out to trainer
+sigint train evaluate --base <tag> --candidate <tag> # live A/B comparison
+sigint model promote <tag>          # atomic config rewrite + promotion.log
+sigint model rollback               # revert via promotion.log last entry
+```
+
+### Crate responsibilities
+
+| Crate | Responsibility |
+|-------|---------------|
+| `sigint-train` | extract, format, split, finetune, evaluate, modelfile, assess |
+| `sigint-cli::train` | CLI dispatch for harvest/export/finetune/evaluate |
+| `sigint-cli::model` | CLI dispatch for promote/rollback; atomic config rewrite |
+| `sigint-core::TrainConfig` | `[train]` config section: finetune_command, min_eval_examples, job_dir |
+
+### Key decisions
+
+- **DEC-P24-001** — Fine-tune backend is an external shell-out command. The
+  command receives training data via env vars (`SIGINT_TRAIN_JSONL`,
+  `SIGINT_TEST_JSONL`, `SIGINT_BASE_MODEL`, `SIGINT_OUTPUT_PATH`). This keeps
+  sigint toolchain-agnostic (unsloth / axolotl / MLX).
+
+- **DEC-P24-002** — Harvest is explicit opt-in (`trainable=1`). Production
+  `extract_all` filters to harvested sessions only; `extract_all_unfiltered`
+  is available for tests and back-compat.
+
+- **DEC-P24-003** — Evaluation runs live inference on both base and candidate
+  providers against the held-out test set (20%). This is the only methodology
+  that detects real quality regressions introduced by fine-tuning.
+
+- **DEC-P24-004** — Promotion atomically rewrites `config.toml` via
+  `.tmp` + `rename()`. A `.bak` backup is created before every promotion.
+  An append-only `promotion.log` (JSONL) enables rollback.
+
+- **DEC-P24-007** — Modelfile `ADAPTER` directive is emitted only when a real
+  LoRA adapter binary path is provided (`Some`). Supersedes DEC-TRAIN-005.
+
+### P1 promotion gate
+
+`sigint model promote` refuses unless `last_eval.json` contains
+`total_examples >= config.train.min_eval_examples` (default: 50). Use
+`--force` to override. This prevents promoting models evaluated on too few
+examples to be statistically meaningful.
+
+---
+
 ## Adding a New Tool
 
 1. Create `crates/sigint-tools/src/<toolname>.rs` implementing `Tool`.

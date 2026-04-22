@@ -7,6 +7,7 @@
 //! @decision DEC-P24-007
 //! @title Modelfile ADAPTER directive requires a real LoRA adapter binary path
 //! @status accepted
+//! @supersedes DEC-TRAIN-005
 //! @rationale Phase 23 (DEC-TRAIN-005) incorrectly pointed ADAPTER at the
 //! training JSONL file. Ollama's ADAPTER directive expects a pre-trained
 //! adapter binary (GGUF or safetensors), not training data. This fix makes
@@ -15,7 +16,7 @@
 //! suitable for packaging a base model with a custom persona without an
 //! adapter. Callers that have completed fine-tuning pass the adapter path
 //! explicitly; callers that have not (or are using a non-adapter workflow)
-//! pass `None`. Supersedes DEC-TRAIN-005.
+//! pass `None`. Supersedes DEC-TRAIN-005 (Phase 23 incorrect ADAPTER usage).
 
 use std::io::Write;
 use std::path::Path;
