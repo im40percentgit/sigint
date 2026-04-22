@@ -126,6 +126,17 @@ impl ScanService {
         target: &str,
         model: Option<String>,
     ) -> Result<Uuid, Error> {
+        // SSRF guard — belt-and-suspenders: validate before any session is
+        // created or network work begins. The web handler also calls this, but
+        // defence-in-depth here ensures future callers (CLI, SDK, plugins)
+        // are protected even if they bypass the HTTP layer.
+        sigint_core::validate_target(
+            target,
+            self.config.recon.allow_internal,
+            &self.config.recon.target_allowlist,
+        )
+        .map_err(|e| Error::InvalidInput(format!("invalid target: {}", e)))?;
+
         let model = model.unwrap_or_else(|| self.config.llm.model.clone());
         let context_window = if self.config.llm.context_window > 0 {
             self.config.llm.context_window
@@ -376,5 +387,69 @@ mod tests {
         // the inner String is preserved as the nested value.
         assert!(json.contains("failed"), "expected 'failed' in: {}", json);
         assert!(json.contains("timeout"), "expected 'timeout' in: {}", json);
+    }
+
+    // ── SSRF guard tests ──────────────────────────────────────────────────────
+    //
+    // Validate that ScanService::start() rejects internal targets before any
+    // session is created or Orchestrator is spawned. These tests exercise the
+    // defence-in-depth guard at the service layer (CSO Finding #3).
+
+    #[tokio::test]
+    async fn scan_service_rejects_loopback_target() {
+        let svc = test_service();
+        let db = Arc::new(sigint_store::Database::open_in_memory().expect("in-memory db"));
+        let result = svc.start(&db, "127.0.0.1", None).await;
+        assert!(
+            result.is_err(),
+            "ScanService::start must reject loopback target 127.0.0.1"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("private")
+                || err_msg.contains("internal")
+                || err_msg.contains("invalid"),
+            "error should describe the SSRF rejection, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_service_rejects_metadata_endpoint() {
+        let svc = test_service();
+        let db = Arc::new(sigint_store::Database::open_in_memory().expect("in-memory db"));
+        // 169.254.169.254 is the AWS/GCP IMDS endpoint — primary SSRF vector.
+        let result = svc.start(&db, "169.254.169.254", None).await;
+        assert!(
+            result.is_err(),
+            "ScanService::start must reject IMDS metadata endpoint 169.254.169.254"
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_service_allow_internal_permits_loopback() {
+        // When config.recon.allow_internal = true, loopback must be accepted.
+        // The scan will fail to connect (no Ollama), but that's fine — we only
+        // care that the SSRF guard is bypassed and a session_id is returned.
+        let mut config = Config::default();
+        config.recon.allow_internal = true;
+        let config = Arc::new(config);
+        let event_bus = EventBus::new();
+        let approval = Arc::new(ApprovalRegistry::new(Duration::from_secs(60)));
+        let svc = ScanService::new(config, event_bus, approval);
+
+        let db = Arc::new(sigint_store::Database::open_in_memory().expect("in-memory db"));
+        // start() will proceed past the SSRF guard, create a session, then
+        // spawn a background task that will fail (no LLM). The important thing
+        // is that it does NOT return an SSRF-related error — it returns Ok with
+        // a session_id.
+        let result = svc.start(&db, "127.0.0.1", None).await;
+        // We expect Ok(uuid) — the SSRF guard was bypassed.
+        // LLM connection failure happens asynchronously, not here.
+        assert!(
+            result.is_ok(),
+            "ScanService::start must allow loopback when allow_internal = true, got: {:?}",
+            result
+        );
     }
 }

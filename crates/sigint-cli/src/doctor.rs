@@ -634,6 +634,7 @@ mod tests {
             plugins: sigint_core::config::PluginsConfig::default(),
             train: sigint_core::config::TrainConfig::default(),
             web: sigint_core::config::WebConfig::default(),
+            recon: sigint_core::config::ReconConfig::default(),
         }
     }
 

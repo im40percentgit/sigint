@@ -101,3 +101,4 @@ crossterm = "0.28"
 # Security
 subtle = "2"
 rand = { version = "0.8", features = ["std"] }
+ipnet = "2"

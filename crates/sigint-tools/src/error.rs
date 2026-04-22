@@ -25,6 +25,15 @@ pub enum ToolError {
     #[error("command not allowed: '{0}' — only whitelisted commands are permitted")]
     DisallowedCommand(String),
 
+    /// An argument value was rejected by a security allowlist.
+    ///
+    /// Used by nuclei (template URL/path guard, Finding #5) and any future
+    /// tool that validates LLM-controlled argument values against a static
+    /// allowlist. The message should include the rejected value and the
+    /// permitted alternatives so the LLM can self-correct.
+    #[error("disallowed argument: {0}")]
+    DisallowedArgument(String),
+
     /// Sandbox execution failed (wraps SandboxError message).
     #[error("sandbox error: {0}")]
     Sandbox(String),
@@ -66,6 +75,13 @@ mod tests {
         assert_eq!(
             ToolError::Timeout(300).to_string(),
             "tool timed out after 300s"
+        );
+        assert_eq!(
+            ToolError::DisallowedArgument(
+                "nuclei template URL not permitted: https://evil.com/x.yaml".to_string()
+            )
+            .to_string(),
+            "disallowed argument: nuclei template URL not permitted: https://evil.com/x.yaml"
         );
     }
 }

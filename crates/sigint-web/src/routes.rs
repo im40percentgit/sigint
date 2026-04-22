@@ -53,6 +53,12 @@ pub struct ScanRequest {
 /// DB session, builds the Orchestrator, and spawns the scan as a background
 /// task. Returns `201 Created` with `{"session_id": "<uuid>"}` immediately —
 /// the scan runs asynchronously and progress arrives via WebSocket.
+///
+/// Returns `400 Bad Request` when the target is empty or resolves to a
+/// private/internal address (loopback, link-local, RFC1918) that the operator
+/// has not explicitly allowed. This is the primary SSRF guard for the web API
+/// surface (CSO Finding #3 — previously the guard only applied to the recon
+/// engine, leaving the web path unprotected).
 pub async fn start_scan(
     State(state): State<AppState>,
     Json(body): Json<ScanRequest>,
@@ -60,6 +66,17 @@ pub async fn start_scan(
     if body.target.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "target is required".into()));
     }
+
+    // SSRF guard — reject internal/private targets before any scan work begins.
+    // Uses the same allow_internal flag and target_allowlist as the recon engine
+    // so that operators who legitimately need internal scanning can opt in via
+    // [recon] config without having to configure two separate bypass paths.
+    sigint_core::validate_target(
+        &body.target,
+        state.config.recon.allow_internal,
+        &state.config.recon.target_allowlist,
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid target: {}", e)))?;
 
     let session_id = state
         .scan_service
@@ -604,6 +621,125 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── SSRF guard tests ──────────────────────────────────────────────────────
+    //
+    // These verify that `POST /api/scan` rejects private/internal targets at
+    // the HTTP layer (CSO Finding #3). The validator is wired directly into
+    // the route handler so it fires before ScanService::start() is called.
+
+    #[tokio::test]
+    async fn start_scan_rejects_loopback_target() {
+        // 127.0.0.1 is loopback — must be rejected with 400.
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"127.0.0.1"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "loopback target must be rejected with 400"
+        );
+        let body = body_string(resp.into_body()).await;
+        assert!(
+            body.contains("private") || body.contains("internal"),
+            "rejection body should explain why: {}",
+            body
+        );
+    }
+
+    #[tokio::test]
+    async fn start_scan_rejects_metadata_endpoint() {
+        // 169.254.169.254 is the AWS/GCP IMDS address — primary SSRF vector
+        // for cloud credential exfiltration (CSO Finding #3).
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"169.254.169.254"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "IMDS metadata endpoint 169.254.169.254 must be rejected with 400"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_scan_accepts_public_ipv4() {
+        // 8.8.8.8 is a public IP — validation passes, scan proceeds (201).
+        // ScanService spawns the background task and returns session_id.
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"8.8.8.8"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "public IP 8.8.8.8 must be accepted (201 Created)"
+        );
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["session_id"].is_string(),
+            "expected session_id in response, got: {}",
+            body
+        );
+    }
+
+    #[tokio::test]
+    async fn start_scan_respects_allow_internal_flag() {
+        // When Config.recon.allow_internal = true, loopback should be accepted.
+        let db = sigint_store::Database::open_in_memory().expect("in-memory db");
+        let event_bus = sigint_core::event::EventBus::new();
+        let mut config = sigint_core::Config::default();
+        config.recon.allow_internal = true;
+        let config = Arc::new(config);
+        let approval_registry = Arc::new(sigint_core::ApprovalRegistry::new(
+            std::time::Duration::from_secs(300),
+        ));
+        let scan_service = Arc::new(sigint_agents::ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        let state = AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+            api_key: TEST_KEY.to_string(),
+        };
+
+        let app = create_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"127.0.0.1"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "127.0.0.1 must be accepted when allow_internal = true"
+        );
     }
 
     // ── Diff ──────────────────────────────────────────────────────────────────

@@ -16,4 +16,5 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
+ipnet = { workspace = true }
 regex = "1"
