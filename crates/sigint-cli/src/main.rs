@@ -191,6 +191,49 @@ enum TrainCommands {
         #[arg(long)]
         data: Option<String>,
     },
+    /// Opt a session into the fine-tuning data harvest.
+    ///
+    /// Sets the `trainable` flag on the given session so that `sigint train export`
+    /// includes its scan history in the training dataset. Accepts a full UUID or
+    /// a unique prefix (at least 4 characters).
+    Harvest {
+        /// Session ID (full UUID or unique prefix, e.g. "a1b2c3d4").
+        session_id: String,
+    },
+    /// Run the configured fine-tune command against exported training data.
+    ///
+    /// Shells out to `[train].finetune_command` with env vars SIGINT_TRAIN_JSONL,
+    /// SIGINT_TEST_JSONL, SIGINT_BASE_MODEL, SIGINT_OUTPUT_PATH. Records a job
+    /// entry in `jobs.json`. Streams training output live.
+    Finetune {
+        /// Base model tag (e.g. "llama3.2:8b").
+        #[arg(long)]
+        base: String,
+        /// Output adapter/model name (resolved under job_dir).
+        #[arg(long)]
+        output: String,
+        /// Directory containing train.jsonl and test.jsonl (default: training_dir).
+        #[arg(long)]
+        train_dir: Option<String>,
+    },
+    /// List recorded fine-tune jobs from `jobs.json`.
+    Jobs,
+    /// Compare two LLM providers against held-out test data (live A/B inference).
+    ///
+    /// Calls each provider's chat() for every test example, collects tool-call
+    /// predictions, and reports accuracy deltas (candidate minus base).
+    /// Persists the result to job_dir/last_eval.json for use by `sigint model promote`.
+    Evaluate {
+        /// Base model tag (e.g. "llama3.2:8b").
+        #[arg(long)]
+        base: String,
+        /// Candidate model tag to compare against base (e.g. "sigint-ft:latest").
+        #[arg(long)]
+        candidate: String,
+        /// Path to test JSONL (default: ~/.local/share/sigint/training/test.jsonl).
+        #[arg(long)]
+        test_data: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -218,6 +261,23 @@ enum ModelCommands {
         /// Model filename or stem (e.g. "llama-3.2-8B-Q4_K_M" or "llama-3.2-8B-Q4_K_M.gguf").
         name: String,
     },
+    /// Promote a fine-tuned model to active use (atomically rewrites config).
+    ///
+    /// Detects whether <tag> is an embedded GGUF file (looks in models_dir) or
+    /// an Ollama tag (probes `ollama list`). Backs up current config to
+    /// config.toml.bak before rewriting. Appends to promotion.log.
+    Promote {
+        /// Model tag or GGUF filename to promote as the active model.
+        tag: String,
+        /// Skip the min_eval_examples safety gate.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Revert config to the model active before the last promotion.
+    ///
+    /// Reads the last entry from promotion.log and reverses the provider/model
+    /// swap. Appends a rollback entry to the log (never deletes history).
+    Rollback,
 }
 
 #[derive(Subcommand, Debug)]
@@ -387,6 +447,8 @@ async fn main() {
             ModelCommands::List => model::run_list(core).await,
             ModelCommands::Pull { source } => model::run_pull(core, source).await,
             ModelCommands::Info { name } => model::run_info(core, name).await,
+            ModelCommands::Promote { tag, force } => model::run_promote(core, tag, force).await,
+            ModelCommands::Rollback => model::run_rollback(core).await,
         },
         Commands::Plugin { command } => match command {
             PluginCommands::List => plugin::run_list()
@@ -404,6 +466,16 @@ async fn main() {
             TrainCommands::Stats => train::run_stats(core).await,
             TrainCommands::Assess { model, data } => {
                 train::run_assess(core, model, data).await
+            }
+            TrainCommands::Harvest { session_id } => {
+                train::run_harvest(core, session_id).await
+            }
+            TrainCommands::Finetune { base, output, train_dir } => {
+                train::run_finetune(core, base, output, train_dir).await
+            }
+            TrainCommands::Jobs => train::run_jobs(core).await,
+            TrainCommands::Evaluate { base, candidate, test_data } => {
+                train::run_evaluate(core, base, candidate, test_data).await
             }
         },
     };

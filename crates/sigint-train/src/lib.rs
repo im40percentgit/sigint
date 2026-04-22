@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod assess;
+pub mod evaluate;
 pub mod extract;
+pub mod finetune;
 pub mod format;
 pub mod modelfile;
 pub mod split;

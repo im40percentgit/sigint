@@ -10,6 +10,62 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+fn default_min_eval_examples() -> usize {
+    50
+}
+
+/// Fine-tuning pipeline configuration.
+///
+/// Controls the external trainer command, evaluation gating, and job
+/// record storage. All fields are optional — the `[train]` section may
+/// be omitted from `config.toml` entirely; fine-tuning is a no-op until
+/// `finetune_command` is set.
+///
+/// @decision DEC-P24-001
+/// @title Fine-tune backend is an external shell-out command
+/// @status accepted
+/// @rationale `ollama create` only packages a model — it does not train.
+/// llama.cpp finetune is deprecated upstream. Delegating to a user-
+/// configured command (unsloth-cli, axolotl, MLX, etc.) keeps sigint
+/// toolchain-agnostic and respects user diversity. Env vars
+/// (SIGINT_TRAIN_JSONL, SIGINT_TEST_JSONL, SIGINT_BASE_MODEL,
+/// SIGINT_OUTPUT_PATH) are the ABI between sigint and the trainer.
+/// Addresses: REQ-P24-P0-002, REQ-P24-NOGO-002.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainConfig {
+    /// Command invoked by `sigint train finetune`. Receives training data
+    /// via environment variables. Leaving this empty (the default) means
+    /// `finetune` will refuse to run with a clear error message.
+    #[serde(default)]
+    pub finetune_command: String,
+
+    /// Minimum test-set examples required before `sigint model promote`
+    /// will accept the candidate. Default: 50 (DEC-P24-P1-001).
+    #[serde(default = "default_min_eval_examples")]
+    pub min_eval_examples: usize,
+
+    /// Directory where JobRecord JSONL and adapter outputs live.
+    /// `None` resolves at runtime to `~/.local/share/sigint/training/`.
+    #[serde(default)]
+    pub job_dir: Option<PathBuf>,
+}
+
+impl Default for TrainConfig {
+    /// Mirrors the serde defaults so that `TrainConfig::default()` and a
+    /// missing `[train]` section in TOML produce identical values.
+    ///
+    /// The `#[derive(Default)]` macro uses `usize::default()` (= 0) for
+    /// `min_eval_examples`, which would silently bypass the P1 gate.
+    /// This explicit impl uses `default_min_eval_examples()` (= 50) instead.
+    fn default() -> Self {
+        Self {
+            finetune_command: String::new(),
+            min_eval_examples: default_min_eval_examples(),
+            job_dir: None,
+        }
+    }
+}
+
 /// Top-level configuration for SIGINT.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -36,6 +92,11 @@ pub struct Config {
     /// Plugin system settings (tool packs, prompt packs).
     #[serde(default)]
     pub plugins: PluginsConfig,
+
+    /// Fine-tuning pipeline settings. The `[train]` section is optional;
+    /// all fields default to no-ops until `finetune_command` is set.
+    #[serde(default)]
+    pub train: TrainConfig,
 }
 
 /// LLM provider configuration.
@@ -335,6 +396,15 @@ impl Config {
             }
         }
         PathBuf::from(raw)
+    }
+
+    /// Return the canonical config file path (`~/.config/sigint/config.toml`).
+    ///
+    /// Exposed publicly so that CLI commands that need to rewrite the config
+    /// file (e.g. `sigint model promote`) can locate it without duplicating the
+    /// path resolution logic.
+    pub fn config_path() -> PathBuf {
+        Self::default_path()
     }
 
     fn default_path() -> PathBuf {

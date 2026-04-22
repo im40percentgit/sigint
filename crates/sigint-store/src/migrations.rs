@@ -236,6 +236,11 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_findings_asset_id ON findings(asset_id);
         ",
     ),
+    (
+        10,
+        "sessions: trainable opt-in column for fine-tuning harvest",
+        "ALTER TABLE sessions ADD COLUMN trainable INTEGER NOT NULL DEFAULT 0",
+    ),
 ];
 
 /// Run all pending migrations against the given connection.
@@ -627,5 +632,54 @@ mod tests {
             "SELECT asset_id FROM findings WHERE id = 'f1'", [], |r| r.get(0)
         ).unwrap();
         assert_eq!(asset_id, "a1");
+    }
+
+    /// Migration 10 adds `trainable INTEGER NOT NULL DEFAULT 0` to sessions.
+    /// DEC-P24-002: opt-in harvest gating. Default must be 0 (not trainable)
+    /// so existing sessions are never silently included in fine-tune datasets.
+    #[test]
+    fn migration_10_trainable_column_defaults_to_zero() {
+        use crate::Database;
+
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| {
+            // Insert session without specifying trainable — must default to 0.
+            conn.execute(
+                "INSERT INTO sessions (id, name, created_at, updated_at)
+                 VALUES ('sess-t1', 'TrainTest', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+
+            let trainable: i64 = conn
+                .query_row(
+                    "SELECT trainable FROM sessions WHERE id = 'sess-t1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+
+            assert_eq!(trainable, 0, "trainable should default to 0 (opt-out)");
+
+            // Verify we can also set it to 1.
+            conn.execute(
+                "UPDATE sessions SET trainable = 1 WHERE id = 'sess-t1'",
+                [],
+            )
+            .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+
+            let trainable_after: i64 = conn
+                .query_row(
+                    "SELECT trainable FROM sessions WHERE id = 'sess-t1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+
+            assert_eq!(trainable_after, 1, "trainable should be 1 after UPDATE");
+
+            Ok(())
+        })
+        .unwrap();
     }
 }

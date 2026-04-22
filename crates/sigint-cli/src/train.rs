@@ -20,7 +20,8 @@
 use std::path::PathBuf;
 
 use sigint_core::{AppCore, Error};
-use sigint_train::{assess, extract, format, modelfile, split, stats};
+use sigint_llm::factory::create_provider;
+use sigint_train::{assess, evaluate, extract, finetune, format, modelfile, split, stats};
 
 /// Return the default training output directory: `~/.local/share/sigint/training/`.
 fn training_dir() -> Result<PathBuf, Error> {
@@ -122,7 +123,9 @@ pub async fn run_create(
 
     let modelfile_path = out_dir.join("Modelfile");
 
-    modelfile::generate_modelfile(&base_model, &train_path, &modelfile_path)
+    // Pass adapter_path = None: at `create` time, no adapter binary exists yet.
+    // The user will replace this after fine-tuning (DEC-P24-007).
+    modelfile::generate_modelfile(&base_model, None, None, &modelfile_path)
         .map_err(|e| Error::Other(format!("failed to generate Modelfile: {}", e)))?;
 
     println!("Generated Modelfile -> {}", modelfile_path.display());
@@ -143,6 +146,52 @@ pub async fn run_stats(core: AppCore) -> Result<(), Error> {
         .map_err(|e| Error::Other(format!("extraction failed: {}", e)))?;
 
     stats::print_stats(&train_stats);
+    Ok(())
+}
+
+/// `sigint train harvest <session_id>` — opt a session into fine-tuning harvest.
+///
+/// Sets `sessions.trainable = 1` for the given session. Only harvested sessions
+/// are included when `sigint train export` extracts training data.
+///
+/// @decision DEC-P24-002
+/// @title Harvest is explicit opt-in; default is trainable=0
+/// @status accepted
+/// @rationale Engagement logs contain customer PII (IPs, hostnames, tool output).
+/// Requiring an explicit harvest step ensures users review data before it enters
+/// the fine-tune pipeline. The warning banner below is mandatory per Task 5 plan.
+pub async fn run_harvest(core: AppCore, session_id: String) -> Result<(), Error> {
+    let db_path = core.config.resolved_db_path();
+    let db = sigint_store::db::Database::open(&db_path)
+        .map_err(|e| Error::Database(format!("Cannot open database: {e}")))?;
+
+    // Verify the session exists before toggling the flag.
+    // Try exact UUID match first; fall back to prefix search.
+    let resolved_id = if let Ok(uuid) = uuid::Uuid::parse_str(&session_id) {
+        match db.get_session(uuid)? {
+            Some(s) => s.id.to_string(),
+            None => {
+                return Err(Error::Other(format!(
+                    "No session found with id '{session_id}'"
+                )))
+            }
+        }
+    } else {
+        // Accept short prefixes (e.g. first 8 hex chars).
+        let s = db
+            .get_session_by_prefix(&session_id)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        s.id.to_string()
+    };
+
+    db.set_session_trainable(&resolved_id, true)
+        .map_err(|e| Error::Other(format!("Failed to mark session as trainable: {e}")))?;
+
+    println!("Session {resolved_id} marked as trainable.");
+    println!();
+    println!(
+        "WARNING: Training data may contain sensitive engagement data. Review before sharing."
+    );
     Ok(())
 }
 
@@ -203,6 +252,227 @@ pub async fn run_assess(
     println!();
     println!("Note: predictions above are ground-truth (self-evaluation). Supply");
     println!("model output to assess real accuracy.");
+
+    Ok(())
+}
+
+/// `sigint train finetune --base <tag> --output <name>` — run the configured trainer.
+///
+/// Loads `[train].finetune_command` from config, resolves paths for
+/// `train.jsonl`/`test.jsonl` and the output adapter, and shells out to the
+/// user-configured trainer (DEC-P24-001). Stdout/stderr stream live.
+pub async fn run_finetune(
+    core: AppCore,
+    base: String,
+    output: String,
+    train_dir: Option<String>,
+) -> Result<(), Error> {
+    let cfg = &core.config.train;
+
+    let data_dir = match train_dir {
+        Some(p) => PathBuf::from(p),
+        None => training_dir()?,
+    };
+    let train_jsonl = data_dir.join("train.jsonl");
+    let test_jsonl = data_dir.join("test.jsonl");
+
+    if !train_jsonl.exists() || !test_jsonl.exists() {
+        return Err(Error::Other(format!(
+            "Training data not found in {}. Run `sigint train export` first.",
+            data_dir.display()
+        )));
+    }
+
+    let job_dir = cfg
+        .job_dir
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(training_dir)?;
+    let output_path = job_dir.join(&output);
+
+    let record = finetune::run_finetune(cfg, &base, &output_path, &train_jsonl, &test_jsonl)
+        .map_err(|e| Error::Other(format!("fine-tune failed: {}", e)))?;
+
+    let duration = record
+        .finished_at
+        .map(|f| f.signed_duration_since(record.started_at).num_seconds())
+        .unwrap_or(0);
+
+    println!();
+    println!("Fine-tune job {}", record.id);
+    println!("  status:    {:?}", record.status);
+    println!("  base:      {}", record.base_model);
+    println!("  output:    {}", record.output_path.display());
+    println!("  exit_code: {:?}", record.exit_code);
+    println!("  duration:  {}s", duration);
+    Ok(())
+}
+
+/// `sigint train jobs` — list all recorded fine-tune jobs.
+///
+/// Reads `job_dir/jobs.json` (JSONL) and prints one line per record.
+pub async fn run_jobs(core: AppCore) -> Result<(), Error> {
+    let job_dir = core
+        .config
+        .train
+        .job_dir
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(training_dir)?;
+
+    let records = finetune::list_jobs(&job_dir)
+        .map_err(|e| Error::Other(format!("failed to list jobs: {}", e)))?;
+
+    if records.is_empty() {
+        println!("No training jobs yet. Run `sigint train finetune ...` to start one.");
+        return Ok(());
+    }
+
+    for r in &records {
+        let duration = r
+            .finished_at
+            .map(|f| f.signed_duration_since(r.started_at).num_seconds())
+            .map(|s| format!("{}s", s))
+            .unwrap_or_else(|| "running".to_string());
+        println!(
+            "{}  {:?}  {} -> {}  {}  {}",
+            &r.id[..r.id.len().min(8)],
+            r.status,
+            r.base_model,
+            r.output_path.display(),
+            r.started_at.to_rfc3339(),
+            duration
+        );
+    }
+    Ok(())
+}
+
+/// `sigint train evaluate --base <tag> --candidate <tag>` — live A/B comparison.
+///
+/// Loads test examples from test_data (or the default training dir), builds
+/// two provider configs by cloning core.config.llm and mutating .model,
+/// runs live inference on both, and prints a formatted comparison report.
+/// Persists the result to job_dir/last_eval.json for Task 4's promote gate.
+///
+/// @decision DEC-P24-003
+/// @title CLI drives run_comparison with factory-created providers
+/// @status accepted
+/// @rationale create_provider handles all provider-type dispatch centrally.
+/// Mutating only .model on a cloned config means auth, base_url, and other
+/// provider settings are inherited from the user's live config, so no extra
+/// flags are needed for the common Ollama case. Unknown model tags surface
+/// as a clean error pointing at `sigint doctor`.
+pub async fn run_evaluate(
+    core: AppCore,
+    base: String,
+    candidate: String,
+    test_data: Option<String>,
+) -> Result<(), Error> {
+    let out_dir = training_dir()?;
+
+    let test_path = match test_data {
+        Some(ref p) => PathBuf::from(p),
+        None => out_dir.join("test.jsonl"),
+    };
+
+    if !test_path.exists() {
+        return Err(Error::Other(format!(
+            "Test data not found at {}. Run `sigint train export` first.",
+            test_path.display()
+        )));
+    }
+
+    let examples = format::read_jsonl(&test_path)
+        .map_err(|e| Error::Other(format!("failed to read test JSONL: {}", e)))?;
+
+    if examples.is_empty() {
+        return Err(Error::Other(
+            "Test set is empty — no examples to compare against.".into(),
+        ));
+    }
+
+    // Build two provider configs by cloning the live LLM config and mutating
+    // only the model tag. This preserves base_url, auth, and provider type.
+    let mut base_cfg = core.config.llm.clone();
+    base_cfg.model = base.clone();
+
+    let mut cand_cfg = core.config.llm.clone();
+    cand_cfg.model = candidate.clone();
+
+    let base_provider = create_provider(&base_cfg).map_err(|e| {
+        Error::Other(format!(
+            "Cannot create base provider for '{}': {}. Run `sigint doctor` to check your setup.",
+            base, e
+        ))
+    })?;
+
+    let cand_provider = create_provider(&cand_cfg).map_err(|e| {
+        Error::Other(format!(
+            "Cannot create candidate provider for '{}': {}. Run `sigint doctor` to check your setup.",
+            candidate, e
+        ))
+    })?;
+
+    println!(
+        "Comparing {} examples: base='{}' vs candidate='{}'",
+        examples.len(),
+        base,
+        candidate
+    );
+    println!();
+
+    let report = evaluate::run_comparison(
+        base_provider.as_ref(),
+        cand_provider.as_ref(),
+        &examples,
+        &base,
+        &candidate,
+    )
+    .await
+    .map_err(|e| Error::Other(format!("comparison failed: {}", e)))?;
+
+    // Print formatted report.
+    println!(
+        "Base:         {:<30}  tool_accuracy {:5.1}%  argument_match {:5.1}%",
+        report.base_tag,
+        report.base_results.tool_accuracy * 100.0,
+        report.base_results.argument_accuracy * 100.0,
+    );
+    println!(
+        "Candidate:    {:<30}  tool_accuracy {:5.1}%  argument_match {:5.1}%",
+        report.candidate_tag,
+        report.candidate_results.tool_accuracy * 100.0,
+        report.candidate_results.argument_accuracy * 100.0,
+    );
+    println!();
+
+    let delta_sign = |v: f64| if v >= 0.0 { "+" } else { "" };
+    println!(
+        "delta tool-acc:   {}{:.1}pp",
+        delta_sign(report.tool_accuracy_delta),
+        report.tool_accuracy_delta * 100.0,
+    );
+    println!(
+        "delta arg-match:  {}{:.1}pp",
+        delta_sign(report.argument_match_delta),
+        report.argument_match_delta * 100.0,
+    );
+    println!();
+    println!("Evaluated on {} test examples.", report.total_examples);
+
+    // Persist last_eval.json in job_dir for Task 4's promote gate.
+    let job_dir = core
+        .config
+        .train
+        .job_dir
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(training_dir)?;
+
+    evaluate::persist_last_eval(&job_dir, &report)
+        .map_err(|e| Error::Other(format!("failed to persist last_eval.json: {}", e)))?;
+
+    println!("Saved comparison report to {}/last_eval.json", job_dir.display());
 
     Ok(())
 }
