@@ -13,3 +13,11 @@
 .serena/
 .gstack/
 node_modules/
+
+# Tool downloads (pentest binaries fetched at runtime by tool installers)
+linpeas.sh*
+msfinstall
+
+# Plugin artifacts
+.superpowers/
+docs/superpowers/
