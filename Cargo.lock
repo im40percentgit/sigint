@@ -3274,6 +3274,7 @@ dependencies = [
  "sigint-web",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "uuid",

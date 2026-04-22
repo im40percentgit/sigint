@@ -31,7 +31,7 @@ fn default_min_eval_examples() -> usize {
 /// (SIGINT_TRAIN_JSONL, SIGINT_TEST_JSONL, SIGINT_BASE_MODEL,
 /// SIGINT_OUTPUT_PATH) are the ABI between sigint and the trainer.
 /// Addresses: REQ-P24-P0-002, REQ-P24-NOGO-002.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainConfig {
     /// Command invoked by `sigint train finetune`. Receives training data
     /// via environment variables. Leaving this empty (the default) means
@@ -48,6 +48,22 @@ pub struct TrainConfig {
     /// `None` resolves at runtime to `~/.local/share/sigint/training/`.
     #[serde(default)]
     pub job_dir: Option<PathBuf>,
+}
+
+impl Default for TrainConfig {
+    /// Mirrors the serde defaults so that `TrainConfig::default()` and a
+    /// missing `[train]` section in TOML produce identical values.
+    ///
+    /// The `#[derive(Default)]` macro uses `usize::default()` (= 0) for
+    /// `min_eval_examples`, which would silently bypass the P1 gate.
+    /// This explicit impl uses `default_min_eval_examples()` (= 50) instead.
+    fn default() -> Self {
+        Self {
+            finetune_command: String::new(),
+            min_eval_examples: default_min_eval_examples(),
+            job_dir: None,
+        }
+    }
 }
 
 /// Top-level configuration for SIGINT.
@@ -380,6 +396,15 @@ impl Config {
             }
         }
         PathBuf::from(raw)
+    }
+
+    /// Return the canonical config file path (`~/.config/sigint/config.toml`).
+    ///
+    /// Exposed publicly so that CLI commands that need to rewrite the config
+    /// file (e.g. `sigint model promote`) can locate it without duplicating the
+    /// path resolution logic.
+    pub fn config_path() -> PathBuf {
+        Self::default_path()
     }
 
     fn default_path() -> PathBuf {

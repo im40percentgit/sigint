@@ -1,10 +1,12 @@
 //! `sigint model` — manage local GGUF model files.
 //!
-//! Three subcommands:
+//! Five subcommands:
 //!
-//! * `list`  — scan `models_dir` and print a table of available GGUF files.
-//! * `pull`  — download a GGUF file from HuggingFace (repo ID) or a direct URL.
-//! * `info`  — print detailed metadata for a named model file.
+//! * `list`     — scan `models_dir` and print a table of available GGUF files.
+//! * `pull`     — download a GGUF file from HuggingFace (repo ID) or a direct URL.
+//! * `info`     — print detailed metadata for a named model file.
+//! * `promote`  — atomically rewrite config to activate a fine-tuned model.
+//! * `rollback` — revert to the last promoted model using the promotion log.
 //!
 //! @decision DEC-P19-MODEL-CLI-001
 //! @title model pull uses blocking reqwest streaming without indicatif
@@ -13,12 +15,401 @@
 //! `indicatif` crate. A simple byte counter printed every megabyte satisfies
 //! the UX requirement while keeping the dependency surface minimal. Reqwest
 //! is already a workspace dependency used in the doctor command.
+//!
+//! @decision DEC-P24-004
+//! @title Promotion rewrites config.llm.model atomically via a CLI command
+//! @status accepted
+//! @rationale Atomic write (tmp + rename) ensures the config is never in a
+//! partial state even if the process is killed mid-write. Backup to .bak
+//! before every promotion. Append-only promotion.log provides audit trail.
+//! Chosen over: config flag (no audit trail), background watcher (premature,
+//! non-deterministic). Addresses: REQ-P24-P0-004.
+//!
+//! @decision DEC-P24-005
+//! @title Rollback is manual only (sigint model rollback)
+//! @status accepted
+//! @rationale No auto-rollback on eval-regression threshold. Keeps the user in
+//! control; avoids model-swap thrashing. Rollback reads the last promotion.log
+//! entry and reverses it, appending a new rollback entry (never deletes history).
+//! Addresses: REQ-P24-P0-005.
 
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use sigint_core::{AppCore, Error};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use sigint_core::{AppCore, Config, Error};
 use sigint_llm::GgufMetadata;
+
+// ── Promotion log types ───────────────────────────────────────────────────────
+
+/// One entry in the append-only `promotion.log` JSONL file.
+///
+/// Each `promote` or `rollback` command appends exactly one entry.
+/// The log is the audit trail for all model-swap operations; nothing is
+/// ever deleted from it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromotionEntry {
+    /// UTC timestamp when this action was recorded.
+    pub ts: DateTime<Utc>,
+    /// Action type: "promote" or "rollback".
+    pub action: String,
+    /// Provider value before this operation.
+    pub old_provider: String,
+    /// Model value before this operation.
+    pub old_model: String,
+    /// Provider value after this operation.
+    pub new_provider: String,
+    /// Model value after this operation.
+    pub new_model: String,
+    /// Path to `last_eval.json` at promote time (if it existed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eval_result_ref: Option<PathBuf>,
+}
+
+// ── Promote / rollback helpers ────────────────────────────────────────────────
+
+/// Resolve the promotion-log directory (same root as job_dir).
+///
+/// Returns `config.train.job_dir` if set, otherwise
+/// `~/.local/share/sigint/training/` (matching `resolve_job_dir` in finetune.rs).
+fn resolve_promo_dir(core: &AppCore) -> PathBuf {
+    if let Some(ref dir) = core.config.train.job_dir {
+        return dir.clone();
+    }
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    home.join(".local").join("share").join("sigint").join("training")
+}
+
+/// Append a `PromotionEntry` to `promo_dir/promotion.log` (JSONL, never truncated).
+fn append_promotion_log(promo_dir: &Path, entry: &PromotionEntry) -> Result<(), Error> {
+    std::fs::create_dir_all(promo_dir).map_err(|e| {
+        Error::Other(format!(
+            "Cannot create promotion log dir {}: {}",
+            promo_dir.display(),
+            e
+        ))
+    })?;
+
+    let log_path = promo_dir.join("promotion.log");
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&log_path)
+        .map_err(|e| Error::Other(format!("Cannot open {}: {}", log_path.display(), e)))?;
+
+    let line =
+        serde_json::to_string(entry).map_err(|e| Error::Other(format!("Serialise error: {}", e)))?;
+    writeln!(file, "{}", line)
+        .map_err(|e| Error::Other(format!("Write error on {}: {}", log_path.display(), e)))?;
+
+    Ok(())
+}
+
+/// Read all entries from `promo_dir/promotion.log`.
+///
+/// Malformed lines are skipped with a warning. Returns an empty Vec if the
+/// file does not exist.
+fn read_promotion_log(promo_dir: &Path) -> Result<Vec<PromotionEntry>, Error> {
+    let log_path = promo_dir.join("promotion.log");
+    if !log_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let contents = std::fs::read_to_string(&log_path)
+        .map_err(|e| Error::Other(format!("Cannot read {}: {}", log_path.display(), e)))?;
+
+    let mut entries = Vec::new();
+    for (i, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<PromotionEntry>(line) {
+            Ok(e) => entries.push(e),
+            Err(e) => eprintln!(
+                "warning: skipping malformed line {} in promotion.log: {}",
+                i + 1,
+                e
+            ),
+        }
+    }
+
+    Ok(entries)
+}
+
+/// Detect whether `tag` refers to an embedded GGUF file or an Ollama model tag.
+///
+/// Detection order (DEC-P24-008):
+/// 1. Check `models_dir/<tag>` — if it exists and ends in `.gguf`, → embedded.
+/// 2. Check `models_dir/<tag>.gguf` — if it exists, → embedded.
+/// 3. Probe `ollama list` for the tag name — if found, → ollama.
+/// 4. Otherwise → Err with both paths and the ollama-list output for diagnosis.
+///
+/// Returns `(provider, model_path_or_tag)`.
+///
+/// @decision DEC-P24-008
+/// @title Fine-tune output format is detected, not prescribed
+/// @status accepted
+/// @rationale Respects user toolchain diversity without forcing one output kind.
+/// If $SIGINT_OUTPUT_PATH resolves to an existing .gguf file, treat as embedded.
+/// If not, probe ollama list for the basename. Addresses: REQ-P24-P0-004.
+fn detect_output_kind(models_dir: &Path, tag: &str) -> Result<(String, String), Error> {
+    // Try direct hit: models_dir/<tag>
+    let direct = models_dir.join(tag);
+    if direct.exists() && direct.extension().and_then(|e| e.to_str()) == Some("gguf") {
+        return Ok(("embedded".to_string(), direct.to_string_lossy().into_owned()));
+    }
+
+    // Try with extension appended: models_dir/<tag>.gguf
+    let with_ext = models_dir.join(format!("{}.gguf", tag));
+    if with_ext.exists() {
+        return Ok(("embedded".to_string(), with_ext.to_string_lossy().into_owned()));
+    }
+
+    // Probe ollama list.
+    let ollama_output = Command::new("ollama")
+        .arg("list")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+
+    // Check if any line in ollama list output contains the tag as a leading token.
+    let found_in_ollama = ollama_output.lines().any(|line| {
+        let first_token = line.split_whitespace().next().unwrap_or("");
+        first_token == tag || first_token.starts_with(&format!("{}:", tag))
+    });
+
+    if found_in_ollama {
+        return Ok(("ollama".to_string(), tag.to_string()));
+    }
+
+    Err(Error::Other(format!(
+        "Model tag '{}' not found.\n\
+         Checked GGUF paths:\n  {}\n  {}\n\
+         Checked Ollama (tag not in `ollama list` output).\n\
+         To use an embedded model, place the .gguf file in {} and re-run.\n\
+         To use an Ollama model, run `ollama pull {}` first.",
+        tag,
+        direct.display(),
+        with_ext.display(),
+        models_dir.display(),
+        tag,
+    )))
+}
+
+/// Atomically rewrite the config file with updated `llm.provider` and `llm.model`.
+///
+/// Steps:
+/// 1. Read current config path.
+/// 2. Backup to `<config>.bak` (overwrite any prior .bak).
+/// 3. Mutate the in-memory Config.
+/// 4. Serialize to TOML and write to `<config>.tmp`.
+/// 5. `fs::rename(&tmp, &config_path)` — atomic on POSIX.
+///
+/// Comment loss during round-trip is expected and noted in commit body.
+/// DEC-P24-004.
+fn atomic_config_rewrite(config_path: &Path, new_provider: &str, new_model: &str) -> Result<(), Error> {
+    // Load the current config (or use defaults if file is absent).
+    let mut cfg = if config_path.exists() {
+        Config::load_from(config_path)?
+    } else {
+        Config::default()
+    };
+
+    cfg.llm.provider = new_provider.to_string();
+    cfg.llm.model = new_model.to_string();
+
+    let toml_str =
+        toml::to_string_pretty(&cfg).map_err(|e| Error::Other(format!("TOML serialise error: {}", e)))?;
+
+    // Backup current config before any write.
+    if config_path.exists() {
+        let bak = config_path.with_extension("bak");
+        std::fs::copy(config_path, &bak).map_err(|e| {
+            Error::Other(format!(
+                "Cannot backup {} -> {}: {}",
+                config_path.display(),
+                bak.display(),
+                e
+            ))
+        })?;
+    }
+
+    // Ensure parent directory exists (first-run case where config was never written).
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            Error::Other(format!("Cannot create config dir {}: {}", parent.display(), e))
+        })?;
+    }
+
+    // Write to .tmp then rename (atomic on POSIX).
+    let tmp_path = config_path.with_extension("tmp");
+    std::fs::write(&tmp_path, &toml_str)
+        .map_err(|e| Error::Other(format!("Cannot write {}: {}", tmp_path.display(), e)))?;
+
+    std::fs::rename(&tmp_path, config_path).map_err(|e| {
+        // Clean up the .tmp on failure; ignore cleanup errors.
+        let _ = std::fs::remove_file(&tmp_path);
+        Error::Other(format!(
+            "Cannot rename {} -> {}: {}",
+            tmp_path.display(),
+            config_path.display(),
+            e
+        ))
+    })?;
+
+    Ok(())
+}
+
+// ── Public handlers ───────────────────────────────────────────────────────────
+
+/// `sigint model promote <tag>` — promote a fine-tuned model to active use.
+///
+/// Checks the P1 gate (min_eval_examples), detects the output kind (GGUF or
+/// Ollama tag), backs up the current config, atomically rewrites it, and
+/// appends to the promotion log.
+///
+/// @decision DEC-P24-004
+/// @title Promotion rewrites config.llm.model atomically via a CLI command
+/// @status accepted
+/// @rationale See module-level doc.
+pub async fn run_promote(core: AppCore, tag: String, force: bool) -> Result<(), Error> {
+    let promo_dir = resolve_promo_dir(&core);
+    let models_dir = core.config.resolved_models_dir();
+
+    // ── P1 gate: check last_eval.json ──────────────────────────────────────
+    let eval_ref = {
+        let eval_path = promo_dir.join("last_eval.json");
+        if eval_path.exists() {
+            // Parse just enough to read total_examples.
+            let raw = std::fs::read_to_string(&eval_path).map_err(|e| {
+                Error::Other(format!("Cannot read {}: {}", eval_path.display(), e))
+            })?;
+            let val: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                Error::Other(format!("Cannot parse {}: {}", eval_path.display(), e))
+            })?;
+
+            let total = val["total_examples"]
+                .as_u64()
+                .map(|n| n as usize)
+                .unwrap_or(0);
+
+            let min = core.config.train.min_eval_examples;
+            if total < min && !force {
+                return Err(Error::Other(format!(
+                    "Last evaluation had {} examples (minimum: {}). \
+                     Run `sigint train evaluate` with more data, or pass --force to promote anyway.",
+                    total, min
+                )));
+            }
+
+            if total < min {
+                eprintln!(
+                    "WARNING: promoting despite only {} evaluation examples (minimum: {}). \
+                     Model quality is not guaranteed.",
+                    total, min
+                );
+            }
+
+            Some(eval_path)
+        } else {
+            eprintln!(
+                "WARNING: no last_eval.json found in {}. \
+                 Run `sigint train evaluate` before promoting for quality assurance.",
+                promo_dir.display()
+            );
+            None
+        }
+    };
+
+    // ── Detect output kind (DEC-P24-008) ───────────────────────────────────
+    let (new_provider, new_model) = detect_output_kind(&models_dir, &tag)?;
+
+    let old_provider = core.config.llm.provider.clone();
+    let old_model = core.config.llm.model.clone();
+
+    // ── Atomic config rewrite ──────────────────────────────────────────────
+    let config_path = Config::config_path();
+    atomic_config_rewrite(&config_path, &new_provider, &new_model)?;
+
+    // ── Append promotion log entry ─────────────────────────────────────────
+    let entry = PromotionEntry {
+        ts: Utc::now(),
+        action: "promote".to_string(),
+        old_provider: old_provider.clone(),
+        old_model: old_model.clone(),
+        new_provider: new_provider.clone(),
+        new_model: new_model.clone(),
+        eval_result_ref: eval_ref,
+    };
+    append_promotion_log(&promo_dir, &entry)?;
+
+    println!(
+        "Promoted: {} ({}) -> {} ({})",
+        old_model, old_provider, new_model, new_provider
+    );
+    println!("Config written to: {}", config_path.display());
+    println!("Backup at: {}", config_path.with_extension("bak").display());
+
+    Ok(())
+}
+
+/// `sigint model rollback` — revert to the model active before the last promotion.
+///
+/// Reads the last entry from `promotion.log` and reverses the provider/model
+/// swap, appending a new rollback entry. Never deletes existing log entries.
+///
+/// @decision DEC-P24-005
+/// @title Rollback is manual only (sigint model rollback)
+/// @status accepted
+/// @rationale See module-level doc.
+pub async fn run_rollback(core: AppCore) -> Result<(), Error> {
+    let promo_dir = resolve_promo_dir(&core);
+    let entries = read_promotion_log(&promo_dir)?;
+
+    let last = entries.last().ok_or_else(|| {
+        Error::Other(
+            "No promotion history to roll back from. \
+             Run `sigint model promote <tag>` first."
+                .to_string(),
+        )
+    })?;
+
+    // Reverse: what we're rolling back to is the old_* values.
+    let restore_provider = last.old_provider.clone();
+    let restore_model = last.old_model.clone();
+    let current_provider = last.new_provider.clone();
+    let current_model = last.new_model.clone();
+
+    let config_path = Config::config_path();
+    atomic_config_rewrite(&config_path, &restore_provider, &restore_model)?;
+
+    let rollback_entry = PromotionEntry {
+        ts: Utc::now(),
+        action: "rollback".to_string(),
+        old_provider: current_provider.clone(),
+        old_model: current_model.clone(),
+        new_provider: restore_provider.clone(),
+        new_model: restore_model.clone(),
+        eval_result_ref: None,
+    };
+    append_promotion_log(&promo_dir, &rollback_entry)?;
+
+    println!(
+        "Rolled back: {} ({}) -> {} ({})",
+        current_model, current_provider, restore_model, restore_provider
+    );
+    println!("Config written to: {}", config_path.display());
+
+    Ok(())
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

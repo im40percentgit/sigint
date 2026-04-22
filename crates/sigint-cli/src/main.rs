@@ -261,6 +261,23 @@ enum ModelCommands {
         /// Model filename or stem (e.g. "llama-3.2-8B-Q4_K_M" or "llama-3.2-8B-Q4_K_M.gguf").
         name: String,
     },
+    /// Promote a fine-tuned model to active use (atomically rewrites config).
+    ///
+    /// Detects whether <tag> is an embedded GGUF file (looks in models_dir) or
+    /// an Ollama tag (probes `ollama list`). Backs up current config to
+    /// config.toml.bak before rewriting. Appends to promotion.log.
+    Promote {
+        /// Model tag or GGUF filename to promote as the active model.
+        tag: String,
+        /// Skip the min_eval_examples safety gate.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Revert config to the model active before the last promotion.
+    ///
+    /// Reads the last entry from promotion.log and reverses the provider/model
+    /// swap. Appends a rollback entry to the log (never deletes history).
+    Rollback,
 }
 
 #[derive(Subcommand, Debug)]
@@ -430,6 +447,8 @@ async fn main() {
             ModelCommands::List => model::run_list(core).await,
             ModelCommands::Pull { source } => model::run_pull(core, source).await,
             ModelCommands::Info { name } => model::run_info(core, name).await,
+            ModelCommands::Promote { tag, force } => model::run_promote(core, tag, force).await,
+            ModelCommands::Rollback => model::run_rollback(core).await,
         },
         Commands::Plugin { command } => match command {
             PluginCommands::List => plugin::run_list()

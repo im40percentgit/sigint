@@ -46,6 +46,7 @@ tracing-subscriber = { workspace = true }
 futures-util = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
+toml = { workspace = true }
 pulldown-cmark = "0.12"
 
 [dev-dependencies]
