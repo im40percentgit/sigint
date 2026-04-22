@@ -44,6 +44,7 @@ pub async fn start_server() -> SocketAddr {
         config,
         approval_registry,
         scan_service,
+        api_key: "e2e-test-token".to_string(),
     };
 
     let app = sigint_web::create_router(state);
@@ -81,6 +82,7 @@ pub async fn start_server_with_db() -> (SocketAddr, Arc<Database>) {
         config,
         approval_registry,
         scan_service,
+        api_key: "e2e-test-token".to_string(),
     };
 
     let app = sigint_web::create_router(state);
@@ -103,9 +105,7 @@ pub async fn start_server_with_db() -> (SocketAddr, Arc<Database>) {
 /// without a running Ollama/OpenAI endpoint. The `responses` queue is consumed
 /// in order by the agent pipeline; when exhausted the mock returns
 /// `"[mock exhausted]"`.
-pub async fn start_server_with_mock(
-    responses: Vec<MockResponse>,
-) -> (SocketAddr, Arc<Database>) {
+pub async fn start_server_with_mock(responses: Vec<MockResponse>) -> (SocketAddr, Arc<Database>) {
     let db = Arc::new(Database::open_in_memory().expect("in-memory db"));
     let event_bus = EventBus::new();
     let config = Arc::new(Config::default());
@@ -121,6 +121,7 @@ pub async fn start_server_with_mock(
         config,
         approval_registry,
         scan_service,
+        api_key: "e2e-test-token".to_string(),
     };
 
     let app = sigint_web::create_router(state);

@@ -43,7 +43,11 @@ use sigint_core::types::ToolRisk;
 /// Render the Scan view into `area`.
 pub fn render(frame: &mut Frame, state: &AppState, area: Rect) {
     // The approval bar takes 1 row when pending; 0 rows otherwise.
-    let approval_height = if state.pending_approval.is_some() { 1 } else { 0 };
+    let approval_height = if state.pending_approval.is_some() {
+        1
+    } else {
+        0
+    };
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -325,10 +329,7 @@ pub(crate) fn render_findings_panel(frame: &mut Frame, state: &AppState, area: R
 /// Map a `Finding` to a styled `Row` using severity color and diff status.
 ///
 /// Used by both the Scan view findings panel and the Findings view table.
-pub(crate) fn finding_to_row<'a>(
-    f: &'a sigint_core::types::Finding,
-    state: &AppState,
-) -> Row<'a> {
+pub(crate) fn finding_to_row<'a>(f: &'a sigint_core::types::Finding, state: &AppState) -> Row<'a> {
     let sev_color = severity_color(f.severity.clone());
     let diff_style = match state.diff_status(f) {
         DiffStatus::New => Style::default()
@@ -427,11 +428,7 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the approval bar when a tool is awaiting operator approval.
-pub(crate) fn render_approval_bar(
-    frame: &mut Frame,
-    approval: &PendingApproval,
-    area: Rect,
-) {
+pub(crate) fn render_approval_bar(frame: &mut Frame, approval: &PendingApproval, area: Rect) {
     if area.height == 0 {
         return;
     }
@@ -456,7 +453,10 @@ pub(crate) fn render_approval_bar(
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" Run ", Style::default().fg(Color::White).bg(Color::DarkGray)),
+        Span::styled(
+            " Run ",
+            Style::default().fg(Color::White).bg(Color::DarkGray),
+        ),
         Span::styled(
             approval.tool_name.clone(),
             Style::default()
@@ -689,8 +689,12 @@ mod tests {
         let mut state = AppState::new();
         let sid = Uuid::new_v4();
 
-        let new_finding =
-            Finding::new(sid, "SQL Injection", "unparameterised query", Severity::High);
+        let new_finding = Finding::new(
+            sid,
+            "SQL Injection",
+            "unparameterised query",
+            Severity::High,
+        );
         let fixed_finding = Finding::new(sid, "Open Redirect", "was fixed", Severity::Medium);
         let unchanged_finding = Finding::new(sid, "XSS", "still open", Severity::Low);
 

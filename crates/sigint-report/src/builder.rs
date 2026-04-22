@@ -285,10 +285,7 @@ fn render_single_finding(f: &FindingSummary, idx: usize, include_evidence: bool)
 ///
 /// When `include_evidence` is `true` (Technical template), evidence blocks are
 /// rendered inline.
-fn render_findings_grouped(
-    findings: &[FindingSummary],
-    include_evidence: bool,
-) -> String {
+fn render_findings_grouped(findings: &[FindingSummary], include_evidence: bool) -> String {
     let mut sorted: Vec<&FindingSummary> = findings.iter().collect();
     sorted.sort_by_key(|f| severity_order(&f.severity));
 

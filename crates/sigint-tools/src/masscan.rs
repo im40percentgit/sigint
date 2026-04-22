@@ -19,7 +19,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -106,10 +106,7 @@ impl Tool for MasscanTool {
             .to_string();
 
         // Extract optional ports with default.
-        let ports = args["ports"]
-            .as_str()
-            .unwrap_or("1-65535")
-            .to_string();
+        let ports = args["ports"].as_str().unwrap_or("1-65535").to_string();
 
         // Extract optional rate with default; validate.
         let rate = args["rate"].as_i64().unwrap_or(1000);

@@ -15,7 +15,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 

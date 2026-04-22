@@ -628,9 +628,11 @@ mod tests {
              VALUES ('f1', 's1', 'test', 'desc', 'high', datetime('now'), 'a1')",
             [],
         ).unwrap();
-        let asset_id: String = conn.query_row(
-            "SELECT asset_id FROM findings WHERE id = 'f1'", [], |r| r.get(0)
-        ).unwrap();
+        let asset_id: String = conn
+            .query_row("SELECT asset_id FROM findings WHERE id = 'f1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(asset_id, "a1");
     }
 
@@ -662,11 +664,8 @@ mod tests {
             assert_eq!(trainable, 0, "trainable should default to 0 (opt-out)");
 
             // Verify we can also set it to 1.
-            conn.execute(
-                "UPDATE sessions SET trainable = 1 WHERE id = 'sess-t1'",
-                [],
-            )
-            .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
+            conn.execute("UPDATE sessions SET trainable = 1 WHERE id = 'sess-t1'", [])
+                .map_err(|e| sigint_core::Error::Database(e.to_string()))?;
 
             let trainable_after: i64 = conn
                 .query_row(

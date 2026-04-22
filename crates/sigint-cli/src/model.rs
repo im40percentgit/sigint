@@ -83,7 +83,10 @@ fn resolve_promo_dir(core: &AppCore) -> PathBuf {
     let home = std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    home.join(".local").join("share").join("sigint").join("training")
+    home.join(".local")
+        .join("share")
+        .join("sigint")
+        .join("training")
 }
 
 /// Append a `PromotionEntry` to `promo_dir/promotion.log` (JSONL, never truncated).
@@ -103,8 +106,8 @@ fn append_promotion_log(promo_dir: &Path, entry: &PromotionEntry) -> Result<(), 
         .open(&log_path)
         .map_err(|e| Error::Other(format!("Cannot open {}: {}", log_path.display(), e)))?;
 
-    let line =
-        serde_json::to_string(entry).map_err(|e| Error::Other(format!("Serialise error: {}", e)))?;
+    let line = serde_json::to_string(entry)
+        .map_err(|e| Error::Other(format!("Serialise error: {}", e)))?;
     writeln!(file, "{}", line)
         .map_err(|e| Error::Other(format!("Write error on {}: {}", log_path.display(), e)))?;
 
@@ -163,13 +166,19 @@ fn detect_output_kind(models_dir: &Path, tag: &str) -> Result<(String, String), 
     // Try direct hit: models_dir/<tag>
     let direct = models_dir.join(tag);
     if direct.exists() && direct.extension().and_then(|e| e.to_str()) == Some("gguf") {
-        return Ok(("embedded".to_string(), direct.to_string_lossy().into_owned()));
+        return Ok((
+            "embedded".to_string(),
+            direct.to_string_lossy().into_owned(),
+        ));
     }
 
     // Try with extension appended: models_dir/<tag>.gguf
     let with_ext = models_dir.join(format!("{}.gguf", tag));
     if with_ext.exists() {
-        return Ok(("embedded".to_string(), with_ext.to_string_lossy().into_owned()));
+        return Ok((
+            "embedded".to_string(),
+            with_ext.to_string_lossy().into_owned(),
+        ));
     }
 
     // Probe ollama list.
@@ -215,7 +224,11 @@ fn detect_output_kind(models_dir: &Path, tag: &str) -> Result<(String, String), 
 ///
 /// Comment loss during round-trip is expected and noted in commit body.
 /// DEC-P24-004.
-fn atomic_config_rewrite(config_path: &Path, new_provider: &str, new_model: &str) -> Result<(), Error> {
+fn atomic_config_rewrite(
+    config_path: &Path,
+    new_provider: &str,
+    new_model: &str,
+) -> Result<(), Error> {
     // Load the current config (or use defaults if file is absent).
     let mut cfg = if config_path.exists() {
         Config::load_from(config_path)?
@@ -226,8 +239,8 @@ fn atomic_config_rewrite(config_path: &Path, new_provider: &str, new_model: &str
     cfg.llm.provider = new_provider.to_string();
     cfg.llm.model = new_model.to_string();
 
-    let toml_str =
-        toml::to_string_pretty(&cfg).map_err(|e| Error::Other(format!("TOML serialise error: {}", e)))?;
+    let toml_str = toml::to_string_pretty(&cfg)
+        .map_err(|e| Error::Other(format!("TOML serialise error: {}", e)))?;
 
     // Backup current config before any write.
     if config_path.exists() {
@@ -245,7 +258,11 @@ fn atomic_config_rewrite(config_path: &Path, new_provider: &str, new_model: &str
     // Ensure parent directory exists (first-run case where config was never written).
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Other(format!("Cannot create config dir {}: {}", parent.display(), e))
+            Error::Other(format!(
+                "Cannot create config dir {}: {}",
+                parent.display(),
+                e
+            ))
         })?;
     }
 
@@ -289,9 +306,8 @@ pub async fn run_promote(core: AppCore, tag: String, force: bool) -> Result<(), 
         let eval_path = promo_dir.join("last_eval.json");
         if eval_path.exists() {
             // Parse just enough to read total_examples.
-            let raw = std::fs::read_to_string(&eval_path).map_err(|e| {
-                Error::Other(format!("Cannot read {}: {}", eval_path.display(), e))
-            })?;
+            let raw = std::fs::read_to_string(&eval_path)
+                .map_err(|e| Error::Other(format!("Cannot read {}: {}", eval_path.display(), e)))?;
             let val: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
                 Error::Other(format!("Cannot parse {}: {}", eval_path.display(), e))
             })?;
@@ -494,10 +510,7 @@ pub async fn resolve_hf_download(
     // Strip any leading directory components to get just the filename.
     let filename = chosen.rsplit('/').next().unwrap_or(chosen).to_owned();
 
-    let download_url = format!(
-        "https://huggingface.co/{}/resolve/main/{}",
-        repo, chosen
-    );
+    let download_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, chosen);
 
     Ok((filename, download_url))
 }
@@ -582,8 +595,18 @@ pub async fn run_list(core: AppCore) -> Result<(), Error> {
 
     // Print table.
     let name_w = rows.iter().map(|(n, ..)| n.len()).max().unwrap_or(4).max(4);
-    let size_w = rows.iter().map(|(_, s, ..)| s.len()).max().unwrap_or(4).max(4);
-    let quant_w = rows.iter().map(|(_, _, q, _)| q.len()).max().unwrap_or(4).max(4);
+    let size_w = rows
+        .iter()
+        .map(|(_, s, ..)| s.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let quant_w = rows
+        .iter()
+        .map(|(_, _, q, _)| q.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
 
     println!(
         "{:<name_w$}  {:>size_w$}  {:<quant_w$}  Context",
@@ -636,11 +659,7 @@ pub async fn run_pull(core: AppCore, source: String) -> Result<(), Error> {
 
     let (filename, download_url) = if source.contains("://") {
         // Direct URL — derive filename from the last path component.
-        let filename = source
-            .rsplit('/')
-            .next()
-            .unwrap_or("model.gguf")
-            .to_owned();
+        let filename = source.rsplit('/').next().unwrap_or("model.gguf").to_owned();
         (filename, source.clone())
     } else if source.contains('/') {
         // HuggingFace repo ID.

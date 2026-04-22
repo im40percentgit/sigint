@@ -20,7 +20,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -251,7 +251,12 @@ uid=1000(user) gid=1000(user)\n\
         let result = parse_linpeas_output(input).expect("should return Some");
 
         let sections = result["sections"].as_array().unwrap();
-        assert_eq!(sections.len(), 3, "expected 3 sections, got: {:?}", sections);
+        assert_eq!(
+            sections.len(),
+            3,
+            "expected 3 sections, got: {:?}",
+            sections
+        );
         assert_eq!(sections[0], "System Information");
         assert_eq!(sections[1], "Network Information");
         assert_eq!(sections[2], "Users & Groups");

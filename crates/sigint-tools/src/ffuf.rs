@@ -215,10 +215,7 @@ pub(crate) fn parse_ffuf_output(stdout: &str) -> Option<Value> {
             .unwrap_or("");
         let status = entry.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
         let length = entry.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
-        let url = entry
-            .get("url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
 
         results.push(json!({
             "path": path,
@@ -365,7 +362,9 @@ mod tests {
             r#"]}"#,
         );
         let result = parse_ffuf_output(input).expect("should return Some");
-        let results = result["results"].as_array().expect("results should be array");
+        let results = result["results"]
+            .as_array()
+            .expect("results should be array");
         assert_eq!(results.len(), 3);
         assert_eq!(result["total"], 3);
 
@@ -386,7 +385,9 @@ mod tests {
     fn parse_ffuf_empty_results() {
         let input = r#"{"commandline":"ffuf -u http://target/FUZZ","results":[]}"#;
         let result = parse_ffuf_output(input).expect("should return Some for empty results");
-        let results = result["results"].as_array().expect("results should be array");
+        let results = result["results"]
+            .as_array()
+            .expect("results should be array");
         assert_eq!(results.len(), 0);
         assert_eq!(result["total"], 0);
     }

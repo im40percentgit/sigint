@@ -50,7 +50,11 @@ pub fn run_list() -> Result<()> {
 /// Scaffold a new plugin crate in the workspace.
 pub fn run_new(name: &str) -> Result<()> {
     // Validate name
-    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         bail!("Invalid plugin name: use alphanumeric characters, hyphens, or underscores");
     }
 

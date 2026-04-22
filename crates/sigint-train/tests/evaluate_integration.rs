@@ -101,9 +101,15 @@ async fn candidate_wins_on_tool_accuracy() {
     let base = MockProvider::with_responses(base_responses);
     let candidate = MockProvider::with_responses(cand_responses);
 
-    let report = run_comparison(&base, &candidate, &examples, "llama3.2:8b", "sigint-ft:latest")
-        .await
-        .expect("comparison should succeed");
+    let report = run_comparison(
+        &base,
+        &candidate,
+        &examples,
+        "llama3.2:8b",
+        "sigint-ft:latest",
+    )
+    .await
+    .expect("comparison should succeed");
 
     // Base: 6/10 = 0.60
     assert!(
@@ -231,9 +237,8 @@ async fn base_wins_gives_negative_delta() {
     }]);
 
     // Candidate hallucinates text instead of a tool call — recorded as miss.
-    let candidate = MockProvider::with_responses(vec![MockResponse::Text(
-        "I will scan the target.".into(),
-    )]);
+    let candidate =
+        MockProvider::with_responses(vec![MockResponse::Text("I will scan the target.".into())]);
 
     let report = run_comparison(&base, &candidate, &examples, "base", "cand")
         .await

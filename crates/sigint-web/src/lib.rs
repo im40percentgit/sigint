@@ -32,9 +32,18 @@
 //! @status accepted
 //! @rationale Axum is the de-facto async Rust web framework (backed by the
 //! Tokio team), with ergonomic extractors, first-class WebSocket support, and
-//! native integration with tower middleware. CORS is permissive during
-//! development; production deployments should restrict origins via config.
+//! native integration with tower middleware.
+//!
+//! @decision DEC-WEB-AUTH-001
+//! @title Bearer token + shared secret for all REST and WebSocket endpoints
+//! @status accepted
+//! @rationale See auth.rs for full rationale. Middleware is wired BEFORE the
+//! CORS layer so that CORS wraps auth — preflight OPTIONS requests still reach
+//! the CORS layer without being blocked by auth (browsers send OPTIONS without
+//! Authorization headers). The auth middleware exempts GET /api/health for
+//! liveness probes. All other paths require a valid Bearer token.
 
+pub mod auth;
 pub mod routes;
 pub mod state;
 pub mod static_files;
@@ -43,10 +52,12 @@ pub mod ws;
 use std::sync::Arc;
 
 use axum::{
+    http::{HeaderValue, Method},
+    middleware,
     routing::{delete, get, post},
     Router,
 };
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use sigint_agents::ScanService;
 use sigint_core::{event::EventBus, ApprovalRegistry, Config};
@@ -54,13 +65,27 @@ use sigint_store::Database;
 
 pub use state::AppState;
 
-/// Assemble the full Axum `Router` with state injected.
+/// Assemble the full Axum `Router` with auth and CORS middleware injected.
 ///
-/// This function is separated from `serve` so tests can call `create_router`
-/// and use `tower::ServiceExt::oneshot` without binding a real socket.
+/// Layer order matters in Axum: layers are applied from innermost (closest to
+/// the handler) outward. We want:
+///
+///   request → CORS → auth → handler
+///
+/// which means CORS wraps auth so OPTIONS preflight reaches the CORS layer
+/// before being blocked by auth. In Axum's `.layer()` chain, the last
+/// `.layer()` call is the outermost layer. So we add CORS last.
+///
+/// The `api_key` is resolved once at startup (see [`auth::resolve_api_key`])
+/// and stored as `Arc<String>` in the middleware state.
 pub fn create_router(state: AppState) -> Router {
+    let api_key = Arc::new(state.api_key.clone());
+
+    // Build restricted CORS layer from configured origins.
+    let cors = build_cors_layer(&state.config);
+
     Router::new()
-        // Health
+        // Health (exempt from auth — liveness probe)
         .route("/api/health", get(routes::health))
         // Sessions CRUD
         .route("/api/sessions", get(routes::list_sessions))
@@ -84,11 +109,39 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/scans", get(routes::list_scans))
         // WebSocket event bridge
         .route("/ws/events", get(ws::ws_events))
-        // Permissive CORS for local development
-        .layer(CorsLayer::permissive())
+        // Auth middleware (innermost — applied before CORS)
+        .layer(middleware::from_fn_with_state(
+            api_key,
+            auth::auth_middleware,
+        ))
+        // CORS layer (outermost — wraps auth so OPTIONS preflight is not blocked)
+        .layer(cors)
         .with_state(state)
         // SPA fallback: all unmatched paths serve the embedded frontend
         .fallback(static_files::serve_static)
+}
+
+/// Build a restricted `CorsLayer` from `config.web.cors_origins`.
+///
+/// Defaults to `["http://localhost:8080", "http://127.0.0.1:8080"]` when
+/// the origin list is empty. Allows standard methods (GET, POST, DELETE,
+/// OPTIONS) and the `Authorization` + `Content-Type` headers. No credentials
+/// (we use Bearer tokens, not cookies).
+fn build_cors_layer(config: &Config) -> CorsLayer {
+    let origins: Vec<HeaderValue> = config
+        .web
+        .effective_cors_origins()
+        .into_iter()
+        .filter_map(|o| HeaderValue::from_str(&o).ok())
+        .collect();
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+        ])
 }
 
 /// Bind a TCP listener and run the SIGINT web server.
@@ -144,12 +197,17 @@ pub async fn serve_with_shutdown(
         event_bus.clone(),
         approval_registry.clone(),
     ));
+
+    // Resolve API key once at startup using the priority chain in auth.rs
+    let api_key = auth::resolve_api_key(&config);
+
     let state = AppState {
         db: Arc::new(db),
         event_bus,
         config,
         approval_registry,
         scan_service,
+        api_key,
     };
     let app = create_router(state);
     let listener = tokio::net::TcpListener::bind(addr)
@@ -161,4 +219,129 @@ pub async fn serve_with_shutdown(
         .await
         .map_err(|e| sigint_core::Error::Other(format!("Web server error: {}", e)))?;
     Ok(())
+}
+
+// ── Integration tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use sigint_core::{event::EventBus, ApprovalRegistry, Config};
+    use sigint_store::Database;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    const TEST_TOKEN: &str = "integration-test-token-xyz";
+
+    fn test_state() -> AppState {
+        let db = Database::open_in_memory().expect("in-memory db");
+        let event_bus = EventBus::new();
+        let config = Arc::new(Config::default());
+        let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(30)));
+        let scan_service = Arc::new(ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+            api_key: TEST_TOKEN.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cors_allowed_origin_returns_acao() {
+        // Default config allows localhost:8080
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("OPTIONS")
+            .uri("/api/health")
+            .header("Origin", "http://localhost:8080")
+            .header("Access-Control-Request-Method", "GET")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        // CORS preflight on health (exempt from auth) should return ACAO
+        let acao = resp.headers().get("access-control-allow-origin");
+        assert!(
+            acao.is_some(),
+            "expected Access-Control-Allow-Origin header for allowed origin, got headers: {:?}",
+            resp.headers()
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_disallowed_origin_no_acao() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("OPTIONS")
+            .uri("/api/health")
+            .header("Origin", "https://evil.example.com")
+            .header("Access-Control-Request-Method", "GET")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let acao = resp
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        // Either no header at all, or empty — evil origin must not be reflected
+        assert!(
+            acao.is_empty() || acao == "null",
+            "disallowed origin must not get ACAO header, got: {:?}",
+            acao
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_upgrade_without_token_returns_401() {
+        let app = create_router(test_state());
+        // Auth middleware runs before WS upgrade handler
+        let req = Request::builder()
+            .uri("/ws/events")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "WS upgrade without token must be rejected at auth layer"
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_upgrade_with_query_token_succeeds() {
+        let app = create_router(test_state());
+        // Auth middleware accepts ?token= before WS upgrade runs.
+        // The WS handler returns a non-101 (likely 400) because we're using
+        // oneshot (not a real TCP connection) — but it must NOT be 401.
+        let req = Request::builder()
+            .uri(format!("/ws/events?token={}", TEST_TOKEN))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "WS upgrade with valid ?token= must pass auth middleware"
+        );
+    }
 }

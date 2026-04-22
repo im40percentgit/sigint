@@ -101,10 +101,7 @@ impl Tool for WpscanTool {
             .to_string();
 
         // Extract optional enumerate options, defaulting to "vp,vt,u".
-        let enumerate = args["enumerate"]
-            .as_str()
-            .unwrap_or("vp,vt,u")
-            .to_string();
+        let enumerate = args["enumerate"].as_str().unwrap_or("vp,vt,u").to_string();
 
         // Extract optional API token.
         let api_token = args["api_token"].as_str().map(|s| s.to_string());
@@ -337,7 +334,9 @@ mod tests {
         assert_eq!(result["wordpress_version"], "6.0");
         assert_eq!(result["version_status"], "outdated");
 
-        let plugins = result["plugins"].as_array().expect("plugins should be array");
+        let plugins = result["plugins"]
+            .as_array()
+            .expect("plugins should be array");
         assert_eq!(plugins.len(), 2);
 
         // Find the akismet plugin (order not guaranteed from HashMap iteration).

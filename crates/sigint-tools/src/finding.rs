@@ -660,9 +660,24 @@ mod tests {
         let collector = new_finding_collector();
         let tool = CreateFindingTool::new(collector);
         let def = tool.definition();
-        let props = def.function.parameters.get("properties").expect("properties");
-        assert!(props.get("asset_id").is_some(), "schema should define asset_id property");
-        let required = def.function.parameters.get("required").and_then(|r| r.as_array()).unwrap();
-        assert!(!required.iter().any(|v| v == "asset_id"), "asset_id must not be required");
+        let props = def
+            .function
+            .parameters
+            .get("properties")
+            .expect("properties");
+        assert!(
+            props.get("asset_id").is_some(),
+            "schema should define asset_id property"
+        );
+        let required = def
+            .function
+            .parameters
+            .get("required")
+            .and_then(|r| r.as_array())
+            .unwrap();
+        assert!(
+            !required.iter().any(|v| v == "asset_id"),
+            "asset_id must not be required"
+        );
     }
 }

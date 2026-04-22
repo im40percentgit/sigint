@@ -170,10 +170,12 @@ pub fn run_finetune(
     }
 
     // Parse the command string into argv tokens (no shell involved).
-    let argv = split_command(&cfg.finetune_command)
-        .context("failed to parse [train].finetune_command")?;
+    let argv =
+        split_command(&cfg.finetune_command).context("failed to parse [train].finetune_command")?;
 
-    let (program, args) = argv.split_first().expect("split_command guarantees non-empty");
+    let (program, args) = argv
+        .split_first()
+        .expect("split_command guarantees non-empty");
 
     // Resolve job_dir — defaults to ~/.local/share/sigint/training/.
     let job_dir = resolve_job_dir(cfg);
@@ -292,7 +294,10 @@ fn resolve_job_dir(cfg: &TrainConfig) -> PathBuf {
     let home = std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    home.join(".local").join("share").join("sigint").join("training")
+    home.join(".local")
+        .join("share")
+        .join("sigint")
+        .join("training")
 }
 
 /// Append a single JobRecord to `job_dir/jobs.json` (JSONL).
@@ -305,7 +310,8 @@ fn persist_job(job_dir: &Path, record: &JobRecord) -> Result<()> {
         .with_context(|| format!("failed to open {}", jobs_path.display()))?;
 
     let line = serde_json::to_string(record).context("failed to serialize JobRecord")?;
-    writeln!(file, "{}", line).with_context(|| format!("failed to write to {}", jobs_path.display()))?;
+    writeln!(file, "{}", line)
+        .with_context(|| format!("failed to write to {}", jobs_path.display()))?;
     Ok(())
 }
 
@@ -390,7 +396,11 @@ mod tests {
         let jobs_file = job_dir.join("jobs.json");
         assert!(jobs_file.exists());
         let contents = std::fs::read_to_string(&jobs_file).unwrap();
-        assert_eq!(contents.lines().count(), 1, "expected exactly one JSONL line");
+        assert_eq!(
+            contents.lines().count(),
+            1,
+            "expected exactly one JSONL line"
+        );
         let parsed: JobRecord = serde_json::from_str(contents.lines().next().unwrap()).unwrap();
         assert_eq!(parsed.id, rec.id);
     }

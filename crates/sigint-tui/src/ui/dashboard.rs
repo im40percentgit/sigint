@@ -88,9 +88,7 @@ fn render_stat_cards(frame: &mut Frame, state: &AppState, area: Rect) {
 fn render_stat_card(frame: &mut Frame, title: &str, value: &str, color: Color, area: Rect) {
     let content = Paragraph::new(Line::from(vec![Span::styled(
         value.to_string(),
-        Style::default()
-            .fg(color)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
     )]))
     .block(
         Block::default()

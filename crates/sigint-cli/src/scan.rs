@@ -195,7 +195,13 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
 
     // Apply disabled_tools filter from config.plugins
     if !core.config.plugins.disabled_tools.is_empty() {
-        tools.retain(|t| !core.config.plugins.disabled_tools.contains(&t.name().to_string()));
+        tools.retain(|t| {
+            !core
+                .config
+                .plugins
+                .disabled_tools
+                .contains(&t.name().to_string())
+        });
     }
 
     let mut registry = ToolRegistry::new();
@@ -284,8 +290,8 @@ pub async fn run(core: AppCore, args: ScanArgs) -> Result<(), Error> {
     // Apply prompt pack from config (if not "default")
     if core.config.plugins.prompt_pack != "default" {
         if let Some(pack) = sigint_plugin::find_prompt_pack(&core.config.plugins.prompt_pack) {
-            orchestrator = orchestrator
-                .with_prompt_override(sigint_plugin::prompt_pack_override_fn(pack));
+            orchestrator =
+                orchestrator.with_prompt_override(sigint_plugin::prompt_pack_override_fn(pack));
         } else {
             tracing::warn!(
                 "prompt pack '{}' not found, using defaults",

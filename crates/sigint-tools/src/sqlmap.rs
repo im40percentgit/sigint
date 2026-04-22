@@ -232,8 +232,7 @@ pub(crate) fn parse_sqlmap_output(stdout: &str) -> Option<Value> {
     let type_re = Regex::new(r"^[ \t]*Type: (.+)$").expect("type regex is valid");
 
     // Pattern: the back-end DBMS is <name>
-    let dbms_re =
-        Regex::new(r"the back-end DBMS is ([^\r\n]+)").expect("dbms regex is valid");
+    let dbms_re = Regex::new(r"the back-end DBMS is ([^\r\n]+)").expect("dbms regex is valid");
 
     // Track current parameter context and collect vulnerable params.
     let mut vulnerable_params: Vec<Value> = Vec::new();

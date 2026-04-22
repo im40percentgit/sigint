@@ -102,7 +102,14 @@ fn finetune_fails_exits_nonzero() {
     );
 
     let output = Command::new(&bin)
-        .args(["train", "finetune", "--base", "llama3.2:8b", "--output", "test-adapter"])
+        .args([
+            "train",
+            "finetune",
+            "--base",
+            "llama3.2:8b",
+            "--output",
+            "test-adapter",
+        ])
         .env("HOME", &home)
         // Suppress SIGINT_LOG to keep test output clean.
         .env_remove("SIGINT_LOG")
@@ -112,7 +119,8 @@ fn finetune_fails_exits_nonzero() {
     // ── Assert: non-zero exit code ──────────────────────────────────────────
     let exit_code = output.status.code().unwrap_or(-1);
     assert_ne!(
-        exit_code, 0,
+        exit_code,
+        0,
         "sigint train finetune must exit non-zero when trainer fails; got exit {}\nstderr: {}",
         exit_code,
         String::from_utf8_lossy(&output.stderr)
@@ -163,7 +171,14 @@ fn finetune_succeeds_exits_zero() {
     );
 
     let output = Command::new(&bin)
-        .args(["train", "finetune", "--base", "llama3.2:8b", "--output", "test-adapter"])
+        .args([
+            "train",
+            "finetune",
+            "--base",
+            "llama3.2:8b",
+            "--output",
+            "test-adapter",
+        ])
         .env("HOME", &home)
         .env_remove("SIGINT_LOG")
         .output()

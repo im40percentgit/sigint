@@ -23,12 +23,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use sigint_core::types::Session;
+use sigint_llm::{MockProvider, MockResponse};
 use sigint_store::{db::Database, scans::ScanRecord};
 use sigint_train::{
     evaluate::{persist_last_eval, run_comparison},
     extract, finetune, format, split,
 };
-use sigint_llm::{MockProvider, MockResponse};
 use tempfile::TempDir;
 
 // -- Helpers ------------------------------------------------------------------
@@ -155,7 +155,8 @@ async fn finetune_loop_end_to_end() {
 
     let train_jsonl = train_dir.join("train.jsonl");
     let test_jsonl = train_dir.join("test.jsonl");
-    let train_count = format::write_jsonl(&train_examples, &train_jsonl).expect("write train.jsonl");
+    let train_count =
+        format::write_jsonl(&train_examples, &train_jsonl).expect("write train.jsonl");
     let test_count = format::write_jsonl(&test_examples, &test_jsonl).expect("write test.jsonl");
     assert_eq!(train_count, train_examples.len());
     assert_eq!(test_count, test_examples.len());
@@ -171,16 +172,23 @@ async fn finetune_loop_end_to_end() {
         job_dir: Some(job_dir.clone()),
     };
 
-    let record = finetune::run_finetune(&cfg, "llama3.2:8b", &output_path, &train_jsonl, &test_jsonl)
-        .expect("run_finetune");
+    let record =
+        finetune::run_finetune(&cfg, "llama3.2:8b", &output_path, &train_jsonl, &test_jsonl)
+            .expect("run_finetune");
 
     assert!(
         matches!(record.status, sigint_train::finetune::JobStatus::Success),
         "finetune should succeed: {:?}",
         record.status
     );
-    assert!(output_path.exists(), "output_path must exist after finetune");
-    assert!(fs::metadata(&output_path).unwrap().len() > 0, "output not empty");
+    assert!(
+        output_path.exists(),
+        "output_path must exist after finetune"
+    );
+    assert!(
+        fs::metadata(&output_path).unwrap().len() > 0,
+        "output not empty"
+    );
 
     let jobs = finetune::list_jobs(&job_dir).expect("list_jobs");
     assert_eq!(jobs.len(), 1, "expected 1 job entry, got {}", jobs.len());
@@ -190,7 +198,9 @@ async fn finetune_loop_end_to_end() {
     let mock_responses: Vec<MockResponse> = test_examples
         .iter()
         .map(|ex| {
-            let tool_name = ex.messages.iter()
+            let tool_name = ex
+                .messages
+                .iter()
                 .find(|m| m.role == "assistant")
                 .and_then(|m| m.tool_calls.as_ref())
                 .and_then(|calls| calls.first())
@@ -217,7 +227,10 @@ async fn finetune_loop_end_to_end() {
     .expect("run_comparison");
 
     assert_eq!(report.total_examples, test_examples.len());
-    assert!(report.base_results.tool_accuracy > 0.0, "base tool_accuracy should be > 0");
+    assert!(
+        report.base_results.tool_accuracy > 0.0,
+        "base tool_accuracy should be > 0"
+    );
 
     // Persist last_eval.json.
     persist_last_eval(&train_dir, &report).expect("persist_last_eval");
@@ -225,7 +238,8 @@ async fn finetune_loop_end_to_end() {
     assert!(eval_path.exists(), "last_eval.json must exist");
 
     let eval_raw = fs::read_to_string(&eval_path).expect("read last_eval.json");
-    let eval_val: serde_json::Value = serde_json::from_str(&eval_raw).expect("parse last_eval.json");
+    let eval_val: serde_json::Value =
+        serde_json::from_str(&eval_raw).expect("parse last_eval.json");
     let persisted_total = eval_val["total_examples"].as_u64().unwrap_or(0) as usize;
     assert!(
         persisted_total > 0,
@@ -244,12 +258,19 @@ async fn finetune_loop_end_to_end() {
     let home_dir = TempDir::new().expect("home tempdir");
     let home = home_dir.path();
 
-    let models_dir = home.join(".local").join("share").join("sigint").join("models");
+    let models_dir = home
+        .join(".local")
+        .join("share")
+        .join("sigint")
+        .join("models");
     fs::create_dir_all(&models_dir).unwrap();
     fs::write(models_dir.join("adapter.gguf"), b"GGUF_STUB").unwrap();
 
     let home_training_dir = home
-        .join(".local").join("share").join("sigint").join("training");
+        .join(".local")
+        .join("share")
+        .join("sigint")
+        .join("training");
     fs::create_dir_all(&home_training_dir).unwrap();
     fs::copy(&eval_path, home_training_dir.join("last_eval.json")).unwrap();
 
@@ -298,7 +319,10 @@ async fn finetune_loop_end_to_end() {
     let log_path = home_training_dir.join("promotion.log");
     assert!(log_path.exists(), "promotion.log must exist");
     let log_contents = fs::read_to_string(&log_path).expect("read promotion.log");
-    let entry_count = log_contents.lines().filter(|l| !l.trim().is_empty()).count();
+    let entry_count = log_contents
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
     assert_eq!(
         entry_count, 2,
         "promotion.log should have 2 entries, got: {}\nlog:\n{}",
@@ -310,6 +334,14 @@ async fn finetune_loop_end_to_end() {
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str(l).expect("parse log entry"))
         .collect();
-    assert_eq!(entries[0]["action"].as_str(), Some("promote"), "first entry action");
-    assert_eq!(entries[1]["action"].as_str(), Some("rollback"), "second entry action");
+    assert_eq!(
+        entries[0]["action"].as_str(),
+        Some("promote"),
+        "first entry action"
+    );
+    assert_eq!(
+        entries[1]["action"].as_str(),
+        Some("rollback"),
+        "second entry action"
+    );
 }

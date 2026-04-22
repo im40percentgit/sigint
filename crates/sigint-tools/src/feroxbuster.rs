@@ -29,7 +29,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -377,8 +377,7 @@ mod tests {
 
     #[test]
     fn parse_feroxbuster_empty_output_returns_some_with_zero() {
-        let result =
-            parse_feroxbuster_output("").expect("should return Some even for empty input");
+        let result = parse_feroxbuster_output("").expect("should return Some even for empty input");
         assert_eq!(result["total"], 0);
         assert_eq!(result["possibly_rate_limited"], true);
     }

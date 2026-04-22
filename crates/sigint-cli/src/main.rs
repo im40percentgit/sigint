@@ -457,26 +457,29 @@ async fn main() {
                 .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
         },
         Commands::Train { command } => match command {
-            TrainCommands::Export { output, min_examples } => {
-                train::run_export(core, output, min_examples).await
-            }
-            TrainCommands::Create { base_model, name, data } => {
-                train::run_create(core, base_model, name, data).await
-            }
+            TrainCommands::Export {
+                output,
+                min_examples,
+            } => train::run_export(core, output, min_examples).await,
+            TrainCommands::Create {
+                base_model,
+                name,
+                data,
+            } => train::run_create(core, base_model, name, data).await,
             TrainCommands::Stats => train::run_stats(core).await,
-            TrainCommands::Assess { model, data } => {
-                train::run_assess(core, model, data).await
-            }
-            TrainCommands::Harvest { session_id } => {
-                train::run_harvest(core, session_id).await
-            }
-            TrainCommands::Finetune { base, output, train_dir } => {
-                train::run_finetune(core, base, output, train_dir).await
-            }
+            TrainCommands::Assess { model, data } => train::run_assess(core, model, data).await,
+            TrainCommands::Harvest { session_id } => train::run_harvest(core, session_id).await,
+            TrainCommands::Finetune {
+                base,
+                output,
+                train_dir,
+            } => train::run_finetune(core, base, output, train_dir).await,
             TrainCommands::Jobs => train::run_jobs(core).await,
-            TrainCommands::Evaluate { base, candidate, test_data } => {
-                train::run_evaluate(core, base, candidate, test_data).await
-            }
+            TrainCommands::Evaluate {
+                base,
+                candidate,
+                test_data,
+            } => train::run_evaluate(core, base, candidate, test_data).await,
         },
     };
 

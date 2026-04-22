@@ -25,7 +25,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -255,7 +255,10 @@ pub(crate) fn parse_scout_suite_output(stdout: &str, provider: &str) -> Option<V
     }
 
     let total_findings = findings.len() as u64;
-    let by_severity_json: Value = by_severity.into_iter().map(|(k, v)| (k, json!(v))).collect();
+    let by_severity_json: Value = by_severity
+        .into_iter()
+        .map(|(k, v)| (k, json!(v)))
+        .collect();
 
     services_scanned.sort();
 
@@ -294,9 +297,7 @@ mod tests {
         );
 
         // provider has enum constraint
-        let provider_enum = params["properties"]["provider"]["enum"]
-            .as_array()
-            .unwrap();
+        let provider_enum = params["properties"]["provider"]["enum"].as_array().unwrap();
         assert!(provider_enum.iter().any(|v| v == "aws"));
         assert!(provider_enum.iter().any(|v| v == "azure"));
         assert!(provider_enum.iter().any(|v| v == "gcp"));
@@ -310,10 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn scout_suite_missing_provider_errors() {
-        let err = ScoutSuiteTool::new()
-            .execute(json!({}))
-            .await
-            .unwrap_err();
+        let err = ScoutSuiteTool::new().execute(json!({})).await.unwrap_err();
         assert!(
             err.to_string().contains("missing required argument"),
             "unexpected error: {err}"

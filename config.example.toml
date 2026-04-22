@@ -96,3 +96,33 @@ default_output_cap = 1048576  # 1 MB
 # Directory where fine-tune job records (jobs.json) and adapter outputs live.
 # Default: ~/.local/share/sigint/training/
 # job_dir = "~/.local/share/sigint/training"
+
+# ── Web server security (optional) ───────────────────────────────────────────
+#
+# Authentication: every REST endpoint and WebSocket upgrade requires a Bearer
+# token. If api_key is not set here and SIGINT_API_KEY_AUTH is not set in the
+# environment, a random 64-hex-char key is generated on first start, printed
+# once to stderr, and persisted to ~/.config/sigint/.api_key (mode 0600).
+#
+# Key resolution order:
+#   1. [web] api_key below
+#   2. SIGINT_API_KEY_AUTH environment variable (NOT SIGINT_API_KEY — that is
+#      the LLM provider key)
+#   3. ~/.config/sigint/.api_key (persisted from a previous auto-generated key)
+#   4. Auto-generate, persist, and print to stderr
+#
+# Usage:
+#   REST:      Authorization: Bearer <key>
+#   WebSocket: ?token=<key>  or  Sec-WebSocket-Protocol: bearer.<key>
+#   Health:    GET /api/health — always exempt (liveness probe)
+
+[web]
+# Uncomment to pin a specific API key instead of using the auto-generated one.
+# api_key = "your-secret-key-here"
+
+# Allowed CORS origins for the embedded web UI.
+# Defaults to ["http://localhost:8080", "http://127.0.0.1:8080"] when omitted.
+# cors_origins = ["http://localhost:8080", "http://127.0.0.1:8080"]
+
+# Override the bind address (optional — defaults to CLI's --bind flag value).
+# bind_addr = "127.0.0.1:8080"

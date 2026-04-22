@@ -268,7 +268,11 @@ mod tests {
         );
 
         assert_eq!(example.session_id, session_id);
-        assert_eq!(example.messages.len(), 4, "system + context + assistant + tool");
+        assert_eq!(
+            example.messages.len(),
+            4,
+            "system + context + assistant + tool"
+        );
 
         // system
         assert_eq!(example.messages[0].role, "system");
@@ -301,10 +305,7 @@ mod tests {
             Some("PORT 80/tcp open http")
         );
         // tool_call_id should match assistant's call id
-        assert_eq!(
-            example.messages[3].tool_call_id,
-            Some(calls[0].id.clone())
-        );
+        assert_eq!(example.messages[3].tool_call_id, Some(calls[0].id.clone()));
     }
 
     #[test]

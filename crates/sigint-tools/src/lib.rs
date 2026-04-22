@@ -26,6 +26,7 @@ pub mod cloudsploit;
 pub mod enum4linux;
 pub mod error;
 pub mod feroxbuster;
+pub mod ffuf;
 pub mod finding;
 pub mod gobuster;
 pub mod hashcat;
@@ -41,13 +42,12 @@ pub mod result;
 pub mod scout_suite;
 pub mod shell;
 pub mod sqlmap;
-pub mod ffuf;
 pub mod testssl;
+pub mod tool;
 pub mod trivy;
 pub mod tshark;
 pub mod whatweb;
 pub mod wpscan;
-pub mod tool;
 
 pub use akaei::{
     AkaeiAnalyzeTool, AkaeiAuditTool, AkaeiDecodeTool, AkaeiFingerprintTool, AkaeiFreqdbTool,
@@ -62,6 +62,7 @@ pub use error::{Result, ToolError};
 pub use feroxbuster::FeroxbusterTool;
 // CreateFindingTool is NOT in all_executor_tools() — it requires a FindingCollector
 // at construction and is registered separately by the orchestrator per scan.
+pub use ffuf::FfufTool;
 pub use finding::{new_finding_collector, CreateFindingTool, FindingCollector};
 pub use gobuster::GobusterTool;
 pub use hashcat::HashcatTool;
@@ -77,13 +78,12 @@ pub use result::{ScanStatus, ToolResult, TruncationInfo};
 pub use scout_suite::ScoutSuiteTool;
 pub use shell::ShellTool;
 pub use sqlmap::SqlmapTool;
-pub use ffuf::FfufTool;
 pub use testssl::TestsslTool;
+pub use tool::Tool;
 pub use trivy::TrivyTool;
 pub use tshark::TsharkTool;
 pub use whatweb::WhatwebTool;
 pub use wpscan::WpscanTool;
-pub use tool::Tool;
 
 /// Return all executor tools configured with per-tool output caps from `ToolsConfig`.
 ///
@@ -107,7 +107,9 @@ pub fn all_executor_tools_with_config(
         Box::new(GobusterTool::new().with_output_cap(tools_config.output_cap_for("gobuster"))),
         Box::new(NiktoTool::new().with_output_cap(tools_config.output_cap_for("nikto"))),
         Box::new(NucleiTool::new().with_output_cap(tools_config.output_cap_for("nuclei"))),
-        Box::new(FeroxbusterTool::new().with_output_cap(tools_config.output_cap_for("feroxbuster"))),
+        Box::new(
+            FeroxbusterTool::new().with_output_cap(tools_config.output_cap_for("feroxbuster")),
+        ),
         Box::new(SqlmapTool::new().with_output_cap(tools_config.output_cap_for("sqlmap"))),
         Box::new(FfufTool::new().with_output_cap(tools_config.output_cap_for("ffuf"))),
         Box::new(WhatwebTool::new().with_output_cap(tools_config.output_cap_for("whatweb"))),
@@ -126,7 +128,9 @@ pub fn all_executor_tools_with_config(
         // Phase 15E cloud/container security tools
         Box::new(TrivyTool::new().with_output_cap(tools_config.output_cap_for("trivy"))),
         Box::new(ScoutSuiteTool::new().with_output_cap(tools_config.output_cap_for("scout_suite"))),
-        Box::new(CloudsploitTool::new().with_output_cap(tools_config.output_cap_for("cloudsploit"))),
+        Box::new(
+            CloudsploitTool::new().with_output_cap(tools_config.output_cap_for("cloudsploit")),
+        ),
         // akaei SDR tools (direct process — USB device access required, no sandbox output caps)
         Box::new(AkaeiSweepTool),
         Box::new(AkaeiScanTool),

@@ -29,7 +29,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -267,13 +267,19 @@ pub(crate) fn parse_gobuster_output(stdout: &str) -> Option<Value> {
 
         if let Some(caps) = re_status.captures(line) {
             // Matched dir or vhost format.
-            let path = caps.get(1).map(|m: regex::Match| m.as_str()).unwrap_or("").to_string();
+            let path = caps
+                .get(1)
+                .map(|m: regex::Match| m.as_str())
+                .unwrap_or("")
+                .to_string();
             let status: u64 = caps
                 .get(2)
                 .and_then(|m: regex::Match| m.as_str().parse().ok())
                 .unwrap_or(0);
             // Size is optional in some gobuster versions.
-            let size: Option<u64> = caps.get(3).and_then(|m: regex::Match| m.as_str().parse().ok());
+            let size: Option<u64> = caps
+                .get(3)
+                .and_then(|m: regex::Match| m.as_str().parse().ok());
 
             let entry = if let Some(sz) = size {
                 json!({"path": path, "status": status, "size": sz})

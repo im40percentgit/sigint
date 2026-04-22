@@ -22,6 +22,8 @@ chrono = { workspace = true }
 futures-util = { workspace = true }
 rust-embed = { workspace = true }
 mime_guess = { workspace = true }
+subtle = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

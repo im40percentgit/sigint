@@ -43,8 +43,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
 
     if area.width < 80 || area.height < 24 {
-        let msg =
-            Paragraph::new("Terminal too small (min 80x24)").alignment(Alignment::Center);
+        let msg = Paragraph::new("Terminal too small (min 80x24)").alignment(Alignment::Center);
         frame.render_widget(msg, area);
         return;
     }
@@ -86,8 +85,7 @@ fn render_status_bar(frame: &mut Frame, state: &AppState, area: Rect) {
         " Idle — waiting for task".to_string()
     };
 
-    let bar =
-        Paragraph::new(content).style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let bar = Paragraph::new(content).style(Style::default().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(bar, area);
 }
 
@@ -103,7 +101,9 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, view: View) {
     let global_keys = vec![
         Line::from(Span::styled(
             " Keybindings ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::default(),
         Line::from("  ?          Toggle this help"),
@@ -124,7 +124,9 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, view: View) {
             Line::default(),
             Line::from(Span::styled(
                 " Scan view ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from("  y / n      Approve / deny tool execution"),
             Line::from("  Enter      Submit input (Input panel)"),
@@ -133,7 +135,9 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, view: View) {
             Line::default(),
             Line::from(Span::styled(
                 " Sessions view ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from("  Enter      Load selected session"),
             Line::from("  Esc        Return to list"),
@@ -142,7 +146,9 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, view: View) {
             Line::default(),
             Line::from(Span::styled(
                 " Findings view ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from("  Enter      Open detail pane"),
             Line::from("  Esc        Return to list"),
@@ -151,7 +157,9 @@ fn render_help_overlay(frame: &mut Frame, area: Rect, view: View) {
             Line::default(),
             Line::from(Span::styled(
                 " Reports view ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from("  Enter      Generate report for session"),
             Line::from("  :report export <path>   Save to file"),
@@ -369,8 +377,12 @@ mod tests {
         let mut state = AppState::new();
         let sid = Uuid::new_v4();
 
-        let new_finding =
-            Finding::new(sid, "SQL Injection", "unparameterised query", Severity::High);
+        let new_finding = Finding::new(
+            sid,
+            "SQL Injection",
+            "unparameterised query",
+            Severity::High,
+        );
         let fixed_finding = Finding::new(sid, "Open Redirect", "was fixed", Severity::Medium);
         let unchanged_finding = Finding::new(sid, "XSS", "still open", Severity::Low);
 

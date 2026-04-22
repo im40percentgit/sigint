@@ -249,8 +249,9 @@ impl TuiApp {
                 }
             }
             View::Sessions => {
-                let result = tokio::task::spawn_blocking(move || db.list_sessions().unwrap_or_default())
-                    .await;
+                let result =
+                    tokio::task::spawn_blocking(move || db.list_sessions().unwrap_or_default())
+                        .await;
                 if let Ok(sessions) = result {
                     self.state.session_list = sessions.clone();
                     self.state.report_list = sessions;
@@ -273,8 +274,9 @@ impl TuiApp {
                 }
             }
             View::Reports => {
-                let result = tokio::task::spawn_blocking(move || db.list_sessions().unwrap_or_default())
-                    .await;
+                let result =
+                    tokio::task::spawn_blocking(move || db.list_sessions().unwrap_or_default())
+                        .await;
                 if let Ok(sessions) = result {
                     self.state.report_list = sessions;
                     self.state.selected_report_idx = 0;
@@ -350,8 +352,7 @@ impl TuiApp {
                 if self.state.current_view == View::Sessions
                     && self.state.focused_panel == Panel::SessionList =>
             {
-                self.state.selected_session_idx =
-                    self.state.selected_session_idx.saturating_sub(1);
+                self.state.selected_session_idx = self.state.selected_session_idx.saturating_sub(1);
             }
             (Mode::Normal, KeyCode::Char('j') | KeyCode::Down)
                 if self.state.current_view == View::Sessions
@@ -366,8 +367,7 @@ impl TuiApp {
                 if self.state.current_view == View::Findings
                     && self.state.focused_panel == Panel::FindingList =>
             {
-                self.state.selected_finding_idx =
-                    self.state.selected_finding_idx.saturating_sub(1);
+                self.state.selected_finding_idx = self.state.selected_finding_idx.saturating_sub(1);
             }
             (Mode::Normal, KeyCode::Char('j') | KeyCode::Down)
                 if self.state.current_view == View::Findings
@@ -454,7 +454,11 @@ impl TuiApp {
                 self.state.mode = Mode::Search(new_buf);
             }
             (Mode::Search(ref buf), KeyCode::Enter) => {
-                let query = if buf.is_empty() { None } else { Some(buf.clone()) };
+                let query = if buf.is_empty() {
+                    None
+                } else {
+                    Some(buf.clone())
+                };
                 self.state.search_query = query;
                 self.state.mode = Mode::Normal;
             }

@@ -21,7 +21,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -268,7 +268,11 @@ mod tests {
             required.iter().any(|v| v == "hash_type"),
             "hash_type should be required"
         );
-        assert_eq!(required.len(), 2, "only hash and hash_type should be required");
+        assert_eq!(
+            required.len(),
+            2,
+            "only hash and hash_type should be required"
+        );
 
         // hash is string, hash_type is integer
         assert_eq!(params["properties"]["hash"]["type"], "string");
@@ -314,7 +318,9 @@ mod tests {
         // With --outfile-format=2, hashcat emits one plaintext per line.
         let input = "password123\nletmein\nsecret\n";
         let result = parse_hashcat_output(input).expect("should return Some");
-        let cracked = result["cracked"].as_array().expect("cracked should be array");
+        let cracked = result["cracked"]
+            .as_array()
+            .expect("cracked should be array");
         assert_eq!(cracked.len(), 3);
         assert_eq!(result["total"], 3);
         assert_eq!(cracked[0], "password123");
@@ -327,7 +333,9 @@ mod tests {
         let input = "";
         let result = parse_hashcat_output(input).expect("should return Some even with no results");
         assert_eq!(result["total"], 0);
-        let cracked = result["cracked"].as_array().expect("cracked should be array");
+        let cracked = result["cracked"]
+            .as_array()
+            .expect("cracked should be array");
         assert!(cracked.is_empty());
     }
 

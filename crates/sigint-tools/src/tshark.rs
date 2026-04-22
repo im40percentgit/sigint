@@ -19,7 +19,7 @@ use sigint_sandbox::profile::SandboxProfile;
 use tracing::info;
 
 use crate::error::{Result, ToolError};
-use crate::result::{TruncationInfo, ToolResult};
+use crate::result::{ToolResult, TruncationInfo};
 use crate::tool::Tool;
 use sigint_core::types::ToolRisk;
 
@@ -109,10 +109,7 @@ impl Tool for TsharkTool {
 
     async fn execute(&self, args: Value) -> Result<ToolResult> {
         // Extract optional parameters with defaults.
-        let interface = args["interface"]
-            .as_str()
-            .unwrap_or("any")
-            .to_string();
+        let interface = args["interface"].as_str().unwrap_or("any").to_string();
         let capture_filter = args["capture_filter"].as_str().map(|s| s.to_string());
         let duration = args["duration"].as_i64().unwrap_or(30);
         let read_file = args["read_file"].as_str().map(|s| s.to_string());
