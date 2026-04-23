@@ -376,11 +376,29 @@ pub async fn run_tool_loop(
                     // ── Scan record persistence (best-effort) ─────────────────
                     // Create a ScanRecord before execution so the record exists
                     // even if the tool panics or the process dies mid-run.
+                    //
+                    // @decision DEC-AGENT-PERSIST-REDACT-001
+                    // @title Redact credentials from tool-call args at persistence boundary
+                    // @status accepted
+                    // @rationale Defense-in-depth: even if a tool receives a
+                    // credential (e.g. an Authorization header passed as an arg),
+                    // it must not reach the scan-record store in plaintext.
+                    // Redaction happens here — after approval but before the DB
+                    // write — so approval logs and event-bus payloads are
+                    // unaffected while the durable store stays clean.
                     let record_id: Option<Uuid> = if let Some(db) = db {
+                        let (redacted_args, n_redactions) = sigint_core::redact_json(args);
+                        if n_redactions > 0 {
+                            debug!(
+                                tool_name = %name,
+                                n_redactions,
+                                "scan record: redacted credentials in args"
+                            );
+                        }
                         let mut record = sigint_store::ScanRecord::new(
                             session_id,
                             name.as_str(),
-                            args.to_string(),
+                            redacted_args.to_string(),
                         );
                         // Attribute this tool call to the invoking agent role.
                         record.agent_role = Some(agent_role.to_string());
@@ -1424,6 +1442,83 @@ mod tests {
             tool_msg.content.contains("probe output"),
             "tool message should contain probe output: {}",
             tool_msg.content
+        );
+    }
+
+    // ── Redaction at persistence boundary ────────────────────────────────────
+
+    /// Verifies that tool-call args containing a Bearer token are redacted
+    /// before they reach the ScanRecord store (Finding #12 — DEC-AGENT-PERSIST-REDACT-001).
+    ///
+    /// Strategy: run a real in-memory Database, drive one tool call whose args
+    /// include a Bearer token, then query the stored ScanRecord and assert the
+    /// token has been replaced by "<redacted>".
+    #[tokio::test]
+    async fn scan_record_args_redacted_at_persistence() {
+        let secret = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig";
+        let tool_args = json!({
+            "url": "https://example.com/api",
+            "headers": {
+                "Authorization": format!("Bearer {secret}")
+            }
+        });
+
+        let tool = MockTool::success("http_probe", "200 OK");
+        let tool_def = tool.definition();
+        let tool_ref: &dyn Tool = &tool;
+
+        let provider = MockProvider::new(vec![
+            MockProvider::tool_response("http_probe", tool_args),
+            MockProvider::text_response("done"),
+        ]);
+
+        let db = sigint_store::Database::open_in_memory().expect("in-memory DB");
+        // Create a session so foreign-key constraints are satisfied.
+        let session = sigint_core::types::Session::new("redact-test");
+        db.create_session(&session).expect("create session");
+
+        let mut state = make_state();
+        let bus = EventBus::new();
+
+        let _ = run_tool_loop(
+            &provider,
+            &mut state,
+            &[tool_ref],
+            &[tool_def],
+            ToolLoopOptions {
+                max_iterations: 5,
+                model: "mock",
+                event_bus: &bus,
+                approval_registry: None,
+                auto_approve: "all",
+                db: Some(&db),
+                session_id: session.id,
+                agent_role: "executor",
+            },
+        )
+        .await
+        .unwrap();
+
+        // Retrieve all scan records for this session.
+        let records = db.get_scan_records(session.id).expect("get scan records");
+        assert!(!records.is_empty(), "expected at least one scan record");
+
+        let record = records
+            .iter()
+            .find(|r| r.tool == "http_probe")
+            .expect("http_probe record missing");
+
+        // The stored args must NOT contain the original token.
+        assert!(
+            !record.args.contains(secret),
+            "secret token leaked into scan record args: {}",
+            record.args
+        );
+        // The stored args must contain the redaction marker.
+        assert!(
+            record.args.contains("<redacted>"),
+            "expected '<redacted>' in scan record args: {}",
+            record.args
         );
     }
 }
