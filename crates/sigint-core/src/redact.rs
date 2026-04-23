@@ -19,6 +19,17 @@
 //! config knob to disable redaction — rejected because credential leakage must
 //! never be opt-in.  The design uses `std::sync::OnceLock` (stable since Rust
 //! 1.70) instead of `once_cell` to avoid an external dependency.
+//!
+//! @decision DEC-CORE-REDACT-002
+//! @title Extend password-kv separator to match URL-encoded `=` (%3D / %3d)
+//! @status accepted
+//! @rationale CSO re-run finding L1: the separator class `[:=]` missed the
+//! URL-encoded form `%3D` (and its lowercase variant `%3d`), allowing
+//! `password%3Dhunter2` to slip through unredacted. The fix replaces the two-
+//! character class with a non-capturing alternation `(?:[:=]|%3[Dd])` which
+//! covers bare colon, bare equals, and both case variants of the percent-encoded
+//! equals sign. Non-capturing groups are a basic regex feature present in the
+//! workspace `regex` crate regardless of unicode feature flags.
 
 use std::sync::OnceLock;
 
@@ -88,7 +99,7 @@ fn patterns() -> &'static Vec<Pattern> {
             // workspace regex crate.  [^ \t"',;}\]]+ replaces [^"'\s,;}\]]+.
             Pattern {
                 re: Regex::new(
-                    r#"(password|passwd|pwd|secret|api[_-]?key)[ \t]*[:=][ \t]*["']?[^ \t"',;}\]]+"#,
+                    r#"(password|passwd|pwd|secret|api[_-]?key)[ \t]*(?:[:=]|%3[Dd])[ \t]*["']?[^ \t"',;}\]]+"#,
                 )
                 .unwrap(),
                 replacement: "$1=<redacted>",
@@ -306,6 +317,38 @@ mod tests {
         assert_eq!(out["enabled"], json!(true));
         assert_eq!(out["nothing"], json!(null));
         assert_eq!(n, 0);
+    }
+
+    // ── URL-encoded separator tests (DEC-CORE-REDACT-002) ────────────────────
+
+    #[test]
+    fn redacts_url_encoded_password_separator() {
+        // password%3Dhunter2 — uppercase %3D (URL-encoded `=`)
+        let input = "password%3Dhunter2foo";
+        let (out, n) = redact(input);
+        assert!(out.contains("<redacted>"), "output: {out}");
+        assert!(!out.contains("hunter2foo"), "secret leaked: {out}");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn redacts_url_encoded_password_uppercase() {
+        // password%3DHUNTER2FOO — test uppercase encoded form
+        let input = "password%3DHUNTER2FOO";
+        let (out, n) = redact(input);
+        assert!(out.contains("<redacted>"), "output: {out}");
+        assert!(!out.contains("HUNTER2FOO"), "secret leaked: {out}");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn redacts_password_lowercase_url_encoded() {
+        // PASSWORD%3dfoo — lowercase %3d variant
+        let input = "password%3dfoo";
+        let (out, n) = redact(input);
+        assert!(out.contains("<redacted>"), "output: {out}");
+        assert!(!out.contains("foo"), "secret leaked: {out}");
+        assert_eq!(n, 1);
     }
 
     #[test]
