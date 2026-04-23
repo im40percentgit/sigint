@@ -15,6 +15,7 @@
 //! - [`registry`] — `ToolRegistry` (tool storage with role-based ACL filtering)
 //! - [`orchestrator`] — `Orchestrator` (six-role pipeline coordinator)
 //! - [`report`] — `ScanReport` (final pipeline output)
+//! - [`prompt_safety`] — Tool-output wrapping and injection-warning constant
 //!
 //! @decision DEC-AGENT-002
 //! @title Agent trait is synchronous; async lives in the Orchestrator
@@ -34,6 +35,7 @@ pub mod interactive;
 pub mod loop_engine;
 pub mod orchestrator;
 pub mod prompt_pack;
+pub mod prompt_safety;
 pub mod registry;
 pub mod report;
 pub mod role;
@@ -51,6 +53,7 @@ pub use interactive::{parse_command, Command, InteractiveSession};
 pub use loop_engine::run_tool_loop;
 pub use orchestrator::Orchestrator;
 pub use prompt_pack::PromptOverrideFn;
+pub use prompt_safety::INJECTION_WARNING;
 pub use registry::ToolRegistry;
 pub use report::ScanReport;
 pub use role::AgentRole;
