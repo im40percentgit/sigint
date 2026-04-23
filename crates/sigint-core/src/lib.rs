@@ -17,6 +17,7 @@ pub mod config;
 pub mod diff;
 pub mod error;
 pub mod event;
+pub mod redact;
 pub mod types;
 pub mod validate;
 
@@ -24,4 +25,5 @@ pub use app::AppCore;
 pub use approval::ApprovalRegistry;
 pub use config::{Config, ReconConfig, WebConfig};
 pub use error::{Error, Result};
+pub use redact::{redact, redact_json};
 pub use validate::{validate_target, ValidateError};

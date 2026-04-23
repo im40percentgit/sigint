@@ -97,10 +97,30 @@ pub fn extract_sessions(
                     .collect()
             };
 
+            // @decision DEC-TRAIN-EXTRACT-REDACT-001
+            // @title Redact credentials from tool output before emitting training examples
+            // @status accepted
+            // @rationale Tool outputs can contain API keys, auth tokens, or other
+            // credentials returned by the scanned target or the tool itself (e.g. a
+            // curl response body containing a Bearer token).  Allowing such content
+            // into training data would (a) leak secrets into the fine-tune dataset
+            // and (b) teach the model to reproduce credential strings verbatim.
+            // Redaction runs before truncation so the 2000-char cap applies to the
+            // already-clean string, preserving as much useful signal as possible.
             let tool_output = record
                 .output
                 .as_deref()
-                .map(|o| truncate_output(o, 2000))
+                .map(|o| {
+                    let (red, n) = sigint_core::redact(o);
+                    if n > 0 {
+                        tracing::debug!(
+                            record_id = %record.id,
+                            n_redactions = n,
+                            "training extract: redacted credentials in tool output"
+                        );
+                    }
+                    truncate_output(&red, 2000)
+                })
                 .unwrap_or_default();
 
             let example = build_example(
@@ -482,5 +502,51 @@ mod tests {
         // per-tool stats
         assert_eq!(stats.examples_per_tool.get("nmap_scan"), Some(&1));
         assert_eq!(stats.examples_per_agent.get("executor"), Some(&1));
+    }
+
+    /// Verifies that credentials in tool output are redacted before they appear
+    /// in a TrainingExample (Finding #11 — DEC-TRAIN-EXTRACT-REDACT-001).
+    ///
+    /// Seeds a session with a ScanRecord whose `output` contains an AWS AKIA
+    /// key, runs `extract_sessions`, and asserts the resulting TrainingExample's
+    /// tool message content contains "<redacted>" and NOT the original key.
+    #[test]
+    fn training_extract_redacts_tool_output_secrets() {
+        use sigint_core::types::Session;
+        use sigint_store::scans::ScanRecord;
+
+        let db = sigint_store::db::Database::open_in_memory().unwrap();
+        let session = Session::new("redact-extract-test");
+        db.create_session(&session).unwrap();
+
+        let aws_key = "AKIAIOSFODNN7EXAMPLE";
+        let mut rec = ScanRecord::new(session.id, "curl_tool", r#"{"url":"https://example.com"}"#);
+        rec.exit_code = Some(0);
+        rec.output = Some(format!(
+            "HTTP/1.1 200 OK\nX-Api-Key: {aws_key}\nBody: success"
+        ));
+        rec.agent_role = Some("executor".to_string());
+        db.create_scan_record(&rec).unwrap();
+
+        let (examples, _stats) = extract_sessions(&db, &[session.id]).unwrap();
+        assert_eq!(examples.len(), 1, "expected one training example");
+
+        let ex = &examples[0];
+        // Find the tool-role message — that's where the redacted output lands.
+        let tool_msg = ex
+            .messages
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool message missing from training example");
+
+        let content = tool_msg.content.as_deref().unwrap_or("");
+        assert!(
+            !content.contains(aws_key),
+            "AWS key leaked into training example: {content}"
+        );
+        assert!(
+            content.contains("<redacted>"),
+            "expected '<redacted>' in training example tool message: {content}"
+        );
     }
 }
