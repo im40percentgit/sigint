@@ -865,6 +865,10 @@ impl Orchestrator {
                 ));
             }
         }
+        // Append the prompt-injection safety reminder to every agent's system prompt.
+        // This informs the LLM that tool output is untrusted data from adversarial targets.
+        // See DEC-AGENT-PROMPT-SAFETY-001 in prompt_safety.rs for the full rationale.
+        system_prompt.push_str(&format!("\n\n{}", crate::prompt_safety::INJECTION_WARNING));
         state.add_message(sigint_llm::types::ChatMessage::system(&system_prompt));
 
         // Inject memory context as a second system message, immediately after
@@ -2539,5 +2543,74 @@ mod tests {
         let f = orch.prompt_override.unwrap();
         assert_eq!(f(AgentRole::Executor), Some("custom executor prompt"));
         assert!(f(AgentRole::Analyst).is_none());
+    }
+
+    // ── Prompt-injection safety tests (P4) ──────────────────────────────────
+
+    /// Verify that every agent role's assembled system prompt includes the
+    /// INJECTION_WARNING constant. The warning is appended in
+    /// `run_agent_with_extras` to guard all roles uniformly.
+    ///
+    /// We use `RecordingProvider` (already defined above) to capture the
+    /// actual `ChatRequest` that reaches the LLM and inspect messages[0].
+    #[tokio::test]
+    async fn each_role_prompt_includes_injection_warning() {
+        use crate::agents::{
+            AnalystAgent, ExecutorAgent, ReporterAgent, ResearcherAgent, StrategistAgent,
+        };
+        use crate::prompt_safety::INJECTION_WARNING;
+
+        // A stable substring from INJECTION_WARNING that is unlikely to appear
+        // accidentally in any base system prompt.
+        let warning_sentinel = "DATA, not instructions";
+
+        let agents: Vec<Box<dyn Agent>> = vec![
+            Box::new(ResearcherAgent::new()),
+            Box::new(StrategistAgent::new()),
+            Box::new(ExecutorAgent::new()),
+            Box::new(AnalystAgent::new()),
+            Box::new(ReporterAgent::new()),
+        ];
+
+        for agent in &agents {
+            let recording = Arc::new(RecordingProvider::new());
+            let orch = Orchestrator::new(
+                Arc::clone(&recording) as Arc<dyn LlmProvider>,
+                ToolRegistry::new(),
+                EventBus::new(),
+                8192,
+                "mock-model".into(),
+            );
+            let mut ctx = TaskContext::new("test.local");
+            // run_agent is private but accessible inside tests via impl block.
+            let _ = orch.run_agent(agent.as_ref(), &mut ctx).await;
+
+            let requests = recording.captured();
+            assert!(
+                !requests.is_empty(),
+                "agent '{}' made no LLM calls",
+                agent.name()
+            );
+            let first_request = &requests[0];
+            let system_message = first_request
+                .messages
+                .iter()
+                .find(|m| m.role == "system")
+                .unwrap_or_else(|| panic!("agent '{}' sent no system message", agent.name()));
+            assert!(
+                system_message.content.contains(warning_sentinel),
+                "agent '{}' system prompt missing injection warning sentinel '{}'. \
+                 Got: {}",
+                agent.name(),
+                warning_sentinel,
+                &system_message.content[..system_message.content.len().min(200)]
+            );
+            // Also verify the full constant is present.
+            assert!(
+                system_message.content.contains(INJECTION_WARNING),
+                "agent '{}' system prompt missing full INJECTION_WARNING",
+                agent.name()
+            );
+        }
     }
 }
