@@ -40,7 +40,7 @@
 //!
 //! @decision DEC-WEB-RATELIMIT-001
 //! @title Simple concurrent-scan count cap (vs token-bucket / sliding window) (CSO Finding #9)
-//! @status accepted
+//! @status superseded by DEC-WEB-RATELIMIT-002
 //! @rationale A token-bucket or sliding-window rate limiter would be the right
 //! choice for a multi-tenant or high-throughput API. SIGINT is a single-operator
 //! pentest tool: the relevant failure mode is not a sustained high-RPS stream
@@ -51,6 +51,8 @@
 //! scans complete. The limit is configurable via
 //! `[agent].max_concurrent_scans` (default 8); operators who genuinely run
 //! many parallel scans can increase it.
+//! See DEC-WEB-RATELIMIT-002 (in scan_service.rs) for the TOCTOU fix that
+//! replaces the check-then-act pattern with an atomic semaphore acquire.
 
 use axum::{
     extract::{Path, Query, State},
@@ -109,35 +111,28 @@ pub async fn start_scan(
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid target: {}", e)))?;
 
-    // Concurrent-scan rate limit — CSO Finding #9 / DEC-WEB-RATELIMIT-001.
-    // Count scans that are still consuming resources (Running or Pending).
-    // Completed, Failed, and Cancelled scans are not counted.
-    // max_concurrent_scans = 0 disables the cap entirely (opt-out for operators
-    // who genuinely need unlimited parallel scans in a trusted environment).
-    let max = state.config.agent.max_concurrent_scans;
-    if max > 0 {
-        let active = state
-            .scan_service
-            .list()
-            .await
-            .into_iter()
-            .filter(|s| matches!(s.status, sigint_agents::scan_service::ScanStatus::Running))
-            .count();
-        if active >= max {
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                serde_json::json!({
-                    "error": "too many concurrent scans",
-                    "limit": max,
-                })
-                .to_string(),
-            ));
-        }
-    }
+    // Concurrent-scan rate limit — CSO Finding #9 / DEC-WEB-RATELIMIT-002.
+    // Atomically acquire a semaphore permit. This eliminates the TOCTOU race
+    // of the previous check-then-act pattern: N concurrent requests can no
+    // longer all pass the gate before any scan registers.
+    // try_reserve() returns None when the cap is exhausted (including when
+    // max_concurrent_scans = 0, which sizes the semaphore to usize::MAX and
+    // always succeeds).
+    let permit = state.scan_service.try_reserve().ok_or_else(|| {
+        let max = state.config.agent.max_concurrent_scans;
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            serde_json::json!({
+                "error": "too many concurrent scans",
+                "limit": max,
+            })
+            .to_string(),
+        )
+    })?;
 
     let session_id = state
         .scan_service
-        .start(&state.db, &body.target, body.model.clone())
+        .start(&state.db, &body.target, body.model.clone(), permit)
         .await
         .map_err(internal)?;
 
@@ -1153,5 +1148,151 @@ mod tests {
             body
         );
         assert_eq!(v["limit"].as_u64().unwrap(), 1);
+    }
+
+    // ── Semaphore race tests (DEC-WEB-RATELIMIT-002) ─────────────────────────
+    //
+    // These tests verify that the semaphore-based gate is race-free: N concurrent
+    // requests cannot all pass the gate before any scan registers (TOCTOU fix).
+
+    /// Helper: build AppState with a specific max_concurrent_scans cap and a
+    /// shared `Arc<ScanService>` so tests can re-use the same service instance
+    /// across multiple cloned router instances.
+    fn capped_state(max: usize) -> AppState {
+        let db = sigint_store::Database::open_in_memory().expect("in-memory db");
+        let event_bus = sigint_core::event::EventBus::new();
+        let mut config = sigint_core::Config::default();
+        config.agent.max_concurrent_scans = max;
+        let config = Arc::new(config);
+        let approval_registry = Arc::new(sigint_core::ApprovalRegistry::new(
+            std::time::Duration::from_secs(300),
+        ));
+        let scan_service = Arc::new(sigint_agents::ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+            api_key: TEST_KEY.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_limit_race_under_concurrent_load() {
+        // Set cap = 2, fire 5 concurrent POST /api/scan requests.
+        // Exactly 2 must succeed (201) and exactly 3 must be rejected (429).
+        // This is the TOCTOU fix proof: the semaphore is atomic, so no two
+        // extra requests can both pass the gate before either scan registers.
+        let state = capped_state(2);
+        let scan_service = state.scan_service.clone();
+
+        // Spawn 5 concurrent tasks, each posting to a fresh oneshot clone
+        // of the router (oneshot consumes the router, so we clone the state).
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let state_clone = AppState {
+                db: state.db.clone(),
+                event_bus: state.event_bus.clone(),
+                config: state.config.clone(),
+                approval_registry: state.approval_registry.clone(),
+                scan_service: scan_service.clone(),
+                api_key: TEST_KEY.to_string(),
+            };
+            let app = create_router(state_clone);
+            let handle = tokio::spawn(async move {
+                let req = Request::builder()
+                    .method("POST")
+                    .uri("/api/scan")
+                    .header("content-type", "application/json")
+                    .header("Authorization", auth_header())
+                    .body(Body::from(r#"{"target":"example.com"}"#))
+                    .unwrap();
+                app.oneshot(req).await.unwrap().status()
+            });
+            handles.push(handle);
+        }
+
+        let mut ok_count = 0u32;
+        let mut too_many_count = 0u32;
+        for h in handles {
+            match h.await.unwrap() {
+                StatusCode::CREATED => ok_count += 1,
+                StatusCode::TOO_MANY_REQUESTS => too_many_count += 1,
+                other => panic!("unexpected status: {other}"),
+            }
+        }
+
+        assert_eq!(
+            ok_count, 2,
+            "exactly 2 of 5 concurrent requests must succeed with cap=2, got ok={ok_count} 429={too_many_count}"
+        );
+        assert_eq!(
+            too_many_count, 3,
+            "exactly 3 of 5 concurrent requests must be rejected with 429, got ok={ok_count} 429={too_many_count}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limit_recovers_after_scan_completes() {
+        // At cap=1, use try_reserve() directly to simulate a scan completing:
+        // acquire and immediately drop a permit, then verify a new HTTP request
+        // gets through (201, not 429).
+        let state = capped_state(1);
+
+        // Saturate the semaphore by acquiring a permit directly (simulates an
+        // in-progress scan holding a slot). The router should return 429.
+        let _permit = state.scan_service.try_reserve().expect("first permit");
+
+        let app = create_router(AppState {
+            db: state.db.clone(),
+            event_bus: state.event_bus.clone(),
+            config: state.config.clone(),
+            approval_registry: state.approval_registry.clone(),
+            scan_service: state.scan_service.clone(),
+            api_key: TEST_KEY.to_string(),
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"example.com"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "request while permit held must return 429"
+        );
+
+        // Drop the permit (simulates scan finishing) and retry — must get 201.
+        drop(_permit);
+
+        let app2 = create_router(AppState {
+            db: state.db.clone(),
+            event_bus: state.event_bus.clone(),
+            config: state.config.clone(),
+            approval_registry: state.approval_registry.clone(),
+            scan_service: state.scan_service.clone(),
+            api_key: TEST_KEY.to_string(),
+        });
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"example.com"}"#))
+            .unwrap();
+        let resp2 = app2.oneshot(req2).await.unwrap();
+        assert_eq!(
+            resp2.status(),
+            StatusCode::CREATED,
+            "request after permit released must succeed (201)"
+        );
     }
 }

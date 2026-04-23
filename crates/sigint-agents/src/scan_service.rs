@@ -12,13 +12,27 @@
 //! real-time progress to all subscribers. AbortHandle (not JoinHandle) is
 //! stored so ScanHandle itself need not be Send + Sync — we grab the abort
 //! handle before inserting into the map.
+//!
+//! @decision DEC-WEB-RATELIMIT-002
+//! @title Tokio Semaphore replaces check-then-act count check (TOCTOU fix)
+//! @status accepted
+//! @rationale CSO re-run finding #14: the previous implementation read the
+//! active scan count and compared it to the cap as two separate operations.
+//! N concurrent requests could all pass the gate before any scan registered,
+//! allowing the cap to be exceeded by N-1. Fix (Design A): `ScanService`
+//! holds an `Arc<Semaphore>` sized to `max_concurrent_scans`. The HTTP handler
+//! calls `try_reserve()` which atomically acquires a permit or fails — no
+//! window between check and act. The owned permit is moved into the spawned
+//! scan task and dropped when the task finishes, automatically releasing
+//! capacity. `max_concurrent_scans = 0` maps to `Semaphore::new(MAX_PERMITS)`
+//! so the cap-disabled path requires no special-casing in the handler.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::task::AbortHandle;
 use uuid::Uuid;
 
@@ -77,6 +91,13 @@ pub struct ScanService {
     event_bus: EventBus,
     approval_registry: Arc<ApprovalRegistry>,
     scans: Arc<Mutex<HashMap<Uuid, ScanHandle>>>,
+    /// Semaphore that bounds concurrent scans (DEC-WEB-RATELIMIT-002).
+    ///
+    /// Sized to `max_concurrent_scans` from config, or `Semaphore::MAX_PERMITS`
+    /// when the cap is disabled (`max_concurrent_scans = 0`). Callers acquire a
+    /// permit via `try_reserve()` before starting a scan; the permit is
+    /// dropped when the scan task finishes, automatically freeing capacity.
+    scan_semaphore: Arc<Semaphore>,
     /// Optional provider override. When `Some`, `start()` uses this provider
     /// instead of calling `create_provider(&config.llm)`. Intended for tests
     /// that inject `MockProvider` to exercise the scan pipeline without Ollama.
@@ -90,11 +111,22 @@ impl ScanService {
         event_bus: EventBus,
         approval_registry: Arc<ApprovalRegistry>,
     ) -> Self {
+        // Build semaphore: 0 means "no cap" → use tokio's MAX_PERMITS so
+        // try_acquire always succeeds without special-casing in the handler.
+        // tokio::sync::Semaphore::MAX_PERMITS = usize::MAX >> 3, which is the
+        // largest value the semaphore implementation allows.
+        let permits = if config.agent.max_concurrent_scans == 0 {
+            Semaphore::MAX_PERMITS
+        } else {
+            config.agent.max_concurrent_scans
+        };
+        let scan_semaphore = Arc::new(Semaphore::new(permits));
         Self {
             config,
             event_bus,
             approval_registry,
             scans: Arc::new(Mutex::new(HashMap::new())),
+            scan_semaphore,
             provider_override: None,
         }
     }
@@ -108,6 +140,20 @@ impl ScanService {
         self
     }
 
+    // ── try_reserve() ────────────────────────────────────────────────────────
+
+    /// Attempt to atomically acquire a scan slot from the concurrency semaphore.
+    ///
+    /// Returns `Some(permit)` when a slot is available. The caller must pass
+    /// the permit into `start()` (or the spawned task), where it is held until
+    /// the scan completes. Returns `None` when the cap is exhausted.
+    ///
+    /// When `max_concurrent_scans = 0` the semaphore is sized to `MAX_PERMITS`,
+    /// so this always succeeds without any special-casing in the caller.
+    pub fn try_reserve(&self) -> Option<OwnedSemaphorePermit> {
+        self.scan_semaphore.clone().try_acquire_owned().ok()
+    }
+
     // ── start() ───────────────────────────────────────────────────────────────
 
     /// Start a new scan against `target`.
@@ -115,6 +161,10 @@ impl ScanService {
     /// Creates a DB session, builds the Orchestrator pipeline, and spawns the
     /// scan as a background tokio task. Returns the session UUID immediately —
     /// callers monitor progress via EventBus or `status()`.
+    ///
+    /// `permit` is an owned semaphore permit acquired via `try_reserve()`.
+    /// It is moved into the spawned task and dropped when the scan finishes,
+    /// releasing capacity for the next scan (DEC-WEB-RATELIMIT-002).
     ///
     /// # Errors
     /// Returns `Error` if session creation or LLM provider construction fails.
@@ -125,6 +175,7 @@ impl ScanService {
         db: &Arc<Database>,
         target: &str,
         model: Option<String>,
+        permit: OwnedSemaphorePermit,
     ) -> Result<Uuid, Error> {
         // SSRF guard — belt-and-suspenders: validate before any session is
         // created or network work begins. The web handler also calls this, but
@@ -209,6 +260,11 @@ impl ScanService {
         let config = self.config.clone();
 
         let join_handle = tokio::spawn(async move {
+            // `permit` is held for the full duration of the scan task.
+            // When this future completes (or is aborted), `permit` is dropped,
+            // releasing the semaphore slot for the next scan request.
+            let _permit = permit;
+
             let result = orchestrator.run_scan(&target_owned).await;
 
             match result {
@@ -399,7 +455,8 @@ mod tests {
     async fn scan_service_rejects_loopback_target() {
         let svc = test_service();
         let db = Arc::new(sigint_store::Database::open_in_memory().expect("in-memory db"));
-        let result = svc.start(&db, "127.0.0.1", None).await;
+        let permit = svc.try_reserve().expect("permit available");
+        let result = svc.start(&db, "127.0.0.1", None, permit).await;
         assert!(
             result.is_err(),
             "ScanService::start must reject loopback target 127.0.0.1"
@@ -419,7 +476,8 @@ mod tests {
         let svc = test_service();
         let db = Arc::new(sigint_store::Database::open_in_memory().expect("in-memory db"));
         // 169.254.169.254 is the AWS/GCP IMDS endpoint — primary SSRF vector.
-        let result = svc.start(&db, "169.254.169.254", None).await;
+        let permit = svc.try_reserve().expect("permit available");
+        let result = svc.start(&db, "169.254.169.254", None, permit).await;
         assert!(
             result.is_err(),
             "ScanService::start must reject IMDS metadata endpoint 169.254.169.254"
@@ -443,7 +501,8 @@ mod tests {
         // spawn a background task that will fail (no LLM). The important thing
         // is that it does NOT return an SSRF-related error — it returns Ok with
         // a session_id.
-        let result = svc.start(&db, "127.0.0.1", None).await;
+        let permit = svc.try_reserve().expect("permit available");
+        let result = svc.start(&db, "127.0.0.1", None, permit).await;
         // We expect Ok(uuid) — the SSRF guard was bypassed.
         // LLM connection failure happens asynchronously, not here.
         assert!(

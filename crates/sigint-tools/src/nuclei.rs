@@ -33,6 +33,18 @@
 //! hostnames, IPs, and CIDRs are permitted. Unlike the recon SSRF guard, nuclei is
 //! allowed to scan localhost targets because operators legitimately scan their own
 //! dev servers — the recon-side SSRF defence is separate.
+//!
+//! @decision DEC-TOOL-NUCLEI-003
+//! @title Reject path traversal sequences (`..`, `//`) in template paths; case-insensitive scheme check
+//! @status accepted
+//! @rationale CSO re-run finding L2: the prefix allowlist accepted `cves/../../../etc/passwd`
+//! because `starts_with("cves/")` matched before any traversal check. Fix: after URL
+//! rejection, an explicit `contains("..")` / `contains("//")` check rejects any
+//! traversal sequence regardless of which prefix the path starts with. Additionally,
+//! the URL scheme check (`http://` / `https://`) was case-sensitive, allowing
+//! `HTTPS://attacker.com/x.yaml` to pass. Fix: lower-case the input before the URL
+//! check (`to_ascii_lowercase()`). The same case-insensitive scheme check is applied
+//! to `validate_nuclei_target()` for the DANGEROUS_SCHEMES list (e.g. `FILE://`).
 
 use std::collections::HashMap;
 
@@ -90,13 +102,23 @@ const ALLOWED_TEMPLATE_PATH_PREFIXES: &[&str] =
 ///
 /// Returns `Ok(())` if the template is in the allowlist.
 fn validate_template(t: &str) -> Result<()> {
-    // Reject URLs explicitly — nuclei accepts http/https URLs and that is the
-    // primary RCE vector (attacker-hosted templates, Finding #5).
-    if t.starts_with("http://") || t.starts_with("https://") {
+    // Reject HTTP/HTTPS URLs — case-insensitive to catch HTTPS://, Https://, etc.
+    // This is the primary RCE vector (attacker-hosted templates, Finding #5).
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
         return Err(ToolError::DisallowedArgument(format!(
             "nuclei template URL not permitted: {} — \
              only local template categories (e.g. cves/, exposures/) and \
              system paths (/usr/share/nuclei-templates/) are allowed",
+            t
+        )));
+    }
+
+    // Reject path traversal — even if the prefix matches, `..` or `//` can
+    // escape the intended directory (DEC-TOOL-NUCLEI-003).
+    if t.contains("..") || t.contains("//") {
+        return Err(ToolError::DisallowedArgument(format!(
+            "nuclei template contains path traversal sequence: {}",
             t
         )));
     }
@@ -129,6 +151,8 @@ fn validate_template(t: &str) -> Result<()> {
 /// Scheme validation (not host validation) is the right boundary here.
 fn validate_nuclei_target(t: &str) -> Result<()> {
     // Reject non-HTTP/HTTPS schemes — these have no legitimate use in an HTTP scanner.
+    // Use a lowercased copy for case-insensitive matching (FILE://, Gopher://, etc.)
+    // — URI schemes are defined as case-insensitive at the protocol layer.
     const DANGEROUS_SCHEMES: &[&str] = &[
         "file://",
         "gopher://",
@@ -143,8 +167,9 @@ fn validate_nuclei_target(t: &str) -> Result<()> {
         "pop3://",
     ];
 
+    let lower = t.to_ascii_lowercase();
     for scheme in DANGEROUS_SCHEMES {
-        if t.starts_with(scheme) {
+        if lower.starts_with(scheme) {
             return Err(ToolError::DisallowedArgument(format!(
                 "nuclei target scheme '{}' not permitted — \
                  only http://, https://, bare hostnames, IPs, and CIDRs are accepted",
@@ -708,6 +733,48 @@ this is not json at all
         assert!(
             validate_nuclei_target("192.168.1.1").is_ok(),
             "bare IP (no scheme) must be allowed for nuclei target"
+        );
+    }
+
+    // ── Path traversal and case-insensitive scheme tests (DEC-TOOL-NUCLEI-003) ──
+
+    #[test]
+    fn template_dotdot_traversal_rejected() {
+        // cves/../../../etc/passwd passes the prefix check but contains `..`
+        assert!(
+            validate_template("cves/../../../etc/passwd").is_err(),
+            "dotdot traversal in template path must be rejected"
+        );
+    }
+
+    #[test]
+    fn template_double_slash_rejected() {
+        // cves//foo — double slash must be rejected
+        assert!(
+            validate_template("cves//foo").is_err(),
+            "double slash in template path must be rejected"
+        );
+    }
+
+    #[test]
+    fn template_https_uppercase_rejected() {
+        // HTTPS:// uppercase scheme — must be rejected as URL template
+        assert!(
+            validate_template("HTTPS://attacker.com/x.yaml").is_err(),
+            "uppercase HTTPS:// template URL must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn target_uppercase_file_scheme_rejected() {
+        // FILE:///etc/passwd — uppercase scheme must be rejected
+        let err = NucleiTool::new()
+            .execute(json!({"target": "FILE:///etc/passwd"}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ToolError::DisallowedArgument(_)),
+            "uppercase FILE:// target must be rejected with DisallowedArgument, got: {err}"
         );
     }
 }
