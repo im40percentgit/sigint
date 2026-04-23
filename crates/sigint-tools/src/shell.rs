@@ -16,6 +16,17 @@
 //! from args. execute() splits the command field on whitespace and uses the first
 //! token for allowlist checking and execution, prepending remaining tokens to the
 //! args array. This makes ShellTool robust to imperfect LLM output formatting.
+//!
+//! @decision DEC-TOOL-SHELL-CANON-001
+//! @title Canonicalize paths before basename allowlist check to block symlink bypass
+//! @status accepted
+//! @rationale Checking only basename allows a symlink at /tmp/grep -> /bin/bash to
+//! pass the allowlist (basename "grep") while Command::new("/tmp/grep") resolves the
+//! symlink to bash at exec time. Canonicalizing first extracts the basename of the
+//! *real* target file. When the path doesn't exist (tests, bare command names like
+//! "grep" without a directory), canonicalize fails and we fall back to the basename
+//! of the input — Command::new("grep") resolves via $PATH, which is the documented
+//! behavior for allowlisted bare command names.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -70,21 +81,34 @@ impl ShellTool {
         self
     }
 
-    /// Return true when `command` (by basename of the first whitespace token) is in the allowlist.
+    /// Return true when `command` (by canonicalized basename of the first whitespace token)
+    /// is in the allowlist.
     ///
     /// Accepts both bare command names ("whois") and combined command strings
     /// ("whois scanme.nmap.org") — the first whitespace-separated token is used
-    /// for the allowlist check. Directory prefixes are stripped to prevent
-    /// path-traversal bypasses like "/usr/bin/rm".
+    /// for the allowlist check.
+    ///
+    /// Symlink bypass prevention (DEC-TOOL-SHELL-CANON-001): the path is canonicalized
+    /// before extracting the basename. A symlink at `/tmp/grep -> /bin/bash` has
+    /// canonical path `/bin/bash`, so its basename is `bash` — rejected. If the path
+    /// does not exist (tests, bare command names like `"grep"` without a directory
+    /// prefix), canonicalize fails and we fall back to the basename of the input,
+    /// preserving the existing behavior for allowlisted bare command names.
     fn is_allowed(command: &str) -> bool {
-        // Take the first whitespace token to handle combined command strings
-        // sent by small LLMs (e.g. "whois scanme.nmap.org").
         let first_token = command.split_whitespace().next().unwrap_or(command);
-        // Strip any directory prefix to prevent path-traversal bypasses.
-        let basename = std::path::Path::new(first_token)
+
+        // Resolve symlinks before checking the basename. If the path doesn't exist
+        // (which happens in tests and when LLM passes a bare command name like "grep"
+        // without a path), fall back to basename-of-the-input — Command::new("grep")
+        // resolves via $PATH at exec time, and that's the documented behavior.
+        let canonical = std::fs::canonicalize(first_token)
+            .unwrap_or_else(|_| std::path::PathBuf::from(first_token));
+
+        let basename = canonical
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(first_token);
+
         ALLOWED_COMMANDS.contains(&basename)
     }
 }
@@ -311,8 +335,53 @@ mod tests {
 
     #[test]
     fn allowlist_path_traversal_allowed_command() {
-        // /usr/bin/grep should be allowed — basename is "grep".
+        // /usr/bin/grep should be allowed — canonicalizes to itself, basename is "grep".
         assert!(ShellTool::is_allowed("/usr/bin/grep"));
+    }
+
+    /// Symlink pointing to bash but named "grep" must be rejected.
+    /// canonical(/tmp/.../grep) == /bin/bash → basename "bash" → not in allowlist.
+    #[test]
+    #[cfg(unix)]
+    fn symlink_to_bash_named_grep_rejected() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let link = dir.path().join("grep");
+        symlink("/bin/bash", &link).expect("symlink");
+        assert!(
+            !ShellTool::is_allowed(link.to_str().unwrap()),
+            "symlink /tmp/.../grep -> /bin/bash must be rejected"
+        );
+    }
+
+    /// Symlink pointing to the real grep named "grep" must be allowed.
+    /// canonical(/tmp/.../grep) == /usr/bin/grep → basename "grep" → allowed.
+    #[test]
+    #[cfg(unix)]
+    fn symlink_to_grep_named_grep_allowed() {
+        use std::os::unix::fs::symlink;
+        // Find the real grep binary.
+        let grep_bin = ["/usr/bin/grep", "/bin/grep"]
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .expect("grep binary not found on this system");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let link = dir.path().join("grep");
+        symlink(grep_bin, &link).expect("symlink");
+        assert!(
+            ShellTool::is_allowed(link.to_str().unwrap()),
+            "symlink /tmp/.../grep -> real grep must be allowed"
+        );
+    }
+
+    /// A path with a non-existent directory falls back to the input basename.
+    /// is_allowed("/nonexistent/grep") → canonicalize fails → basename "grep" → allowed.
+    #[test]
+    fn nonexistent_path_falls_back_to_input_basename() {
+        assert!(
+            ShellTool::is_allowed("/nonexistent/grep"),
+            "non-existent path should fall back to input basename 'grep' which is allowed"
+        );
     }
 
     #[tokio::test]

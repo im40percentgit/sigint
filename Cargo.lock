@@ -3467,6 +3467,7 @@ dependencies = [
  "sigint-core",
  "sigint-llm",
  "sigint-sandbox",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
