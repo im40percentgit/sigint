@@ -47,6 +47,12 @@ approval_timeout = 300
 memory = false
 # Run ReconEngine before scanning (or use --recon flag)
 recon = false
+# Maximum number of concurrently running scans.
+# POST /api/scan returns 429 Too Many Requests when this many scans are already
+# in Running state. Prevents resource exhaustion and LLM cost amplification
+# from unauthenticated burst requests (CSO Finding #9 / DEC-WEB-RATELIMIT-001).
+# Set to 0 to disable the cap (not recommended for network-exposed deployments).
+max_concurrent_scans = 8
 
 [tools]
 # Default output cap in bytes for all tools

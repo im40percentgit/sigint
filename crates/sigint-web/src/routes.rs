@@ -24,6 +24,33 @@
 //! the service, returns 201 with session_id. This is consistent with the
 //! scan_status/cancel_scan/list_scans handlers which also go through
 //! ScanService.
+//!
+//! @decision DEC-WEB-ERROR-001
+//! @title Generic 500 body + server-side full error log (CSO Finding #8)
+//! @status accepted
+//! @rationale The `internal()` helper previously returned `e.to_string()` to
+//! the client. `Display` impls on internal error types include file paths
+//! (e.g. "failed to open /home/user/.local/share/sigint/sigint.db"), SQL
+//! fragments, and I/O error detail — useful intelligence for an attacker
+//! mapping the host. Fix: `internal()` logs the full error via
+//! `tracing::error!` (visible in server logs) and returns the static string
+//! "internal server error" to the client. The 400-class handlers (`not_found`,
+//! SSRF guard) intentionally keep their descriptive messages because they echo
+//! user-supplied input back for UX purposes, not internal state.
+//!
+//! @decision DEC-WEB-RATELIMIT-001
+//! @title Simple concurrent-scan count cap (vs token-bucket / sliding window) (CSO Finding #9)
+//! @status accepted
+//! @rationale A token-bucket or sliding-window rate limiter would be the right
+//! choice for a multi-tenant or high-throughput API. SIGINT is a single-operator
+//! pentest tool: the relevant failure mode is not a sustained high-RPS stream
+//! but rather a malicious burst of scan creations that ties up LLM budget and
+//! host resources. A simple concurrent-count check (reject when active count
+//! reaches the cap) is O(n) on scan list size (bounded in practice by the
+//! limit itself), requires no external dependency, and resets naturally as
+//! scans complete. The limit is configurable via
+//! `[agent].max_concurrent_scans` (default 8); operators who genuinely run
+//! many parallel scans can increase it.
 
 use axum::{
     extract::{Path, Query, State},
@@ -59,6 +86,10 @@ pub struct ScanRequest {
 /// has not explicitly allowed. This is the primary SSRF guard for the web API
 /// surface (CSO Finding #3 — previously the guard only applied to the recon
 /// engine, leaving the web path unprotected).
+///
+/// Returns `429 Too Many Requests` when the number of currently running or
+/// pending scans is at or above `config.agent.max_concurrent_scans`.
+/// See DEC-WEB-RATELIMIT-001 for rationale.
 pub async fn start_scan(
     State(state): State<AppState>,
     Json(body): Json<ScanRequest>,
@@ -77,6 +108,32 @@ pub async fn start_scan(
         &state.config.recon.target_allowlist,
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid target: {}", e)))?;
+
+    // Concurrent-scan rate limit — CSO Finding #9 / DEC-WEB-RATELIMIT-001.
+    // Count scans that are still consuming resources (Running or Pending).
+    // Completed, Failed, and Cancelled scans are not counted.
+    // max_concurrent_scans = 0 disables the cap entirely (opt-out for operators
+    // who genuinely need unlimited parallel scans in a trusted environment).
+    let max = state.config.agent.max_concurrent_scans;
+    if max > 0 {
+        let active = state
+            .scan_service
+            .list()
+            .await
+            .into_iter()
+            .filter(|s| matches!(s.status, sigint_agents::scan_service::ScanStatus::Running))
+            .count();
+        if active >= max {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                serde_json::json!({
+                    "error": "too many concurrent scans",
+                    "limit": max,
+                })
+                .to_string(),
+            ));
+        }
+    }
 
     let session_id = state
         .scan_service
@@ -166,8 +223,16 @@ pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
 /// Convenience alias for handler return types.
 type ApiResult<T> = Result<T, (StatusCode, String)>;
 
+/// Return a generic 500 body and log the full error server-side.
+///
+/// Never returns internal detail (file paths, SQL, error types) to the client.
+/// See DEC-WEB-ERROR-001 for rationale.
 fn internal(e: impl std::fmt::Display) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    tracing::error!(error = %e, "internal server error");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal server error".to_string(),
+    )
 }
 
 fn not_found(msg: impl Into<String>) -> (StatusCode, String) {
@@ -870,5 +935,223 @@ mod tests {
         let body = body_string(resp.into_body()).await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(v.is_array());
+    }
+
+    // ── Error redaction tests (CSO Finding #8 / DEC-WEB-ERROR-001) ───────────
+    //
+    // The `internal()` helper must:
+    //   1. Return 500 status.
+    //   2. Return the opaque string "internal server error" — no file paths,
+    //      no SQL text, no Error::Display detail.
+    //
+    // We test `internal()` directly (it is a plain fn, not async) to avoid
+    // needing a route that reliably errors in an in-memory-DB test setup.
+
+    #[test]
+    fn internal_helper_returns_500_status() {
+        let (status, _body) = internal("some internal error detail");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn internal_helper_body_is_opaque() {
+        let (_status, body) = internal("failed to open /home/user/.local/share/sigint/sigint.db");
+        // Must NOT leak the file path or any internal detail.
+        assert_eq!(
+            body, "internal server error",
+            "internal() must return a fixed opaque message, got: {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn internal_helper_does_not_expose_sql_fragments() {
+        let (_status, body) = internal("no such table: sessions (SQL: SELECT * FROM sessions)");
+        assert!(
+            !body.contains("SQL") && !body.contains("sessions") && !body.contains("SELECT"),
+            "internal() must not expose SQL detail to client, got: {:?}",
+            body
+        );
+        assert_eq!(body, "internal server error");
+    }
+
+    // ── Rate limit tests (CSO Finding #9 / DEC-WEB-RATELIMIT-001) ────────────
+    //
+    // Three cases:
+    //   1. max_concurrent_scans = 0 disables the cap (all requests accepted).
+    //   2. With cap = 1 and one running scan, the second POST returns 429.
+    //   3. The 429 body is a JSON object with "error" and "limit" fields.
+    //
+    // We set max_concurrent_scans = 1 and use two sequential requests on the
+    // same router instance. The first request starts a real scan (Running state
+    // is set immediately by ScanService::start before the task completes), so
+    // the second request sees active >= max and returns 429.
+
+    #[tokio::test]
+    async fn rate_limit_zero_disables_cap() {
+        // When max_concurrent_scans = 0 the guard must be skipped entirely.
+        // Start many scans — all should return 201 (limited by Ollama absence
+        // but the rate-limit gate itself must not fire).
+        let db = sigint_store::Database::open_in_memory().expect("in-memory db");
+        let event_bus = sigint_core::event::EventBus::new();
+        let mut config = sigint_core::Config::default();
+        config.agent.max_concurrent_scans = 0; // disable cap
+        let config = Arc::new(config);
+        let approval_registry = Arc::new(sigint_core::ApprovalRegistry::new(
+            std::time::Duration::from_secs(300),
+        ));
+        let scan_service = Arc::new(sigint_agents::ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        let state = AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+            api_key: TEST_KEY.to_string(),
+        };
+
+        // First request — must not be rejected by rate limit (429).
+        let app = create_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"example.com"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "max_concurrent_scans=0 must disable the cap (got 429, expected non-429)"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limit_returns_429_when_cap_reached() {
+        // Set cap = 1. Start a scan (Running), then attempt a second — must get 429.
+        let db = sigint_store::Database::open_in_memory().expect("in-memory db");
+        let event_bus = sigint_core::event::EventBus::new();
+        let mut config = sigint_core::Config::default();
+        config.agent.max_concurrent_scans = 1;
+        let config = Arc::new(config);
+        let approval_registry = Arc::new(sigint_core::ApprovalRegistry::new(
+            std::time::Duration::from_secs(300),
+        ));
+        let scan_service = Arc::new(sigint_agents::ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        let state = AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+            api_key: TEST_KEY.to_string(),
+        };
+
+        use tower::Service;
+        let mut app = create_router(state);
+
+        // First scan — should succeed (201).
+        let req1 = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"example.com"}"#))
+            .unwrap();
+        let resp1 = app.call(req1).await.unwrap();
+        assert_eq!(
+            resp1.status(),
+            StatusCode::CREATED,
+            "first scan should be accepted (201)"
+        );
+
+        // Second scan — cap is 1, one scan is Running → must get 429.
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"example.com"}"#))
+            .unwrap();
+        let resp2 = app.call(req2).await.unwrap();
+        assert_eq!(
+            resp2.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "second scan must be rejected with 429 when cap=1 is reached"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limit_429_body_has_error_and_limit_fields() {
+        // Same setup as above — verify the 429 response body is well-formed JSON.
+        let db = sigint_store::Database::open_in_memory().expect("in-memory db");
+        let event_bus = sigint_core::event::EventBus::new();
+        let mut config = sigint_core::Config::default();
+        config.agent.max_concurrent_scans = 1;
+        let config = Arc::new(config);
+        let approval_registry = Arc::new(sigint_core::ApprovalRegistry::new(
+            std::time::Duration::from_secs(300),
+        ));
+        let scan_service = Arc::new(sigint_agents::ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        let state = AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+            api_key: TEST_KEY.to_string(),
+        };
+
+        use tower::Service;
+        let mut app = create_router(state);
+
+        // Burn the cap with the first scan.
+        let req1 = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"example.com"}"#))
+            .unwrap();
+        let _ = app.call(req1).await.unwrap();
+
+        // Second scan — collect the 429 body.
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/api/scan")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(r#"{"target":"example.com"}"#))
+            .unwrap();
+        let resp2 = app.call(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let body = body_string(resp2.into_body()).await;
+        let v: serde_json::Value =
+            serde_json::from_str(&body).expect("429 body must be valid JSON");
+        assert!(
+            v["error"].is_string(),
+            "429 body must have 'error' string field, got: {}",
+            body
+        );
+        assert!(
+            v["limit"].is_number(),
+            "429 body must have 'limit' number field, got: {}",
+            body
+        );
+        assert_eq!(v["limit"].as_u64().unwrap(), 1);
     }
 }

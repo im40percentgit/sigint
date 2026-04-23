@@ -308,6 +308,19 @@ pub struct AgentConfig {
     /// Enable recon-driven planning (attack surface feeds agent prompts).
     #[serde(default)]
     pub recon: bool,
+
+    /// Maximum number of concurrently running scans.
+    ///
+    /// `POST /api/scan` returns `429 Too Many Requests` when this many scans
+    /// are already in `Running` state. Default: 8. Set to 0 to disable the
+    /// cap (not recommended for exposed deployments — cost risk per CSO #9).
+    ///
+    /// Scan concurrency lives in `AgentConfig` rather than `WebConfig` because
+    /// the constraint is resource/cost-driven (LLM tokens, sandbox processes)
+    /// not purely a web-layer concern. CLI-initiated scans could apply the same
+    /// limit in the future.
+    #[serde(default = "default_max_concurrent_scans")]
+    pub max_concurrent_scans: usize,
 }
 
 /// Tool execution configuration — global defaults and per-tool overrides.
@@ -407,6 +420,7 @@ impl Default for AgentConfig {
             approval_timeout: default_approval_timeout(),
             memory: false,
             recon: false,
+            max_concurrent_scans: default_max_concurrent_scans(),
         }
     }
 }
@@ -455,6 +469,9 @@ fn default_auto_approve() -> String {
 }
 fn default_approval_timeout() -> u64 {
     300
+}
+fn default_max_concurrent_scans() -> usize {
+    8
 }
 fn default_output_cap() -> usize {
     1_048_576

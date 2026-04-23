@@ -4,14 +4,25 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - sigint-data:/root/.local/share/sigint
-      - sigint-config:/root/.config/sigint
+      # Paths updated from /root/... to /home/sigint/... to match the
+      # non-root sigint user created in the Dockerfile (DEC-DOCKER-001).
+      - sigint-data:/home/sigint/.local/share/sigint
+      - sigint-config:/home/sigint/.config/sigint
     environment:
       - SIGINT_LOG=sigint=info
     depends_on:
       - ollama
     networks:
       - sigint-net
+    # Belt-and-suspenders hardening (DEC-DOCKER-001):
+    # - cap_drop: [ALL] removes every Linux capability. The hakoniwa sandbox
+    #   uses unprivileged user namespaces (no cap_sys_admin) so this is safe.
+    # - no-new-privileges prevents setuid/setcap tricks inside the container
+    #   even if a compromised process tries to gain privilege via a suid binary.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
   ollama:
     image: ollama/ollama:latest
