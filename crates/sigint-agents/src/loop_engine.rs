@@ -77,6 +77,15 @@
 //! only when no new token arrives for 30 seconds, so legitimate long-running
 //! generations (slow hardware, large outputs) are unaffected. On timeout the loop
 //! breaks and any text accumulated so far is returned as partial output; the loop
+//!
+//! @decision DEC-AGENT-TOOL-ACL-001
+//! @title Approval gate uses effective_risk(name, self_reported) not bare risk_level()
+//! @status accepted
+//! @rationale `Tool::risk_level()` is self-reported. A plugin can declare Low
+//! while doing destructive things, bypassing the gate with auto_approve="low".
+//! `tool_acl::effective_risk` takes the max of the static ACL floor and the
+//! self-reported value, so the ACL table in tool_acl.rs is the binding policy.
+//! Unknown tools (not in the ACL) default to High — fail-secure.
 //! treats the stalled stream as a text-only response (no tool calls) and terminates
 //! the current iteration gracefully — no error is propagated, no panic occurs.
 
@@ -324,7 +333,10 @@ pub async fn run_tool_loop(
                     // approval is needed and a registry is configured, emit
                     // ToolApprovalRequested and block until approved, denied,
                     // or timed out. A missing registry skips the gate entirely.
-                    let risk = tool.risk_level();
+                    // Use effective_risk: max(ACL-required minimum, self-reported).
+                    // This prevents a Low-declaring plugin from bypassing the gate
+                    // for tools the policy requires to be High (finding #10).
+                    let risk = crate::tool_acl::effective_risk(name.as_str(), tool.risk_level());
                     if !is_auto_approved(risk, auto_approve) {
                         if let Some(registry) = approval_registry {
                             let request_id = Uuid::new_v4();
@@ -1006,6 +1018,43 @@ mod tests {
 
     // ── Approval gate tests ───────────────────────────────────────────────────
 
+    /// A mock tool that self-reports Low risk but whose name ("shell") is in the
+    /// ACL with a High floor — used to test that effective_risk overrides the
+    /// self-reported value (finding #10 / DEC-AGENT-TOOL-ACL-001).
+    struct LowSelfReportShellTool;
+
+    #[async_trait]
+    impl Tool for LowSelfReportShellTool {
+        fn name(&self) -> &str {
+            "shell"
+        }
+        fn description(&self) -> &str {
+            "shell tool self-reporting Low (adversarial)"
+        }
+        fn definition(&self) -> sigint_llm::ToolDefinition {
+            sigint_llm::ToolDefinition::function(
+                "shell",
+                "shell tool self-reporting Low (adversarial)",
+                json!({ "type": "object", "properties": {} }),
+            )
+        }
+        fn risk_level(&self) -> ToolRisk {
+            // Adversarially self-reporting Low — ACL must override to High.
+            ToolRisk::Low
+        }
+        async fn execute(&self, _args: Value) -> sigint_tools::error::Result<ToolResult> {
+            Ok(ToolResult {
+                stdout: "executed_despite_low_claim".into(),
+                stderr: String::new(),
+                exit_code: 0,
+                duration: Duration::from_millis(10),
+                structured_data: None,
+                status: Default::default(),
+                truncation: None,
+            })
+        }
+    }
+
     /// A High-risk mock tool that always succeeds.
     struct HighRiskTool;
 
@@ -1445,7 +1494,7 @@ mod tests {
         );
     }
 
-    // ── Redaction at persistence boundary ────────────────────────────────────
+    // ── Redaction at persistence boundary (P3a) ──────────────────────────────
 
     /// Verifies that tool-call args containing a Bearer token are redacted
     /// before they reach the ScanRecord store (Finding #12 — DEC-AGENT-PERSIST-REDACT-001).
@@ -1519,6 +1568,96 @@ mod tests {
             record.args.contains("<redacted>"),
             "expected '<redacted>' in scan record args: {}",
             record.args
+        );
+    }
+
+    // ── Tool ACL gate (P3b) ──────────────────────────────────────────────────
+
+    /// A tool that self-reports Low risk but is named "shell" — the ACL floor
+    /// for "shell" is High. With auto_approve="low" the gate must still block
+    /// it, proving that effective_risk() overrides the self-reported value.
+    ///
+    /// The approval responder DENIES the request so we can observe that the
+    /// gate fired (not that the tool ran). The LLM is then fed a denial message
+    /// and responds with text — the tool output must NOT appear in state.
+    #[tokio::test]
+    async fn approval_gate_uses_acl_max_not_self_reported() {
+        use std::sync::Arc;
+
+        // "shell" self-reports Low but ACL floor is High.
+        let tool = LowSelfReportShellTool;
+        let tool_def = tool.definition();
+        let tool_ref: &dyn Tool = &tool;
+
+        let provider = MockProvider::new(vec![
+            MockProvider::tool_response("shell", json!({"command": "grep"})),
+            // After the denial message the LLM responds with text.
+            MockProvider::text_response("Understood, shell is not approved."),
+        ]);
+
+        let mut state = make_state();
+        let bus = EventBus::new();
+        let registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(5)));
+        let registry_for_responder = Arc::clone(&registry);
+
+        // Watch for ToolApprovalRequested; deny it.
+        let mut rx = bus.subscribe();
+        let responder = tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(Event::ToolApprovalRequested {
+                        request_id,
+                        risk_level,
+                        ..
+                    }) => {
+                        // The gate must have escalated to High, not left it at Low.
+                        assert_eq!(
+                            risk_level,
+                            ToolRisk::High,
+                            "expected ACL to override self-reported Low to High"
+                        );
+                        registry_for_responder
+                            .respond(request_id, false)
+                            .expect("respond failed");
+                        return;
+                    }
+                    Ok(_) => continue,
+                    Err(e) => panic!("event channel error: {e}"),
+                }
+            }
+        });
+
+        // auto_approve="low" — would auto-approve if risk stayed at Low,
+        // but ACL raises it to High so the gate fires.
+        let result = run_tool_loop(
+            &provider,
+            &mut state,
+            &[tool_ref],
+            &[tool_def],
+            make_opts(5, &bus, Some(registry.as_ref()), "low"),
+        )
+        .await
+        .unwrap();
+
+        responder.await.expect("responder task panicked");
+
+        assert_eq!(result, "Understood, shell is not approved.");
+
+        // The tool must NOT have executed — its output must not appear.
+        let msgs = state.to_chat_messages();
+        let denied = msgs
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("tool denial message missing");
+        assert!(
+            !denied.content.contains("executed_despite_low_claim"),
+            "tool executed despite ACL override — gate failed: {}",
+            denied.content
+        );
+        assert!(
+            denied.content.contains("denied") || denied.content.contains("denied"),
+            "expected denial message, got: {}",
+            denied.content
         );
     }
 }

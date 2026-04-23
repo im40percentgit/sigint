@@ -39,6 +39,7 @@ pub mod report;
 pub mod role;
 pub mod scan_service;
 pub mod state;
+pub mod tool_acl;
 
 // Flat re-exports for ergonomic use by downstream crates.
 pub use agent::Agent;
