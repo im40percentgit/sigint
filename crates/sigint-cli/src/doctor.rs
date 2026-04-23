@@ -629,6 +629,8 @@ mod tests {
                 db_path: "~/.local/share/sigint/sigint.db".into(),
             },
             log: sigint_core::config::LogConfig::default(),
+            // Use AgentConfig::default() so new fields (e.g. max_concurrent_scans)
+            // don't require manual updates to this helper every time.
             agent: sigint_core::config::AgentConfig::default(),
             tools: sigint_core::config::ToolsConfig::default(),
             plugins: sigint_core::config::PluginsConfig::default(),
