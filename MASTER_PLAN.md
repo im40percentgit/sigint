@@ -1124,7 +1124,7 @@ Sub-phases:
 ---
 
 ### Phase 24: Close the Fine-Tune Loop — Harvest → Train → Evaluate → Promote → Rollback
-**Status:** planned
+**Status:** completed
 **Branch:** feature/phase24-finetune-loop
 **Decision IDs:** DEC-P24-001, DEC-P24-002, DEC-P24-003, DEC-P24-004, DEC-P24-005, DEC-P24-006, DEC-P24-007, DEC-P24-008
 **Requirements:** REQ-P24-P0-001 through REQ-P24-P0-005, REQ-P24-P1-001, REQ-P24-P2-001
@@ -1198,7 +1198,17 @@ Evidence: reading `sigint-train/src/lib.rs`, `extract.rs`, `modelfile.rs`, `asse
 - **DEC-P24-008**: Fine-tune output format is detected, not prescribed. If `$SIGINT_OUTPUT_PATH` resolves to an existing `.gguf` file, the result is treated as embedded-provider input; if the path doesn't exist but the basename appears in `ollama list`, it's treated as an Ollama tag. Rationale: respects user toolchain diversity without forcing one output kind. — Addresses: REQ-P24-P0-004
 
 ### Decision Log
-<!-- Guardian appends here after phase completion -->
+
+| ID | Date | Decision | Context |
+|----|------|----------|---------|
+| DEC-P24-001 | 2026-04-22 | Fine-tune backend is an external shell-out command | User configures `config.train.finetune_command`; sigint passes env vars (SIGINT_TRAIN_JSONL, SIGINT_OUTPUT_PATH, …). Chosen over built-in trainer and `ollama create`. Phase 24 Task 2. |
+| DEC-P24-002 | 2026-04-22 | Per-engagement opt-in harvest (`sessions.trainable` column) | Customer PII in engagement logs requires explicit consent; default `trainable=0`; `sigint train harvest <id>` sets to 1; export filters `WHERE trainable=1`. Phase 24 Task 1. |
+| DEC-P24-003 | 2026-04-22 | Evaluation runs live inference on BOTH base and candidate | 80/20 holdout + `LlmProvider` against both models via `sigint-train/src/evaluate.rs`; replaces Phase 23's ground-truth self-evaluation. Phase 24 Task 3. |
+| DEC-P24-004 | 2026-04-22 | Atomic config rewrite via `sigint model promote <tag>` | Writes `config.toml.tmp` then rename; backs up to `config.toml.bak`; appends JSONL entry to `~/.local/share/sigint/promotion.log`. Chosen over background watcher and config flag. Phase 24 Task 4. |
+| DEC-P24-005 | 2026-04-22 | Rollback is manual only — `sigint model rollback` | Reads last promotion.log entry and reverses. No auto-rollback on eval regression; keeps the user in control and avoids model-swap thrashing. Phase 24 Task 4. |
+| DEC-P24-006 | 2026-04-22 | Fine-tune scope is whole-orchestrator for v1 | Role-specific fine-tune (`config.agents.<role>.model`) flagged P2; avoids Phase 24 touching sigint-core agent-config schema. Phase 24. |
+| DEC-P24-007 | 2026-04-22 | Correct Modelfile ADAPTER semantics (supersedes DEC-TRAIN-005) | `generate_modelfile` takes `adapter_path: Option<&Path>`; emits ADAPTER only when a real LoRA adapter binary exists. Phase 23 incorrectly pointed ADAPTER at training JSONL. Phase 24 Task 1. |
+| DEC-P24-008 | 2026-04-22 | Fine-tune output format is detected, not prescribed | Existing `.gguf` at `$SIGINT_OUTPUT_PATH` → embedded provider; basename appearing in `ollama list` → Ollama tag. Respects user toolchain diversity. Phase 24 Task 4. |
 
 ### Task Breakdown (6 discrete tasks)
 
@@ -1261,6 +1271,63 @@ Evidence: reading `sigint-train/src/lib.rs`, `extract.rs`, `modelfile.rs`, `asse
 - Worktree: `.claude/worktrees/phase24-finetune-loop`
 - Implementer sequence: Task 1 → Task 2 → Task 3 → Task 4 → (Task 5 ∥ Task 6 in parallel sub-branches optional)
 - Merge to main only after all six tasks pass integration tests and the end-to-end smoke test in Task 6 is green.
+
+### Phase 25: Security Hardening Pass (P0→P5)
+**Status:** completed
+**Branches merged:** security/p0-web-auth-bundle, fix/doctor-cli-test-build, security/p1-input-validators, security/p2-hardening, security/p3a-redaction, security/p3b-tool-acl, security/p4-prompt-injection, security/p5-cleanup
+**Decision IDs:** DEC-WEB-AUTH-001, DEC-WEB-AUTH-002, DEC-RECON-SSRF-001, DEC-TOOL-NUCLEI-001, DEC-TOOL-NUCLEI-002, DEC-WEB-ERROR-001, DEC-WEB-RATELIMIT-001, DEC-DOCKER-001, DEC-CORE-REDACT-001, DEC-AGENT-PERSIST-REDACT-001, DEC-TRAIN-EXTRACT-REDACT-001, DEC-AGENT-TOOL-ACL-001, DEC-TOOL-SHELL-CANON-001, DEC-AGENT-PROMPT-SAFETY-001, DEC-WEB-RATELIMIT-002, DEC-CORE-REDACT-002, DEC-TOOL-NUCLEI-003, DEC-AGENT-PROMPT-SAFETY-002
+**Depends on:** Phase 24 complete
+
+#### Problem Statement
+
+A CSO-mode security audit between Phase 24 and this pass flagged (a) an unauthenticated web control plane, (b) SSRF via recon against arbitrary targets, (c) container running as root, (d) credential leakage at persistence boundaries, (e) symlink-evading shell allowlist, (f) tool output reaching agent context without prompt-injection scrubbing, and (g) TOCTOU + case-sensitivity gaps surfaced during P3a–P4 finishing review. The pass closes them in six batches.
+
+#### Tasks (all merged to main)
+
+- **P0 — Web auth bundle** (`50d7894` merge `48d287e`) — Bearer middleware in `crates/sigint-web/src/auth.rs`, constant-time compare via `subtle`, WS token via query or `bearer.<token>` subprotocol, key resolution chain (config → env → persisted → auto-generate), CORS allowlist via `[web].cors_origins`.
+- **P1 — Recon SSRF guard + nuclei allowlist** (`2ead3d5` merge `5f6cb9d`) — `crates/sigint-core/src/validate.rs` (target allowlist), `crates/sigint-recon/src/validate.rs`, `crates/sigint-tools/src/nuclei.rs` template/target validation.
+- **P2 — Docker non-root, generic errors, scan rate limit** (`40af5f1` merge `64dae5a`) — Dockerfile UID change; `routes.rs` scrubs internal error details; per-operator scan rate-limit config.
+- **P3a — Credential redaction at persistence** (`762fe0d` merge `22963a9`) — `crates/sigint-core/src/redact.rs` (OpenAI, Anthropic, AWS, GitHub PAT, Slack, Bearer/Basic, kv pairs, PEM); applied in `loop_engine` (agent persistence) and `sigint-train/extract.rs` (training corpus).
+- **P3b — Tool risk-level ACL + shell symlink canonicalization** (`5038fc8` merge `c92b429`) — `crates/sigint-agents/src/tool_acl.rs` risk levels; `sigint-tools/src/shell.rs` canonicalizes paths before allowlist check (symlink `/tmp/grep -> /bin/bash` no longer bypasses).
+- **P4 — Prompt-injection mitigation for tool output** (`0ac83b8` merge `f51ac17`) — `crates/sigint-agents/src/prompt_safety.rs`; `INJECTION_WARNING` appended to all 5 role prompts at orchestrator assembly; strips `</tool_output>`, `<|im_start|>`, fake BEGIN markers; 64 KiB cap.
+- **P5 — TOCTOU + redactor/nuclei/prompt-safety hardening** (`fc05425` merge `df53fc0`) — rate-limit bug fix (max=0 inverted comparison); case-insensitive prompt-safety scrub via lowercased scratch; Nuclei template path TOCTOU fix; redactor tightening.
+
+#### Decision Log
+
+| ID | Date | Decision | Context |
+|----|------|----------|---------|
+| DEC-WEB-AUTH-001 | 2026-04-22 | Bearer + shared secret over OAuth/JWT/mTLS | Single-operator local/VPN tool; constant-time compare via `subtle` crate. P0. |
+| DEC-WEB-AUTH-002 | 2026-04-22 | Auto-generate + persist API key on first boot | Beats "ship with no auth" and "refuse to start"; 32-byte URL-safe token persisted mode 0600. P0. |
+| DEC-WEB-ERROR-001 | 2026-04-22 | Scrub internal error details from HTTP responses | Returns generic error codes; detailed errors only in server logs. P2. |
+| DEC-WEB-RATELIMIT-001 | 2026-04-22 | Concurrent scan cap per operator (superseded by -002) | Initial implementation capped concurrent scans; superseded in P5 after max=0 inversion bug found by finisher. P2 → P5. |
+| DEC-WEB-RATELIMIT-002 | 2026-04-24 | Rate-limit cap uses correct comparison + JSON 429 body | Supersedes DEC-WEB-RATELIMIT-001; fixes max=0 inverted comparison that rejected all scans. P5. |
+| DEC-DOCKER-001 | 2026-04-22 | Container runs as non-root UID | Dockerfile USER directive; docker-compose updated. P2. |
+| DEC-CORE-REDACT-001 | 2026-04-22 | Centralised redactor in sigint-core, applied at persistence boundaries | `crates/sigint-core/src/redact.rs`; OnceLock-cached regex set; zero new deps. P3a. |
+| DEC-CORE-REDACT-002 | 2026-04-24 | Redactor patterns tightened after P5 review | Additional patterns + false-positive pruning; case-insensitivity audited. P5. |
+| DEC-AGENT-PERSIST-REDACT-001 | 2026-04-22 | Loop engine redacts before scan_history write | Prevents tool output containing credentials from persisting into the engagement DB. P3a. |
+| DEC-TRAIN-EXTRACT-REDACT-001 | 2026-04-22 | Training-corpus extract redacts at export time | Training JSONL cannot contain raw credentials; applied in `sigint-train/src/extract.rs`. P3a. |
+| DEC-AGENT-TOOL-ACL-001 | 2026-04-22 | Tool allowlist is risk-level tiered | Low/Medium/High risk per tool; role ACL composes with risk gate. P3b. |
+| DEC-TOOL-SHELL-CANON-001 | 2026-04-22 | Shell allowlist canonicalizes paths before check | `fs::canonicalize` before allowlist match; defeats symlink-based bypass; falls back to basename if path absent (preserves bare-name `$PATH` lookup). P3b. |
+| DEC-AGENT-PROMPT-SAFETY-001 | 2026-04-22 | Tool output scrubbed before agent ingestion | Strips injection markers, caps at 64 KiB; INJECTION_WARNING appended to all 5 role prompts. Partial defense; classifier pass out of scope. P4. |
+| DEC-AGENT-PROMPT-SAFETY-002 | 2026-04-24 | Prompt-safety scrub is case-insensitive | Lowercased scratch + range replace_range; UTF-8 safe because `to_ascii_lowercase` preserves byte lengths for ASCII. P5. |
+| DEC-TOOL-NUCLEI-001 | 2026-04-22 | Nuclei template allowlist | Restricts user-supplied templates to a curated set. P1. |
+| DEC-TOOL-NUCLEI-002 | 2026-04-22 | Nuclei target allowlist | Restricts scan targets to allowlisted ranges. P1. |
+| DEC-TOOL-NUCLEI-003 | 2026-04-24 | Nuclei template TOCTOU fix | Path resolved and validated atomically; cannot swap template between check and use. P5. |
+| DEC-RECON-SSRF-001 | 2026-04-22 | Recon target validation in `sigint-core/validate.rs` | Blocks internal IP ranges, link-local, loopback unless explicitly allowlisted. P1. |
+
+#### Verification
+
+- P0: User confirmed live — 401 without Bearer, 200 with, WS rejected without token.
+- P2: Unit test `rate_limit_returns_429_when_cap_reached` (also caught the max=0 bug fixed in P5).
+- P3a: 13 new tests; 328 total pass across sigint-core, sigint-agents, sigint-train.
+- P3b: 9 new tests (6 tool_acl unit + 1 loop_engine integration + 3 shell symlink); 609 total pass.
+- P4: 12 new tests (9 unit in prompt_safety + 2 integration in loop_engine + 1 orchestrator).
+- P5: 692 tests pass; clippy `-D warnings` clean; fmt clean.
+
+#### Not Done (follow-ups flagged)
+
+- Content-classifier pass before LLM ingestion (P4 is a barrier-raiser, not comprehensive).
+- Live container verification (no Docker daemon available at P2 merge time; Dockerfile + compose changes verified by static read).
 
 ---
 
