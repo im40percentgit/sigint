@@ -23,6 +23,18 @@ use sigint_core::{event::EventBus, ApprovalRegistry, Config};
 use sigint_llm::mock::{MockProvider, MockResponse};
 use sigint_store::Database;
 use sigint_web::AppState;
+use tokio::sync::Semaphore;
+
+/// Build a training-job semaphore from a `Config`.
+/// 0 → usize::MAX (cap disabled); otherwise the configured value.
+fn make_train_semaphore(config: &Config) -> Arc<Semaphore> {
+    let permits = if config.web.train.max_concurrent_jobs == 0 {
+        usize::MAX
+    } else {
+        config.web.train.max_concurrent_jobs
+    };
+    Arc::new(Semaphore::new(permits))
+}
 
 /// Start a real Axum server on a random port. Returns the bound address.
 ///
@@ -41,6 +53,7 @@ pub async fn start_server() -> SocketAddr {
     let state = AppState {
         db: Arc::new(db),
         event_bus,
+        training_job_semaphore: make_train_semaphore(&config),
         config,
         approval_registry,
         scan_service,
@@ -79,6 +92,7 @@ pub async fn start_server_with_db() -> (SocketAddr, Arc<Database>) {
     let state = AppState {
         db: Arc::clone(&db),
         event_bus,
+        training_job_semaphore: make_train_semaphore(&config),
         config,
         approval_registry,
         scan_service,
@@ -118,6 +132,7 @@ pub async fn start_server_with_mock(responses: Vec<MockResponse>) -> (SocketAddr
     let state = AppState {
         db: Arc::clone(&db),
         event_bus,
+        training_job_semaphore: make_train_semaphore(&config),
         config,
         approval_registry,
         scan_service,

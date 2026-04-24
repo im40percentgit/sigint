@@ -25,6 +25,13 @@
 //! | GET | `/api/scans` | [`routes::list_scans`] |
 //! | GET | `/api/diff/{scan_a}/{scan_b}` | [`routes::diff_scans`] |
 //! | GET | `/api/models` | [`routes::list_models`] |
+//! | POST | `/api/train/harvest/{id}` | [`routes::harvest_session`] |
+//! | POST | `/api/train/unharvest/{id}` | [`routes::unharvest_session`] |
+//! | GET | `/api/train/stats` | [`routes::train_stats`] |
+//! | POST | `/api/train/export` | [`routes::train_export`] |
+//! | POST | `/api/train/finetune` | [`routes::train_finetune`] |
+//! | GET | `/api/train/jobs` | [`routes::train_list_jobs`] |
+//! | GET | `/api/train/jobs/{id}` | [`routes::train_get_job`] |
 //! | GET | `/ws/events` | [`ws::ws_events`] |
 //!
 //! @decision DEC-WEB-001
@@ -57,6 +64,7 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
+use tokio::sync::Semaphore;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use sigint_agents::ScanService;
@@ -64,6 +72,17 @@ use sigint_core::{event::EventBus, ApprovalRegistry, Config};
 use sigint_store::Database;
 
 pub use state::AppState;
+
+/// Build the semaphore permit count from `max_concurrent_jobs`.
+///
+/// 0 → `usize::MAX` (disabled); otherwise the configured value.
+fn semaphore_permits(max_concurrent_jobs: usize) -> usize {
+    if max_concurrent_jobs == 0 {
+        usize::MAX
+    } else {
+        max_concurrent_jobs
+    }
+}
 
 /// Assemble the full Axum `Router` with auth and CORS middleware injected.
 ///
@@ -107,6 +126,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/scan/{id}/status", get(routes::scan_status))
         .route("/api/scan/{id}", delete(routes::cancel_scan))
         .route("/api/scans", get(routes::list_scans))
+        // Training routes (Phase 26 T1 — all behind Bearer auth)
+        .route("/api/train/harvest/{id}", post(routes::harvest_session))
+        .route("/api/train/unharvest/{id}", post(routes::unharvest_session))
+        .route("/api/train/stats", get(routes::train_stats))
+        .route("/api/train/export", post(routes::train_export))
+        .route("/api/train/finetune", post(routes::train_finetune))
+        .route("/api/train/jobs", get(routes::train_list_jobs))
+        .route("/api/train/jobs/{id}", get(routes::train_get_job))
         // WebSocket event bridge
         .route("/ws/events", get(ws::ws_events))
         // Auth middleware (innermost — applied before CORS)
@@ -201,6 +228,11 @@ pub async fn serve_with_shutdown(
     // Resolve API key once at startup using the priority chain in auth.rs
     let api_key = auth::resolve_api_key(&config);
 
+    // Build training job semaphore from web.train.max_concurrent_jobs.
+    // 0 → usize::MAX (disabled cap); otherwise the configured value.
+    let permits = semaphore_permits(config.web.train.max_concurrent_jobs);
+    let training_job_semaphore = Arc::new(Semaphore::new(permits));
+
     let state = AppState {
         db: Arc::new(db),
         event_bus,
@@ -208,6 +240,7 @@ pub async fn serve_with_shutdown(
         approval_registry,
         scan_service,
         api_key,
+        training_job_semaphore,
     };
     let app = create_router(state);
     let listener = tokio::net::TcpListener::bind(addr)
@@ -248,6 +281,7 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
+        let permits = semaphore_permits(config.web.train.max_concurrent_jobs);
         AppState {
             db: Arc::new(db),
             event_bus,
@@ -255,6 +289,7 @@ mod tests {
             approval_registry,
             scan_service,
             api_key: TEST_TOKEN.to_string(),
+            training_job_semaphore: Arc::new(Semaphore::new(permits)),
         }
     }
 

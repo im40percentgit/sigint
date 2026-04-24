@@ -108,6 +108,11 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
+        let permits = if config.web.train.max_concurrent_jobs == 0 {
+            usize::MAX
+        } else {
+            config.web.train.max_concurrent_jobs
+        };
         AppState {
             db: Arc::new(db),
             event_bus,
@@ -115,6 +120,7 @@ mod tests {
             approval_registry,
             scan_service,
             api_key: "test-key".to_string(),
+            training_job_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(permits)),
         }
     }
 

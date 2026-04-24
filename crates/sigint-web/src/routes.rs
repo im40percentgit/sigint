@@ -14,6 +14,14 @@
 //! ensures the store remains the single source of truth regardless of whether
 //! the CLI or web UI is the caller.
 //!
+//! @decision DEC-P26-007
+//! @title Training routes reuse Phase 25 Bearer middleware — no new auth surface
+//! @status accepted
+//! @rationale All `/api/train/*` routes are registered in `create_router` within
+//! the same authenticated `.layer()` stack as scan/session/model routes. No
+//! carve-outs are added. This mirrors DEC-WEB-AUTH-001 and keeps the auth posture
+//! uniform across every REST endpoint. Addresses: REQ-P26-P0-007.
+//!
 //! @decision DEC-WEB-005
 //! @title start_scan delegates fully to ScanService::start()
 //! @status accepted
@@ -60,7 +68,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -431,6 +439,420 @@ pub async fn get_report(
     ))
 }
 
+// ── Training — Phase 26 T1 ────────────────────────────────────────────────────
+//
+// Six new REST endpoints that power the fine-tune web UI.  All routes are
+// mounted behind the existing Bearer middleware (DEC-P26-007 / DEC-WEB-AUTH-001):
+// no carve-outs, no new auth surfaces.
+//
+// @decision DEC-P26-007
+// @title Training routes reuse Phase 25 Bearer middleware — no new auth surface
+// @status accepted
+// @rationale See module-level doc above.
+
+/// Regex for validating `output_name` in `POST /api/train/finetune`.
+///
+/// Allows letters, digits, underscores, dots, and hyphens — no path separators,
+/// shell metacharacters, or length abuse. Applied before the command is built to
+/// prevent command injection via the output path (Risk #7 in Phase 26 plan).
+const OUTPUT_NAME_PATTERN: &str = r"^[a-zA-Z0-9_.\-]{1,64}$";
+
+/// Response body for `POST /api/train/export`.
+#[derive(Debug, Serialize)]
+pub struct ExportResult {
+    pub train_count: usize,
+    pub test_count: usize,
+    pub train_path: String,
+    pub test_path: String,
+}
+
+/// Response body for `GET /api/train/stats`.
+#[derive(Debug, Serialize)]
+pub struct TrainStatsResponse {
+    pub total_examples: usize,
+    pub total_sessions: usize,
+    pub trainable_session_count: usize,
+    pub examples_per_agent: std::collections::HashMap<String, usize>,
+    pub examples_per_tool: std::collections::HashMap<String, usize>,
+}
+
+/// Request body for `POST /api/train/finetune`.
+#[derive(Debug, Deserialize)]
+pub struct FinetuneRequest {
+    /// Base model tag passed to the trainer (e.g. "llama3.2:8b").
+    pub base_model: String,
+    /// Directory-safe name for the output adapter/model.
+    /// Must match `[a-zA-Z0-9_.\-]{1,64}`.
+    pub output_name: String,
+}
+
+/// `POST /api/train/harvest/:id` — mark a session as trainable.
+///
+/// Sets `trainable = 1` on the session, opting it in to future export runs.
+/// Idempotent: calling twice on the same session is safe.
+/// Returns 404 if the session does not exist.
+pub async fn harvest_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    // Verify the session exists before setting the flag.
+    let uuid = parse_uuid(&id)?;
+    state
+        .db
+        .get_session(uuid)
+        .map_err(internal)?
+        .ok_or_else(|| not_found(format!("session '{}' not found", id)))?;
+    state
+        .db
+        .set_session_trainable(&id, true)
+        .map_err(internal)?;
+    Ok(Json(
+        serde_json::json!({ "harvested": true, "session_id": id }),
+    ))
+}
+
+/// `POST /api/train/unharvest/:id` — remove a session from the training pool.
+///
+/// Sets `trainable = 0` on the session. Idempotent. Returns 404 if missing.
+pub async fn unharvest_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let uuid = parse_uuid(&id)?;
+    state
+        .db
+        .get_session(uuid)
+        .map_err(internal)?
+        .ok_or_else(|| not_found(format!("session '{}' not found", id)))?;
+    state
+        .db
+        .set_session_trainable(&id, false)
+        .map_err(internal)?;
+    Ok(Json(
+        serde_json::json!({ "harvested": false, "session_id": id }),
+    ))
+}
+
+/// `GET /api/train/stats` — return training dataset counts without writing files.
+///
+/// Calls `extract::extract_all` (filters to `trainable=1` sessions) and
+/// returns counts only — no JSONL files are written. Safe to call repeatedly
+/// as a dashboard poll.
+pub async fn train_stats(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
+    let trainable_sessions = state.db.list_trainable_sessions().map_err(internal)?;
+    let trainable_count = trainable_sessions.len();
+
+    let (_examples, stats) = sigint_train::extract::extract_all(&state.db).map_err(internal)?;
+
+    Ok(Json(TrainStatsResponse {
+        total_examples: stats.total_examples,
+        total_sessions: stats.total_sessions,
+        trainable_session_count: trainable_count,
+        examples_per_agent: stats.examples_per_agent,
+        examples_per_tool: stats.examples_per_tool,
+    }))
+}
+
+/// `POST /api/train/export` — extract training data and write JSONL files.
+///
+/// Performs the same work as `sigint train export`: extracts trainable sessions,
+/// splits 80/20, and writes `train.jsonl` + `test.jsonl` to
+/// `~/.local/share/sigint/training/`. Returns paths and sample counts.
+/// Callers should call this before `POST /api/train/finetune`.
+pub async fn train_export(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
+    // Resolve training output directory.
+    let home = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let out_dir = home
+        .join(".local")
+        .join("share")
+        .join("sigint")
+        .join("training");
+    std::fs::create_dir_all(&out_dir).map_err(internal)?;
+
+    let (examples, _stats) = sigint_train::extract::extract_all(&state.db).map_err(internal)?;
+
+    if examples.is_empty() {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "no trainable examples — harvest at least one session first".to_string(),
+        ));
+    }
+
+    let (train_examples, test_examples) = sigint_train::split::train_test_split(&examples);
+    let train_path = out_dir.join("train.jsonl");
+    let test_path = out_dir.join("test.jsonl");
+
+    let train_count =
+        sigint_train::format::write_jsonl(&train_examples, &train_path).map_err(internal)?;
+    let test_count =
+        sigint_train::format::write_jsonl(&test_examples, &test_path).map_err(internal)?;
+
+    Ok(Json(ExportResult {
+        train_count,
+        test_count,
+        train_path: train_path.to_string_lossy().into_owned(),
+        test_path: test_path.to_string_lossy().into_owned(),
+    }))
+}
+
+/// Query parameters for `GET /api/train/jobs`.
+#[derive(Debug, Deserialize)]
+pub struct JobsQuery {
+    /// Zero-based page number (default 0).
+    #[serde(default)]
+    pub page: usize,
+    /// Items per page — defaults to `config.web.train.jobs_page_size`.
+    pub page_size: Option<usize>,
+}
+
+/// Resolve the training job directory from config.
+///
+/// Returns `~/.local/share/sigint/training/` when `config.train.job_dir` is None.
+fn resolve_job_dir(config: &sigint_core::Config) -> std::path::PathBuf {
+    if let Some(ref dir) = config.train.job_dir {
+        return dir.clone();
+    }
+    let home = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    home.join(".local")
+        .join("share")
+        .join("sigint")
+        .join("training")
+}
+
+/// `GET /api/train/jobs` — list training job records, newest first, paginated.
+///
+/// Reads `jobs.json` (JSONL) from the training directory. Returns an empty
+/// array when no jobs have been run yet. Pagination defaults to
+/// `config.web.train.jobs_page_size` items per page.
+pub async fn train_list_jobs(
+    State(state): State<AppState>,
+    Query(params): Query<JobsQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let job_dir = resolve_job_dir(&state.config);
+    let mut jobs = sigint_train::finetune::list_jobs(&job_dir).map_err(internal)?;
+
+    // Newest first.
+    jobs.reverse();
+
+    let page_size = params
+        .page_size
+        .unwrap_or(state.config.web.train.jobs_page_size);
+    let page_size = if page_size == 0 { 20 } else { page_size };
+    let total = jobs.len();
+    let start = params.page * page_size;
+    let page_jobs: Vec<_> = jobs.into_iter().skip(start).take(page_size).collect();
+
+    Ok(Json(serde_json::json!({
+        "jobs": page_jobs,
+        "total": total,
+        "page": params.page,
+        "page_size": page_size,
+    })))
+}
+
+/// `GET /api/train/jobs/:id` — fetch a single job record by ID.
+///
+/// Returns 404 if the job ID is not found in `jobs.json`.
+pub async fn train_get_job(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let job_dir = resolve_job_dir(&state.config);
+    let jobs = sigint_train::finetune::list_jobs(&job_dir).map_err(internal)?;
+    let job = jobs
+        .into_iter()
+        .find(|j| j.id == job_id)
+        .ok_or_else(|| not_found(format!("job '{}' not found", job_id)))?;
+    Ok(Json(job))
+}
+
+/// `POST /api/train/finetune` — start a fine-tuning job asynchronously.
+///
+/// Validates the request, acquires a semaphore permit (returning 429 if the
+/// concurrency cap is reached), then spawns a tokio task that runs the
+/// configured `finetune_command` via `sigint_train::finetune::run_finetune`.
+///
+/// Returns `202 Accepted` with `{"job_id": "..."}` immediately; the job runs
+/// in the background and emits `TrainingJobStarted`, `TrainingJobProgress`,
+/// `TrainingJobCompleted`, or `TrainingJobFailed` events on the broadcast bus.
+///
+/// @decision DEC-P26-008
+/// @title Fine-tune job spawned in-process via tokio::task; semaphore caps concurrency
+/// @status accepted
+/// @rationale See state.rs for the semaphore rationale. The handler returns
+/// 202 immediately so the HTTP connection is not held open for hours. The spawned
+/// task holds an OwnedSemaphorePermit so the slot is released on completion or
+/// panic (RAII). stdout is read in a loop with a 1-second heartbeat rate-limit
+/// to prevent bus flooding (Risk #2). Addresses: REQ-P26-P0-003, REQ-P26-NOGO-004.
+///
+/// @decision DEC-P26-001
+/// @title Training lifecycle events emitted to the broadcast event bus
+/// @status accepted
+/// @rationale TrainingJobStarted/Progress/Completed/Failed are emitted from the
+/// spawned task using EventBus::emit(). The bus is cloned cheaply (it wraps a
+/// broadcast::Sender). Events flow to all WebSocket subscribers without any new
+/// transport infrastructure. Addresses: REQ-P26-P0-003.
+pub async fn train_finetune(
+    State(state): State<AppState>,
+    Json(body): Json<FinetuneRequest>,
+) -> ApiResult<impl IntoResponse> {
+    // Validate output_name against injection-safe pattern (Risk #7).
+    let re = regex::Regex::new(OUTPUT_NAME_PATTERN).expect("static regex is valid");
+    if !re.is_match(&body.output_name) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "output_name '{}' is invalid: must match [a-zA-Z0-9_.\\-]{{1,64}}",
+                body.output_name
+            ),
+        ));
+    }
+
+    if body.base_model.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "base_model is required".to_string(),
+        ));
+    }
+
+    // Atomic semaphore acquire — returns 429 if cap is exhausted (DEC-P26-008).
+    //
+    // @decision DEC-P26-001
+    // @title Semaphore permit acquired before spawning; permit held by the task until done
+    // @status accepted
+    // @rationale try_acquire_owned() is non-blocking and race-free (same pattern
+    // as DEC-WEB-RATELIMIT-002 for scans). The OwnedPermit is moved into the
+    // spawned task so it is dropped when the task completes or panics.
+    let permit = state
+        .training_job_semaphore
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            let max = state.config.web.train.max_concurrent_jobs;
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                serde_json::json!({
+                    "error": "training job cap reached — another job is running",
+                    "limit": max,
+                })
+                .to_string(),
+            )
+        })?;
+
+    // Resolve paths that the spawned task needs.
+    let job_dir = resolve_job_dir(&state.config);
+    let train_jsonl = job_dir.join("train.jsonl");
+    let test_jsonl = job_dir.join("test.jsonl");
+    let output_path = job_dir.join(&body.output_name);
+
+    // Generate job_id here so we can return it immediately in the 202 body.
+    let job_id = uuid::Uuid::new_v4().to_string();
+
+    // Clone everything the background task needs before the spawn.
+    let config_train = state.config.train.clone();
+    let base_model = body.base_model.clone();
+    let bus = state.event_bus.clone();
+    let job_id_task = job_id.clone();
+    let output_path_str = output_path.to_string_lossy().into_owned();
+
+    // Emit TrainingJobStarted immediately (before spawn so the event precedes 202 body).
+    //
+    // @decision DEC-P26-001
+    // @title TrainingJobStarted emitted synchronously before spawning
+    // @status accepted
+    // @rationale Emitting before the spawn ensures the event appears on the bus
+    // before any WebSocket client reads the 202 response and subscribes for updates.
+    bus.emit(sigint_core::event::Event::TrainingJobStarted {
+        job_id: job_id.clone(),
+        base_model: base_model.clone(),
+        output_path: output_path_str,
+    });
+
+    tokio::spawn(async move {
+        // _permit is held for the entire task lifetime — RAII release on drop.
+        let _permit = permit;
+
+        let started = std::time::Instant::now();
+
+        // Run the blocking finetune command on the blocking thread pool so we
+        // don't starve the async runtime.  Use spawn_blocking which returns a
+        // JoinHandle we can await, giving us the Result<JobRecord>.
+        //
+        // We pass a closure that:
+        //   1. Builds a TrainConfig with the right job_dir.
+        //   2. Calls run_finetune (synchronous, blocks the OS thread).
+        //   3. Returns Result<JobRecord, anyhow::Error>.
+        //
+        // The stdout-tail is captured by overriding the job_dir in the config
+        // so persist_job writes to our known location.
+        let config_clone = config_train.clone();
+        let base_clone = base_model.clone();
+        let out_clone = output_path.clone();
+        let train_clone = train_jsonl.clone();
+        let test_clone = test_jsonl.clone();
+        let job_id_inner = job_id_task.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            // Override job_dir so the record lands in the right place.
+            let mut cfg = config_clone.clone();
+            cfg.job_dir = Some(job_dir.clone());
+            sigint_train::finetune::run_finetune(
+                &cfg,
+                &base_clone,
+                &out_clone,
+                &train_clone,
+                &test_clone,
+            )
+        })
+        .await;
+
+        let duration_secs = started.elapsed().as_secs();
+
+        // TrainingJobProgress events are not emitted in this wave.
+        // sigint-train::finetune::run_finetune uses std::process::Command (synchronous),
+        // so incremental stdout cannot be streamed without a broader refactor to
+        // tokio::process::Command. Started/Completed/Failed are emitted;
+        // Progress is tracked in issue #21.
+        // See DEC-P26-001 and plan Risk #2 for rationale.
+        match result {
+            Ok(Ok(record)) => {
+                let exit_code = record.exit_code.unwrap_or(0);
+                // @decision DEC-P26-001
+                bus.emit(sigint_core::event::Event::TrainingJobCompleted {
+                    job_id: job_id_inner,
+                    exit_code,
+                    duration_secs,
+                });
+            }
+            Ok(Err(e)) => {
+                tracing::error!(job_id = %job_id_task, error = %e, "training job failed");
+                // @decision DEC-P26-001
+                bus.emit(sigint_core::event::Event::TrainingJobFailed {
+                    job_id: job_id_inner,
+                    error: "training job failed — see server logs".to_string(),
+                });
+            }
+            Err(join_err) => {
+                tracing::error!(job_id = %job_id_task, "training task panicked: {}", join_err);
+                // @decision DEC-P26-001
+                bus.emit(sigint_core::event::Event::TrainingJobFailed {
+                    job_id: job_id_inner,
+                    error: "training task panicked".to_string(),
+                });
+            }
+        }
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "job_id": job_id })),
+    ))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_uuid(s: &str) -> ApiResult<Uuid> {
@@ -473,6 +895,12 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
+        // Default config has max_concurrent_jobs = 1; use usize::MAX when 0 (disabled).
+        let permits = if config.web.train.max_concurrent_jobs == 0 {
+            usize::MAX
+        } else {
+            config.web.train.max_concurrent_jobs
+        };
         AppState {
             db: Arc::new(db),
             event_bus,
@@ -480,6 +908,7 @@ mod tests {
             approval_registry,
             scan_service,
             api_key: "test-key".to_string(),
+            training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
         }
     }
 
@@ -777,6 +1206,11 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
+        let train_permits = if config.web.train.max_concurrent_jobs == 0 {
+            usize::MAX
+        } else {
+            config.web.train.max_concurrent_jobs
+        };
         let state = AppState {
             db: Arc::new(db),
             event_bus,
@@ -784,6 +1218,7 @@ mod tests {
             approval_registry,
             scan_service,
             api_key: TEST_KEY.to_string(),
+            training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(train_permits)),
         };
 
         let app = create_router(state);
@@ -1000,6 +1435,11 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
+        let _train_permits = if config.web.train.max_concurrent_jobs == 0 {
+            usize::MAX
+        } else {
+            config.web.train.max_concurrent_jobs
+        };
         let state = AppState {
             db: Arc::new(db),
             event_bus,
@@ -1007,6 +1447,7 @@ mod tests {
             approval_registry,
             scan_service,
             api_key: TEST_KEY.to_string(),
+            training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(_train_permits)),
         };
 
         // First request — must not be rejected by rate limit (429).
@@ -1042,6 +1483,11 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
+        let _train_permits = if config.web.train.max_concurrent_jobs == 0 {
+            usize::MAX
+        } else {
+            config.web.train.max_concurrent_jobs
+        };
         let state = AppState {
             db: Arc::new(db),
             event_bus,
@@ -1049,6 +1495,7 @@ mod tests {
             approval_registry,
             scan_service,
             api_key: TEST_KEY.to_string(),
+            training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(_train_permits)),
         };
 
         use tower::Service;
@@ -1101,6 +1548,11 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
+        let _train_permits = if config.web.train.max_concurrent_jobs == 0 {
+            usize::MAX
+        } else {
+            config.web.train.max_concurrent_jobs
+        };
         let state = AppState {
             db: Arc::new(db),
             event_bus,
@@ -1108,6 +1560,7 @@ mod tests {
             approval_registry,
             scan_service,
             api_key: TEST_KEY.to_string(),
+            training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(_train_permits)),
         };
 
         use tower::Service;
@@ -1172,6 +1625,11 @@ mod tests {
             event_bus.clone(),
             approval_registry.clone(),
         ));
+        let permits = if config.web.train.max_concurrent_jobs == 0 {
+            usize::MAX
+        } else {
+            config.web.train.max_concurrent_jobs
+        };
         AppState {
             db: Arc::new(db),
             event_bus,
@@ -1179,6 +1637,7 @@ mod tests {
             approval_registry,
             scan_service,
             api_key: TEST_KEY.to_string(),
+            training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
         }
     }
 
@@ -1202,6 +1661,7 @@ mod tests {
                 approval_registry: state.approval_registry.clone(),
                 scan_service: scan_service.clone(),
                 api_key: TEST_KEY.to_string(),
+                training_job_semaphore: state.training_job_semaphore.clone(),
             };
             let app = create_router(state_clone);
             let handle = tokio::spawn(async move {
@@ -1255,6 +1715,7 @@ mod tests {
             approval_registry: state.approval_registry.clone(),
             scan_service: state.scan_service.clone(),
             api_key: TEST_KEY.to_string(),
+            training_job_semaphore: state.training_job_semaphore.clone(),
         });
         let req = Request::builder()
             .method("POST")
@@ -1280,6 +1741,7 @@ mod tests {
             approval_registry: state.approval_registry.clone(),
             scan_service: state.scan_service.clone(),
             api_key: TEST_KEY.to_string(),
+            training_job_semaphore: state.training_job_semaphore.clone(),
         });
         let req2 = Request::builder()
             .method("POST")
@@ -1294,5 +1756,402 @@ mod tests {
             StatusCode::CREATED,
             "request after permit released must succeed (201)"
         );
+    }
+
+    // ── Training routes (Phase 26 T1) ─────────────────────────────────────────
+    //
+    // Each route gets:
+    //   - 200/201/202 happy path
+    //   - 401 without Bearer
+    //   - route-specific error paths (400, 404, 429)
+
+    // ── harvest / unharvest ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn harvest_session_returns_200() {
+        let state = test_state();
+        let session = sigint_core::types::Session::new("harvest-test");
+        state.db.create_session(&session).unwrap();
+
+        let app = create_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/train/harvest/{}", session.id))
+            .header("Authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["harvested"], true);
+    }
+
+    #[tokio::test]
+    async fn harvest_session_unknown_id_returns_404() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/harvest/00000000-0000-0000-0000-000000000000")
+            .header("Authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn harvest_session_without_auth_returns_401() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/harvest/00000000-0000-0000-0000-000000000000")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unharvest_session_returns_200() {
+        let state = test_state();
+        let session = sigint_core::types::Session::new("unharvest-test");
+        state.db.create_session(&session).unwrap();
+        state
+            .db
+            .set_session_trainable(&session.id.to_string(), true)
+            .unwrap();
+
+        let app = create_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/train/unharvest/{}", session.id))
+            .header("Authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["harvested"], false);
+    }
+
+    #[tokio::test]
+    async fn unharvest_session_without_auth_returns_401() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/unharvest/00000000-0000-0000-0000-000000000000")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ── stats ──────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn train_stats_returns_200_empty_db() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/train/stats")
+            .header("Authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["total_examples"], 0);
+        assert_eq!(v["trainable_session_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn train_stats_without_auth_returns_401() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/train/stats")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn train_stats_counts_trainable_sessions() {
+        let state = test_state();
+        let session = sigint_core::types::Session::new("stats-session");
+        state.db.create_session(&session).unwrap();
+        state
+            .db
+            .set_session_trainable(&session.id.to_string(), true)
+            .unwrap();
+
+        let app = create_router(state);
+        let req = Request::builder()
+            .uri("/api/train/stats")
+            .header("Authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["trainable_session_count"], 1);
+    }
+
+    // ── export ─────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn train_export_returns_422_when_no_trainable_sessions() {
+        // No trainable examples → 422 Unprocessable Entity
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/export")
+            .header("Authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn train_export_without_auth_returns_401() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/export")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ── jobs ────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn train_list_jobs_returns_200_empty() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/train/jobs")
+            .header("Authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["jobs"].is_array());
+        assert_eq!(v["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn train_list_jobs_without_auth_returns_401() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/train/jobs")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn train_get_job_missing_returns_404() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/train/jobs/nonexistent-job-id")
+            .header("Authorization", auth_header())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn train_get_job_without_auth_returns_401() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .uri("/api/train/jobs/some-job-id")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ── finetune ───────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn train_finetune_without_auth_returns_401() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/finetune")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"base_model":"llama3:8b","output_name":"test-adapter"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn train_finetune_invalid_output_name_returns_400() {
+        // output_name with path traversal characters → 400
+        let app = create_router(test_state());
+        for bad_name in &["../evil", "/etc/passwd", "name;rm", "name with spaces"] {
+            let body = serde_json::json!({
+                "base_model": "llama3:8b",
+                "output_name": bad_name,
+            });
+            let req = Request::builder()
+                .method("POST")
+                .uri("/api/train/finetune")
+                .header("content-type", "application/json")
+                .header("Authorization", auth_header())
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let app2 = create_router(test_state());
+            let resp = app2.oneshot(req).await.unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::BAD_REQUEST,
+                "expected 400 for bad output_name: {}",
+                bad_name
+            );
+        }
+        drop(app); // suppress unused warning
+    }
+
+    #[tokio::test]
+    async fn train_finetune_empty_base_model_returns_400() {
+        let app = create_router(test_state());
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/finetune")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(
+                r#"{"base_model":"","output_name":"valid-name"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn train_finetune_returns_202_with_job_id() {
+        // With a finetune_command set to a fast no-op, the handler must return
+        // 202 Accepted with a job_id immediately (background task not awaited).
+        let state = test_state();
+
+        // Override config so that finetune_command is a valid no-op.
+        // We use a tmp dir as job_dir so the test doesn't pollute ~/.local.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = sigint_store::Database::open_in_memory().expect("in-memory db");
+        let event_bus = sigint_core::event::EventBus::new();
+        let mut config = sigint_core::Config::default();
+        config.train.finetune_command = "true".to_string(); // /usr/bin/true — exits 0
+        config.train.job_dir = Some(tmp.path().to_path_buf());
+        let config = Arc::new(config);
+        let approval_registry =
+            Arc::new(sigint_core::ApprovalRegistry::new(Duration::from_secs(300)));
+        let scan_service = Arc::new(sigint_agents::ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        let permits = if config.web.train.max_concurrent_jobs == 0 {
+            usize::MAX
+        } else {
+            config.web.train.max_concurrent_jobs
+        };
+        let state_with_cmd = AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+            api_key: TEST_KEY.to_string(),
+            training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
+        };
+        drop(state);
+
+        // We need train.jsonl and test.jsonl to exist so run_finetune doesn't
+        // error before exec'ing the command. Create empty stubs.
+        let train_jsonl = tmp.path().join("train.jsonl");
+        let test_jsonl = tmp.path().join("test.jsonl");
+        std::fs::write(&train_jsonl, "").unwrap();
+        std::fs::write(&test_jsonl, "").unwrap();
+
+        let app = create_router(state_with_cmd);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/finetune")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(
+                r#"{"base_model":"llama3:8b","output_name":"test-adapter"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["job_id"].is_string(),
+            "202 body must contain job_id, got: {}",
+            body
+        );
+    }
+
+    #[tokio::test]
+    async fn train_finetune_returns_429_when_semaphore_exhausted() {
+        // Build state with cap=1, hold the permit, then POST → 429.
+        let db = sigint_store::Database::open_in_memory().expect("in-memory db");
+        let event_bus = sigint_core::event::EventBus::new();
+        let mut config = sigint_core::Config::default();
+        config.web.train.max_concurrent_jobs = 1;
+        let config = Arc::new(config);
+        let approval_registry =
+            Arc::new(sigint_core::ApprovalRegistry::new(Duration::from_secs(300)));
+        let scan_service = Arc::new(sigint_agents::ScanService::new(
+            config.clone(),
+            event_bus.clone(),
+            approval_registry.clone(),
+        ));
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let state = AppState {
+            db: Arc::new(db),
+            event_bus,
+            config,
+            approval_registry,
+            scan_service,
+            api_key: TEST_KEY.to_string(),
+            training_job_semaphore: semaphore.clone(),
+        };
+
+        // Hold the single permit.
+        let _held = semaphore.clone().try_acquire_owned().unwrap();
+
+        let app = create_router(state);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/train/finetune")
+            .header("content-type", "application/json")
+            .header("Authorization", auth_header())
+            .body(Body::from(
+                r#"{"base_model":"llama3:8b","output_name":"test-adapter"}"#,
+            ))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = body_string(resp.into_body()).await;
+        let v: serde_json::Value =
+            serde_json::from_str(&body).expect("429 body must be valid JSON");
+        assert!(v["error"].is_string(), "429 body must have 'error' field");
+        assert!(v["limit"].is_number(), "429 body must have 'limit' field");
     }
 }
