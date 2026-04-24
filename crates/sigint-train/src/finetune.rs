@@ -36,15 +36,20 @@ use sigint_core::config::TrainConfig;
 // ── Job record types ─────────────────────────────────────────────────────────
 
 /// Status of a fine-tuning job.
+///
+/// Serializes as a tagged JSON object: `{"status":"Running"}`, `{"status":"Success"}`,
+/// or `{"status":"Failed"}`. The `tag = "status"` representation matches the web API
+/// contract expected by the training poll endpoint and the `train_flow` integration test.
+/// Failure details are stored in [`JobRecord::failure_reason`] alongside this field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "status", content = "reason")]
+#[serde(tag = "status")]
 pub enum JobStatus {
     /// Job is currently running.
     Running,
     /// Job completed successfully (exit code 0).
     Success,
-    /// Job failed with a description of the failure.
-    Failed { reason: String },
+    /// Job failed — see `JobRecord.failure_reason` for details.
+    Failed,
 }
 
 /// Persistent record of a single fine-tuning job.
@@ -76,7 +81,13 @@ pub struct JobRecord {
     pub exit_code: Option<i32>,
 
     /// Final status after the command completes.
+    /// Serializes as a plain string: `"Running"`, `"Success"`, or `"Failed"`.
     pub status: JobStatus,
+
+    /// Human-readable failure description when `status == Failed`.
+    /// Absent for Running and Success records.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
 }
 
 // ── Command parsing ──────────────────────────────────────────────────────────
@@ -197,7 +208,11 @@ pub fn run_finetune(
     );
 
     // Exec the trainer. Stdout/stderr inherited so progress streams to terminal.
-    let output = Command::new(program)
+    // `.status()` is used instead of `.output()` — `.output()` hangs when
+    // stdout/stderr are inherited and the call is made from spawn_blocking,
+    // because it waits for a pipe-close that never comes.
+    // TODO(#21): capture stdout via async process when implementing TrainingJobProgress
+    let exit_status = Command::new(program)
         .args(args)
         .env("SIGINT_TRAIN_JSONL", train_jsonl)
         .env("SIGINT_TEST_JSONL", test_jsonl)
@@ -206,19 +221,18 @@ pub fn run_finetune(
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .output()
+        .status()
         .with_context(|| format!("failed to spawn fine-tune command: {}", program))?;
 
     let finished_at = Utc::now();
-    let exit_code = output.status.code();
+    let exit_code = exit_status.code();
 
-    let status = if output.status.success() {
-        JobStatus::Success
+    let (status, failure_reason) = if exit_status.success() {
+        (JobStatus::Success, None)
     } else {
         let code = exit_code.unwrap_or(-1);
-        JobStatus::Failed {
-            reason: format!("fine-tune command exited with status {}", code),
-        }
+        let reason = format!("fine-tune command exited with status {}", code);
+        (JobStatus::Failed, Some(reason))
     };
 
     let record = JobRecord {
@@ -230,6 +244,7 @@ pub fn run_finetune(
         output_path: output_path.to_path_buf(),
         exit_code,
         status: status.clone(),
+        failure_reason: failure_reason.clone(),
     };
 
     // Persist the record to jobs.json (JSONL — one object per line).
@@ -237,13 +252,14 @@ pub fn run_finetune(
         .with_context(|| format!("failed to persist job record to {}", job_dir.display()))?;
 
     // Return the record for callers, but surface exit-code errors.
-    if let JobStatus::Failed { ref reason } = status {
+    if status == JobStatus::Failed {
+        let reason = failure_reason.unwrap_or_default();
         return Err(anyhow!(
             "fine-tune command exited with status {} (job {} persisted as Failed)",
             exit_code.unwrap_or(-1),
             record.id
         )
-        .context(reason.clone()));
+        .context(reason));
     }
 
     Ok(record)
@@ -455,6 +471,7 @@ mod tests {
             output_path: PathBuf::from("/tmp/o1"),
             exit_code: Some(0),
             status: JobStatus::Success,
+            failure_reason: None,
         };
         let r2 = JobRecord {
             id: "j2".into(),
@@ -465,6 +482,7 @@ mod tests {
             output_path: PathBuf::from("/tmp/o2"),
             exit_code: None,
             status: JobStatus::Running,
+            failure_reason: None,
         };
 
         let mut f = std::fs::File::create(&jobs_file).unwrap();

@@ -105,6 +105,67 @@ pub struct ReconConfig {
     pub target_allowlist: Vec<String>,
 }
 
+/// Web UI training configuration — presentation-layer knobs only.
+///
+/// These settings control how the web server exposes training-related
+/// functionality (concurrency cap, display limits, pagination). They are
+/// intentionally separate from `[train]` which holds CLI-relevant config
+/// such as `finetune_command` and `min_eval_examples`.
+///
+/// @decision DEC-P26-005
+/// @title Config additions scoped to [web.train] for UI-only knobs
+/// @status accepted
+/// @rationale CLI-relevant config (finetune_command, min_eval_examples,
+/// job_dir) lives in [train] unchanged. Web-only presentation settings
+/// (concurrency cap, stdout_tail_bytes, pagination) live in [web.train]
+/// so CLI users do not see noise, and the finetune_command ABI is not
+/// duplicated. The nested struct is serde-deserialized as
+/// [web.train] in config.toml. Addresses: REQ-P26-P1-001, REQ-P26-NOGO-004.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebTrainConfig {
+    /// Maximum number of fine-tune jobs that may run concurrently.
+    ///
+    /// `POST /api/train/finetune` returns `429` when this many jobs are
+    /// already running. Default: 1 (single-operator tool — serialized training
+    /// avoids GPU memory contention). Set to 0 to disable the cap entirely.
+    #[serde(default = "default_max_concurrent_jobs")]
+    pub max_concurrent_jobs: usize,
+
+    /// Maximum bytes of trainer stdout to include in `TrainingJobProgress`
+    /// WebSocket heartbeats and the job-detail drawer.
+    ///
+    /// Default: 2048. Keeping this bounded prevents chatty trainers from
+    /// flooding the broadcast bus (Risk #2 in the Phase 26 plan).
+    #[serde(default = "default_stdout_tail_bytes")]
+    pub stdout_tail_bytes: usize,
+
+    /// Number of job records to return per page in `GET /api/train/jobs`.
+    ///
+    /// Default: 20.
+    #[serde(default = "default_jobs_page_size")]
+    pub jobs_page_size: usize,
+}
+
+fn default_max_concurrent_jobs() -> usize {
+    1
+}
+fn default_stdout_tail_bytes() -> usize {
+    2048
+}
+fn default_jobs_page_size() -> usize {
+    20
+}
+
+impl Default for WebTrainConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_jobs: default_max_concurrent_jobs(),
+            stdout_tail_bytes: default_stdout_tail_bytes(),
+            jobs_page_size: default_jobs_page_size(),
+        }
+    }
+}
+
 /// Web server security configuration.
 ///
 /// Controls API authentication, allowed CORS origins, and bind address.
@@ -156,6 +217,13 @@ pub struct WebConfig {
     /// a flag on every invocation.
     #[serde(default)]
     pub bind_addr: Option<SocketAddr>,
+
+    /// Web UI training knobs (concurrency cap, stdout tail, pagination).
+    ///
+    /// The `[web.train]` section is optional — all fields have safe defaults.
+    /// CLI-relevant training config (finetune_command, etc.) lives in `[train]`.
+    #[serde(default)]
+    pub train: WebTrainConfig,
 }
 
 impl WebConfig {
@@ -896,5 +964,61 @@ bind_addr = "127.0.0.1:9090"
         let cfg: Config = toml::from_str("[llm]\nmodel = \"mistral\"").expect("parse failed");
         assert!(cfg.web.api_key.is_none());
         assert!(cfg.web.cors_origins.is_empty());
+    }
+
+    // ── WebTrainConfig tests (DEC-P26-005) ───────────────────────────────────
+
+    #[test]
+    fn web_train_config_defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.web.train.max_concurrent_jobs, 1);
+        assert_eq!(cfg.web.train.stdout_tail_bytes, 2048);
+        assert_eq!(cfg.web.train.jobs_page_size, 20);
+    }
+
+    #[test]
+    fn web_train_config_parses_from_toml() {
+        let toml_str = r#"
+[web.train]
+max_concurrent_jobs = 3
+stdout_tail_bytes = 4096
+jobs_page_size = 50
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.web.train.max_concurrent_jobs, 3);
+        assert_eq!(cfg.web.train.stdout_tail_bytes, 4096);
+        assert_eq!(cfg.web.train.jobs_page_size, 50);
+    }
+
+    #[test]
+    fn web_train_config_partial_toml_uses_defaults() {
+        let toml_str = r#"
+[web.train]
+max_concurrent_jobs = 2
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.web.train.max_concurrent_jobs, 2);
+        // Remaining fields fall back to defaults.
+        assert_eq!(cfg.web.train.stdout_tail_bytes, 2048);
+        assert_eq!(cfg.web.train.jobs_page_size, 20);
+    }
+
+    #[test]
+    fn web_train_config_missing_section_uses_defaults() {
+        let cfg: Config = toml::from_str("[llm]\nmodel = \"mistral\"").expect("parse failed");
+        assert_eq!(cfg.web.train.max_concurrent_jobs, 1);
+        assert_eq!(cfg.web.train.stdout_tail_bytes, 2048);
+        assert_eq!(cfg.web.train.jobs_page_size, 20);
+    }
+
+    #[test]
+    fn web_train_config_zero_concurrent_jobs_disables_cap() {
+        // max_concurrent_jobs = 0 is valid (disables the cap — unlimited).
+        let toml_str = r#"
+[web.train]
+max_concurrent_jobs = 0
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(cfg.web.train.max_concurrent_jobs, 0);
     }
 }
