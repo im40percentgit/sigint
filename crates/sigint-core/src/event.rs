@@ -9,6 +9,17 @@
 //! @rationale broadcast channels allow N subscribers (TUI, Web, agents)
 //! to each receive a copy of every event without any subscriber blocking
 //! another. This decouples the UI layer from the core completely.
+//!
+//! @decision DEC-P26-001
+//! @title WebSocket event variants for Phase 26 training lifecycle
+//! @status accepted
+//! @rationale Training lifecycle events (job start/progress/completion,
+//! evaluation, model promotion/rollback) are delivered over the existing
+//! broadcast WebSocket channel rather than polling or SSE. This reuses
+//! the established event bus contract without adding new transport
+//! complexity. Variants follow the existing externally-tagged serde
+//! convention (no #[serde(tag)] attribute). Timestamps use u64 unix epoch
+//! seconds to match the existing Event enum field style.
 
 use crate::types::{Asset, EscalationTier, Finding, Message, Session, Task};
 use serde::{Deserialize, Serialize};
@@ -152,6 +163,60 @@ pub enum Event {
     EscalationDenied {
         from: EscalationTier,
         to: EscalationTier,
+    },
+    // ── Training lifecycle events (Phase 26) ─────────────────────────────────
+    /// A fine-tuning job was submitted and started.
+    TrainingJobStarted {
+        job_id: String,
+        base_model: String,
+        output_path: String,
+    },
+    /// Periodic heartbeat from a running training job with recent stdout.
+    TrainingJobProgress {
+        job_id: String,
+        /// Unix epoch seconds at the time of the heartbeat.
+        heartbeat_at: u64,
+        /// Last few lines of stdout from the training process.
+        stdout_tail: String,
+    },
+    /// A training job exited successfully or with a non-zero exit code.
+    TrainingJobCompleted {
+        job_id: String,
+        exit_code: i32,
+        duration_secs: u64,
+    },
+    /// A training job failed with an error message.
+    TrainingJobFailed { job_id: String, error: String },
+    /// An evaluation run comparing two model checkpoints was started.
+    EvaluationStarted {
+        eval_id: String,
+        base_tag: String,
+        candidate_tag: String,
+        total_examples: usize,
+    },
+    /// Incremental progress update from a running evaluation.
+    EvaluationProgress {
+        eval_id: String,
+        examples_done: usize,
+    },
+    /// An evaluation run completed; report is available at the given path.
+    EvaluationCompleted {
+        eval_id: String,
+        report_path: String,
+    },
+    /// The active model was promoted from one provider/model to a new one.
+    ModelPromoted {
+        old_provider: String,
+        old_model: String,
+        new_provider: String,
+        new_model: String,
+    },
+    /// The active model was rolled back to a previous provider/model.
+    ModelRolledBack {
+        old_provider: String,
+        old_model: String,
+        new_provider: String,
+        new_model: String,
     },
 }
 
@@ -353,5 +418,230 @@ mod tests {
         // Roundtrip
         let back: Event = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, Event::ScanDiffCompleted { .. }));
+    }
+
+    // ── Phase 26 training lifecycle round-trip tests ──────────────────────────
+
+    /// Helper: serialize an event to JSON then deserialize back, returning both.
+    fn roundtrip(ev: &Event) -> (String, Event) {
+        let json = serde_json::to_string(ev).expect("serialize");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        (json, back)
+    }
+
+    #[test]
+    fn training_job_started_roundtrip() {
+        let ev = Event::TrainingJobStarted {
+            job_id: "job-001".into(),
+            base_model: "llama3:8b".into(),
+            output_path: "/models/fine-tuned/job-001".into(),
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("TrainingJobStarted"), "variant tag present");
+        assert!(json.contains("job-001"));
+        assert!(json.contains("llama3:8b"));
+        assert!(json.contains("/models/fine-tuned/job-001"));
+        assert!(
+            matches!(back, Event::TrainingJobStarted { ref job_id, ref base_model, ref output_path }
+                if job_id == "job-001" && base_model == "llama3:8b" && output_path == "/models/fine-tuned/job-001")
+        );
+    }
+
+    #[test]
+    fn training_job_progress_roundtrip() {
+        let ev = Event::TrainingJobProgress {
+            job_id: "job-002".into(),
+            heartbeat_at: 1_700_000_000u64,
+            stdout_tail: "step 100/1000 loss=0.42".into(),
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("TrainingJobProgress"));
+        assert!(json.contains("1700000000"));
+        assert!(json.contains("step 100"));
+        assert!(matches!(
+            back,
+            Event::TrainingJobProgress {
+                heartbeat_at: 1_700_000_000,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn training_job_completed_roundtrip() {
+        let ev = Event::TrainingJobCompleted {
+            job_id: "job-003".into(),
+            exit_code: 0,
+            duration_secs: 3600,
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("TrainingJobCompleted"));
+        assert!(json.contains("\"exit_code\":0"));
+        assert!(json.contains("3600"));
+        assert!(matches!(
+            back,
+            Event::TrainingJobCompleted {
+                exit_code: 0,
+                duration_secs: 3600,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn training_job_failed_roundtrip() {
+        let ev = Event::TrainingJobFailed {
+            job_id: "job-004".into(),
+            error: "CUDA out of memory".into(),
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("TrainingJobFailed"));
+        assert!(json.contains("CUDA out of memory"));
+        assert!(
+            matches!(back, Event::TrainingJobFailed { ref error, .. } if error == "CUDA out of memory")
+        );
+    }
+
+    #[test]
+    fn evaluation_started_roundtrip() {
+        let ev = Event::EvaluationStarted {
+            eval_id: "eval-001".into(),
+            base_tag: "llama3:8b-base".into(),
+            candidate_tag: "llama3:8b-ft-v1".into(),
+            total_examples: 500,
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("EvaluationStarted"));
+        assert!(json.contains("eval-001"));
+        assert!(json.contains("500"));
+        assert!(matches!(
+            back,
+            Event::EvaluationStarted {
+                total_examples: 500,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn evaluation_progress_roundtrip() {
+        let ev = Event::EvaluationProgress {
+            eval_id: "eval-002".into(),
+            examples_done: 250,
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("EvaluationProgress"));
+        assert!(json.contains("250"));
+        assert!(matches!(
+            back,
+            Event::EvaluationProgress {
+                examples_done: 250,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn evaluation_completed_roundtrip() {
+        let ev = Event::EvaluationCompleted {
+            eval_id: "eval-003".into(),
+            report_path: "/reports/eval-003.json".into(),
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("EvaluationCompleted"));
+        assert!(json.contains("/reports/eval-003.json"));
+        assert!(
+            matches!(back, Event::EvaluationCompleted { ref report_path, .. }
+                if report_path == "/reports/eval-003.json")
+        );
+    }
+
+    #[test]
+    fn model_promoted_roundtrip() {
+        let ev = Event::ModelPromoted {
+            old_provider: "ollama".into(),
+            old_model: "llama3:8b".into(),
+            new_provider: "ollama".into(),
+            new_model: "llama3:8b-ft-v1".into(),
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("ModelPromoted"));
+        assert!(json.contains("llama3:8b-ft-v1"));
+        assert!(
+            matches!(back, Event::ModelPromoted { ref new_model, .. } if new_model == "llama3:8b-ft-v1")
+        );
+    }
+
+    #[test]
+    fn model_rolled_back_roundtrip() {
+        let ev = Event::ModelRolledBack {
+            old_provider: "ollama".into(),
+            old_model: "llama3:8b-ft-v1".into(),
+            new_provider: "ollama".into(),
+            new_model: "llama3:8b".into(),
+        };
+        let (json, back) = roundtrip(&ev);
+        assert!(json.contains("ModelRolledBack"));
+        assert!(json.contains("llama3:8b"));
+        assert!(
+            matches!(back, Event::ModelRolledBack { ref new_model, .. } if new_model == "llama3:8b")
+        );
+    }
+
+    #[test]
+    fn training_lifecycle_events_all_serialize_and_deserialize() {
+        // Confirm all 9 Phase 26 variants round-trip without loss.
+        let events: Vec<Event> = vec![
+            Event::TrainingJobStarted {
+                job_id: "j1".into(),
+                base_model: "m".into(),
+                output_path: "/p".into(),
+            },
+            Event::TrainingJobProgress {
+                job_id: "j1".into(),
+                heartbeat_at: 0,
+                stdout_tail: "".into(),
+            },
+            Event::TrainingJobCompleted {
+                job_id: "j1".into(),
+                exit_code: 0,
+                duration_secs: 1,
+            },
+            Event::TrainingJobFailed {
+                job_id: "j1".into(),
+                error: "err".into(),
+            },
+            Event::EvaluationStarted {
+                eval_id: "e1".into(),
+                base_tag: "b".into(),
+                candidate_tag: "c".into(),
+                total_examples: 1,
+            },
+            Event::EvaluationProgress {
+                eval_id: "e1".into(),
+                examples_done: 1,
+            },
+            Event::EvaluationCompleted {
+                eval_id: "e1".into(),
+                report_path: "/r".into(),
+            },
+            Event::ModelPromoted {
+                old_provider: "o".into(),
+                old_model: "old".into(),
+                new_provider: "o".into(),
+                new_model: "new".into(),
+            },
+            Event::ModelRolledBack {
+                old_provider: "o".into(),
+                old_model: "new".into(),
+                new_provider: "o".into(),
+                new_model: "old".into(),
+            },
+        ];
+
+        for ev in &events {
+            let json = serde_json::to_string(ev).expect("serialize");
+            let _back: Event = serde_json::from_str(&json).expect("deserialize roundtrip");
+        }
     }
 }

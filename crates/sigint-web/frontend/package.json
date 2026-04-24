@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "build": "node esbuild.config.mjs",
-    "watch": "node esbuild.config.mjs --watch"
+    "watch": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "preact": "^10.19.2"

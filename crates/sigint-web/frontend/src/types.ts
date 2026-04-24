@@ -134,6 +134,76 @@ export interface WsEventError {
   data: { message: string; code: string | null };
 }
 
+// ── Phase 26: Training lifecycle WebSocket event types ────────────────────
+// These mirror the Rust Event enum variants added in Phase 26 (DEC-P26-001).
+// The discriminator field `type` uses snake_case to match the existing WsEvent
+// naming convention established for this UI layer.
+
+export interface WsEventTrainingJobStarted {
+  type: "training_job_started";
+  data: { job_id: string; base_model: string; output_path: string };
+}
+
+export interface WsEventTrainingJobProgress {
+  type: "training_job_progress";
+  data: {
+    job_id: string;
+    /** Unix epoch seconds at the time of the heartbeat. */
+    heartbeat_at: number;
+    stdout_tail: string;
+  };
+}
+
+export interface WsEventTrainingJobCompleted {
+  type: "training_job_completed";
+  data: { job_id: string; exit_code: number; duration_secs: number };
+}
+
+export interface WsEventTrainingJobFailed {
+  type: "training_job_failed";
+  data: { job_id: string; error: string };
+}
+
+export interface WsEventEvaluationStarted {
+  type: "evaluation_started";
+  data: {
+    eval_id: string;
+    base_tag: string;
+    candidate_tag: string;
+    total_examples: number;
+  };
+}
+
+export interface WsEventEvaluationProgress {
+  type: "evaluation_progress";
+  data: { eval_id: string; examples_done: number };
+}
+
+export interface WsEventEvaluationCompleted {
+  type: "evaluation_completed";
+  data: { eval_id: string; report_path: string };
+}
+
+export interface WsEventModelPromoted {
+  type: "model_promoted";
+  data: {
+    old_provider: string;
+    old_model: string;
+    new_provider: string;
+    new_model: string;
+  };
+}
+
+export interface WsEventModelRolledBack {
+  type: "model_rolled_back";
+  data: {
+    old_provider: string;
+    old_model: string;
+    new_provider: string;
+    new_model: string;
+  };
+}
+
 /** Discriminated union of all WebSocket event shapes. */
 export type WsEvent =
   | WsEventScanStarted
@@ -143,7 +213,16 @@ export type WsEvent =
   | WsEventApprovalRequired
   | WsEventLogLine
   | WsEventSessionUpdated
-  | WsEventError;
+  | WsEventError
+  | WsEventTrainingJobStarted
+  | WsEventTrainingJobProgress
+  | WsEventTrainingJobCompleted
+  | WsEventTrainingJobFailed
+  | WsEventEvaluationStarted
+  | WsEventEvaluationProgress
+  | WsEventEvaluationCompleted
+  | WsEventModelPromoted
+  | WsEventModelRolledBack;
 
 // ── Model Types ────────────────────────────────────────────────────────────
 
