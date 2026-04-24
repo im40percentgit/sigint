@@ -1329,6 +1329,190 @@ A CSO-mode security audit between Phase 24 and this pass flagged (a) an unauthen
 - Content-classifier pass before LLM ingestion (P4 is a barrier-raiser, not comprehensive).
 - Live container verification (no Docker daemon available at P2 merge time; Dockerfile + compose changes verified by static read).
 
+### Phase 26: Fine-Tune Web UI
+**Status:** planned
+**Branch:** feature/phase26-finetune-ui
+**Decision IDs:** DEC-P26-001, DEC-P26-002, DEC-P26-003, DEC-P26-004, DEC-P26-005, DEC-P26-006, DEC-P26-007, DEC-P26-008
+**Requirements:** REQ-P26-P0-001 through REQ-P26-P0-007, REQ-P26-P1-001, REQ-P26-P1-002, REQ-P26-P2-001, REQ-P26-P2-002
+**Issues:** #11 (T1), #12 (T2), #13 (T3), #14 (T4), #15 (T5), #16 (T6), #17 (T7), #18 (T8)
+**Depends on:** Phase 24 (fine-tune loop), Phase 25 P0 (web auth + Bearer middleware), Phase 16 (web UI infrastructure — Axum + Preact + WebSocket bus), Phase 18 (ApprovalModal pattern)
+
+#### Problem Statement
+
+Phase 24 closed the CLI fine-tune loop: a pentester can run `sigint train harvest → export → finetune → evaluate` and `sigint model promote/rollback` to improve the orchestrator's tool-calling accuracy on their own engagement corpus. But every step is terminal-only. The product audience is pentesters who already prefer the browser for scan monitoring, finding triage, and report generation (Phases 16–18 shipped the web UI explicitly for that reason). Forcing them into a terminal just for the training loop creates a cliff in the UX and hides the capability — an operator who is already in the browser reviewing session findings has to switch contexts to improve the model that would have caught those findings better next time.
+
+Evidence from reading `crates/sigint-cli/src/train.rs` and `model.rs`: every CLI subcommand (`harvest`, `export`, `finetune`, `jobs`, `evaluate`, `promote`, `rollback`) is a thin wrapper over a `sigint-train` or helper function. These can be reused verbatim from Axum handlers — the plumbing already exists. What's missing is (a) REST routes, (b) WebSocket event variants for long-running job progress, (c) the Preact surfaces. The Phase 16 web architecture (thin REST handlers + broadcast event bus + discriminated TS union) is exactly the shape this needs.
+
+Product value: one-click harvest from the session list, visual progress for fine-tune jobs that can run for hours, side-by-side evaluation where Δ-tool-accuracy and Δ-argument-match are visible at a glance, and promotion/rollback gated behind the same `ApprovalModal` the operator already uses for tool approvals. The browser becomes the full control plane.
+
+#### Goals
+
+- **REQ-P26-GOAL-001** — A pentester can complete the full fine-tune loop (harvest → export → finetune → evaluate → promote) from the browser without opening a terminal or editing any file.
+- **REQ-P26-GOAL-002** — Fine-tune job progress (a process that can run minutes to hours) is visible in real time; closing and re-opening the browser does not lose job state.
+- **REQ-P26-GOAL-003** — Evaluation results are presented side-by-side with Δ-metrics prominent so the operator can promote with confidence — or reject and re-train.
+- **REQ-P26-GOAL-004** — Every model swap (promote, rollback) requires an explicit browser confirmation, reusing the existing tool-approval pattern so there is no new UX primitive to learn.
+- **REQ-P26-GOAL-005** — The CLI and web surface share a single source of truth (same `jobs.json`, same `promotion.log`, same `last_eval.json`) so mixed CLI+web workflows never drift.
+
+#### Non-Goals
+
+- **REQ-P26-NOGO-001** — No automatic training triggers (timer-based, scan-count-based, or event-driven). All fine-tune runs remain user-initiated per the spirit of DEC-P24-005.
+- **REQ-P26-NOGO-002** — No real-time training-loss visualization beyond a heartbeat progress bar. Loss curves require trainer-specific stdout parsing that's out of scope for v1.
+- **REQ-P26-NOGO-003** — No cross-engagement training aggregation UI. Users harvest specific sessions; there is no "train on everything" or auto-assemble wizard.
+- **REQ-P26-NOGO-004** — No multi-user training queue. SIGINT is single-operator; concurrent fine-tunes serialize via a semaphore (see DEC-P26-008).
+- **REQ-P26-NOGO-005** — No mobile-responsive training pages. The Phase 16 UI targets desktop; fine-tune UIs match that surface area.
+- **REQ-P26-NOGO-006** — No trainer management UI (install unsloth, configure conda envs, GPU selection). The `finetune_command` in config remains a user-trust boundary per DEC-P24-001.
+- **REQ-P26-NOGO-007** — No background promotion (e.g., "auto-promote if Δ > 3pp"). Every promotion is an explicit modal confirmation.
+
+#### Requirements
+
+**Must-Have (P0)**
+
+- **REQ-P26-P0-001** — Harvest toggle on the sessions list.
+  Acceptance: Given the sessions page, When the operator clicks the Harvest toggle on a row, Then `POST /api/train/harvest/:id` is called, the row's `trainable` flag flips in the UI immediately (optimistic update with rollback on error), and a tooltip warns about PII per the Phase 24 banner text.
+- **REQ-P26-P0-002** — Train workbench page at `/train` that exposes stats, export, finetune, and evaluate steps.
+  Acceptance: Given a user with at least one harvested session, When they navigate to `/train`, Then the page shows (a) training stats (example count, role breakdown, trainable session count) from `GET /api/train/stats`, (b) an Export button that triggers `POST /api/train/export` and reports the sample counts, (c) a fine-tune form (base model, output name) that starts the job, (d) a link to the evaluate page. Each step visually indicates ready/running/done/error state.
+- **REQ-P26-P0-003** — Fine-tune job progress streams via WebSocket; job history persists across reloads.
+  Acceptance: Given a running fine-tune job, When the operator reloads the page, Then the job appears in the Jobs table with the correct status (running/completed/failed), duration, and the latest progress heartbeat; the same info is reachable via `GET /api/train/jobs` and `GET /api/train/jobs/:id`. WebSocket events `TrainingJobStarted`, `TrainingJobProgress`, `TrainingJobCompleted`, `TrainingJobFailed` arrive in-band with scan events.
+- **REQ-P26-P0-004** — Evaluation page renders base vs candidate side-by-side with Δ-metrics.
+  Acceptance: Given a completed fine-tune output, When the operator selects a candidate + base and clicks Evaluate, Then the page streams progress per example, presents tool-accuracy and argument-match for both models, highlights Δ with color coding (green ≥ 0, red < 0), and persists the result to `last_eval.json` via the existing `sigint-train::evaluate::persist_last_eval` helper.
+- **REQ-P26-P0-005** — Promote action opens the existing `ApprovalModal`, blocking the swap until the operator confirms.
+  Acceptance: Given a candidate tag, When the operator clicks Promote, Then an `ApprovalModal` appears showing `old_provider/old_model → new_provider/new_model`, the most recent eval Δ (if present), and a confirm/cancel choice. Confirm calls `POST /api/model/promote` and the config rewrite occurs server-side exactly as the CLI path does. Cancel closes the modal with no side effect. The P1 gate from DEC-P24 (min_eval_examples) surfaces as a warning in the modal; an explicit `force` checkbox forwards the flag.
+- **REQ-P26-P0-006** — Rollback is one click and is discoverable on the same screen as promotion history.
+  Acceptance: Given at least one prior promotion, When the operator clicks Rollback on the most recent promotion entry, Then the same `ApprovalModal` confirms the reversal, calls `POST /api/model/rollback`, and the promotion-history table refreshes to show the new rollback entry appended.
+- **REQ-P26-P0-007** — All new routes authenticate via the Phase 25 Bearer middleware; WebSocket training events use the same token/subprotocol mechanism as existing events.
+  Acceptance: Given an unauthenticated request to any `/api/train/*` or `/api/model/(promote|rollback|promotions)` route, Then the server returns `401`. Given a WebSocket connected without the Bearer query/subprotocol, Then training events are not delivered.
+
+**Nice-to-Have (P1)**
+
+- **REQ-P26-P1-001** — Job detail drawer with stdout tail.
+  Acceptance: Clicking a job row opens a drawer showing the last 2 KiB of stdout (capped server-side), exit code, env-var summary, and duration. Refreshes live while the job is running.
+- **REQ-P26-P1-002** — Bulk-harvest action on the sessions page.
+  Acceptance: Selecting multiple session rows and clicking "Harvest selected" calls harvest once per ID (or a single batch endpoint if cheap to add). Rollback-on-error per row.
+
+**Future Consideration (P2)**
+
+- **REQ-P26-P2-001** — Trainer stdout parser plug-ins that extract loss/step from known trainers (unsloth, axolotl) into structured progress events. Data model already supports arbitrary progress heartbeat JSON; the parser is the missing piece. Deferred.
+- **REQ-P26-P2-002** — Per-role evaluation view showing Δ broken down by agent role (recon/attack/exploit/report). `agent_role` is already on training examples from Phase 24; UI deferred until role-specific fine-tuning (REQ-P24-P2-001) lands.
+
+#### Definition of Done
+
+- **REQ-P26-GOAL-001 satisfied**: A browser-only end-to-end demo (toggle harvest → export → finetune with mock trainer → evaluate with MockProvider → promote → rollback) completes without the operator touching a terminal. Captured as an e2e test using `/browse` against the running server.
+- **REQ-P26-GOAL-002 satisfied**: Restarting the browser during a running fine-tune job restores job state from `jobs.json` via `GET /api/train/jobs`; the new WebSocket subscription picks up subsequent progress events.
+- **REQ-P26-GOAL-003 satisfied**: The evaluation page renders the same numbers as the CLI's `sigint train evaluate` output for the same inputs; Δ-metrics are visually distinct (color + sign) for positive/negative deltas.
+- **REQ-P26-GOAL-004 satisfied**: Promote and rollback both route through `ApprovalModal`; no code path swaps the model without a browser confirmation.
+- **REQ-P26-GOAL-005 satisfied**: A mixed workflow (CLI harvest + web evaluate + CLI promote, or any permutation) produces consistent state — the same `jobs.json`, `last_eval.json`, and `promotion.log` files are read and appended by both surfaces.
+- All `cargo test -p sigint-web`, `cargo test -p sigint-train`, `cargo test -p sigint-cli` pass.
+- Frontend builds cleanly (`cd crates/sigint-web/frontend && npm run build`).
+- README / USER_GUIDE gains a "Fine-tuning from the Web UI" section with screenshots and the `/train` route documented.
+- `sigint doctor` is unchanged; Phase 24's checks cover the shared state.
+
+### Planned Decisions
+
+- **DEC-P26-001**: Long-running job transport = existing WebSocket event bus with new `TrainingJob*` / `Evaluation*` / `Model*` variants. Chosen over SSE (would require a second transport surface; the frontend already consumes a discriminated union), and over polling (masks failures, higher latency, higher request volume). Cost: ~20 lines of Rust enum variants + matching TS union members. — Addresses: REQ-P26-P0-003, REQ-P26-P0-004
+- **DEC-P26-002**: Job state persistence stays in `~/.local/share/sigint/training/jobs.json` (JSONL). Not migrated to SQLite. Chosen because the CLI (Phase 24) already reads/writes this file, a schema migration forces a CLI-side change with no corresponding benefit, the file is append-only and crash-safe, and single-operator scale never exceeds a few dozen rows. SQLite would make sense if we later needed cross-query or multi-user views — that's a future phase. — Addresses: REQ-P26-GOAL-005, REQ-P26-P0-003
+- **DEC-P26-003**: Evaluation UI is a dedicated page (`/train/evaluate` or `/train/jobs/:id/evaluate`) with a diff table, not a modal or inline-in-jobs-list component. Chosen because the evaluation view is the go/no-go decision point — it deserves space, scroll, and revisit behavior. Modal rejected (cramped for comparison tables); inline rejected (hides the Δ signal in a busy list). — Addresses: REQ-P26-P0-004, REQ-P26-GOAL-003
+- **DEC-P26-004**: Promote and rollback reuse the existing `ApprovalModal` / `ApprovalRegistry` infrastructure from Phase 17. The browser operator confirms via the same UX they already use for tool-call approvals. Chosen over a custom confirm dialog (adds a second approval primitive, splits user mental model) and over a "just a red button" direct action (violates Sacred Practice #8 — approval gates for destructive model swaps). — Addresses: REQ-P26-P0-005, REQ-P26-P0-006, REQ-P26-GOAL-004
+- **DEC-P26-005**: Config additions are scoped to `[web.train]` for UI-only knobs (`stdout_tail_bytes` default 2048, `jobs_page_size` default 20, `max_concurrent_jobs` default 1). The existing `[train]` section stays unchanged. Chosen to keep CLI-relevant config separate from presentation-layer config so CLI users don't see `[web.train]` noise and the `finetune_command` definition isn't duplicated. — Addresses: REQ-P26-P1-001, REQ-P26-NOGO-004
+- **DEC-P26-006**: Promotion history is inlined on the `/models` (extended) or `/train/promote` page, not a separate settings screen. Chosen because discoverability matters — the operator browsing models is the exact audience for "here's what you last switched to, one-click rollback." A separate `/settings/promotions` page would bury the capability. — Addresses: REQ-P26-P0-006, REQ-P26-GOAL-004
+- **DEC-P26-007**: WebSocket auth for training events reuses Phase 25 P0 Bearer-subprotocol resolution (`bearer.<token>` or `?token=` query). No new auth code. The same middleware gates `/api/train/*` REST routes. Chosen to avoid a second auth surface; P0 security stays uniform. — Addresses: REQ-P26-P0-007
+- **DEC-P26-008**: Fine-tune job execution runs in-process on the web server via `tokio::process::Command`, streaming stdout to the event bus as `TrainingJobProgress` heartbeats. Concurrency is capped via a semaphore (`[web.train].max_concurrent_jobs`, default 1). Chosen over a separate trainer daemon (premature; no multi-host deployment), and over in-request blocking (would hang the axum handler for hours). The handler returns `202 Accepted` with the job ID immediately; the task runs to completion on the tokio runtime. A concurrent-job cap reuses the DEC-WEB-RATELIMIT-002 pattern (atomic semaphore try_reserve). — Addresses: REQ-P26-P0-003, REQ-P26-NOGO-004
+
+### Decision Log
+<!-- Guardian appends here after phase completion -->
+
+### Task Breakdown (8 discrete tasks)
+
+- [ ] **Task 1 — Backend REST routes for harvest/stats/export/finetune/jobs** (sigint-web, sigint-agents glue)
+  - Add `POST /api/train/harvest/:id` → `Database::set_session_trainable(id, true)`.
+  - Add `POST /api/train/unharvest/:id` → `Database::set_session_trainable(id, false)`.
+  - Add `GET /api/train/stats` → `extract::extract_all` without file writes, return counts.
+  - Add `POST /api/train/export` → wraps `train::run_export` logic; returns `{train_count, test_count, train_path, test_path}`.
+  - Add `POST /api/train/finetune` → kicks off a background `tokio::spawn` wrapping `finetune::run_finetune`; returns `202 Accepted` with `job_id` immediately. Streams stdout/stderr to the event bus per DEC-P26-001.
+  - Add `GET /api/train/jobs` and `GET /api/train/jobs/:id` → reads `jobs.json` (DEC-P26-002).
+  - Add semaphore `training_job_semaphore` to `AppState` with cap from `[web.train].max_concurrent_jobs` (DEC-P26-008).
+  - Acceptance: Unit tests for each route (200/201/401/404/409 paths); integration test with mock `finetune_command` returns a completed job within 5s.
+
+- [ ] **Task 2 — Event bus additions for training lifecycle** (sigint-core events, sigint-web ws.rs passthrough, sigint-web frontend types)
+  - Add `Event::TrainingJobStarted { job_id, base_model, output_path }`.
+  - Add `Event::TrainingJobProgress { job_id, heartbeat_at, stdout_tail }`.
+  - Add `Event::TrainingJobCompleted { job_id, exit_code, duration_secs }`.
+  - Add `Event::TrainingJobFailed { job_id, error }`.
+  - Add `Event::EvaluationStarted { eval_id, base_tag, candidate_tag, total_examples }`.
+  - Add `Event::EvaluationProgress { eval_id, examples_done }`.
+  - Add `Event::EvaluationCompleted { eval_id, report_path }`.
+  - Add `Event::ModelPromoted { old_provider, old_model, new_provider, new_model }`.
+  - Add `Event::ModelRolledBack { old_provider, old_model, new_provider, new_model }`.
+  - Mirror in `crates/sigint-web/frontend/src/types.ts` discriminated union.
+  - Acceptance: Events round-trip through WebSocket and land in the TS union with no `unknown` narrowing.
+
+- [ ] **Task 3 — Backend routes for evaluate + promote + rollback + promotions** (sigint-web routes.rs, shared promotion helper)
+  - Add `POST /api/train/evaluate { base, candidate }` → spawns `evaluate::run_comparison`, streams progress events, persists `last_eval.json`, returns eval handle.
+  - Add `GET /api/train/evaluations/last` → reads `last_eval.json`.
+  - Extract the `atomic_config_rewrite` + `append_promotion_log` helpers from `sigint-cli/src/model.rs` into a shared module (suggested: `sigint-train/src/promotion.rs` or `sigint-core/src/promotion.rs`) so both CLI and web call the same code path (single source of truth per REQ-P26-GOAL-005).
+  - Add `POST /api/model/promote { tag, force }` → calls shared promote helper; emits `ModelPromoted` event; returns new config state.
+  - Add `POST /api/model/rollback` → calls shared rollback helper; emits `ModelRolledBack`.
+  - Add `GET /api/model/promotions` → reads `promotion.log` and returns JSON array.
+  - Acceptance: round-trip test (promote → list promotions → rollback → list) against in-memory DB and temp config path; P1 gate test with `force=false` returns 409, with `force=true` succeeds.
+
+- [ ] **Task 4 — Frontend types + api.ts client** (sigint-web/frontend/src)
+  - Add `TrainStats`, `ExportResult`, `TrainingJob`, `EvaluationReport`, `PromotionEntry`, `ModelState` types to `types.ts`.
+  - Add the new WS event variants to the `WsEvent` discriminated union.
+  - Add `api.train.*` namespace (`harvest`, `unharvest`, `stats`, `export`, `finetune`, `jobs`, `job`, `evaluate`, `lastEvaluation`) and `api.model.*` additions (`promote`, `rollback`, `promotions`).
+  - Acceptance: `npm run typecheck` passes; new calls compile against the route shapes defined in Task 1/3.
+
+- [ ] **Task 5 — Sessions harvest toggle** (sigint-web/frontend/src/components, pages/sessions.tsx)
+  - Add a `trainable` column to the sessions table with a toggle component.
+  - Optimistic UI update with rollback on fetch error.
+  - Tooltip: "Enables this session's scan history for fine-tune export. Data may contain PII — review before sharing." (matches the Phase 24 CLI banner.)
+  - P1: Add selection checkboxes + "Harvest selected" action bar if Task 5 has budget; otherwise defer to follow-up issue.
+  - Acceptance: Visual QA via `/browse` — click toggle, see flag persist after reload; backend sees `trainable=1` in DB.
+
+- [ ] **Task 6 — Train workbench page** (sigint-web/frontend/src/pages/train.tsx)
+  - New route `/train`. Hash router entry.
+  - Four sequential cards: Stats → Export → Fine-tune → Evaluate (link to `/train/evaluate`).
+  - Stats card renders counts from `GET /api/train/stats` with a "Refresh" button.
+  - Export card has an "Export now" button and reports counts.
+  - Fine-tune card: form (base model dropdown from `/api/models`, output-name text, optional advanced JSON), Start button; shows live status via WS events; surfaces errors inline. Disables while another job is running (DEC-P26-008).
+  - Jobs mini-table at the bottom showing the last 5 jobs with status + duration; click-through to `/train/jobs/:id`.
+  - Acceptance: Visual QA end-to-end with mock `finetune_command`; progress bar updates on WS heartbeat; completed job flips card to "Done" with output path.
+
+- [ ] **Task 7 — Evaluation diff page + promotion + rollback UI** (sigint-web/frontend/src/pages/evaluate.tsx, pages/models.tsx)
+  - New route `/train/evaluate?base=&candidate=`. Selectors pre-populated when navigated from a completed job.
+  - Renders base/candidate header row; per-metric row (tool_accuracy, argument_match); Δ column with green/red coloring and explicit + or – sign.
+  - "Promote candidate" button opens `ApprovalModal` showing old→new, eval summary, optional `force` checkbox for the min_eval_examples gate. On confirm, calls `api.model.promote`. On rollback-history row: "Rollback" button opens `ApprovalModal` with reversed direction.
+  - Extend `/models` page (or add `/train/promote`) to show the current active model prominently and a promotion-history table (DEC-P26-006).
+  - Acceptance: Visual QA — evaluate + promote + rollback round-trip via browser; the same `ApprovalModal` shell used for tool approvals renders here; denied promote has no side effect.
+
+- [ ] **Task 8 — User docs + e2e test + shared-helper landing** (README/USER_GUIDE, tests, DECISIONS.md)
+  - Add "Fine-tuning from the Web UI" section to USER_GUIDE.md with the four screenshots (harvest, workbench, evaluate, promote modal).
+  - Add `crates/sigint-web/tests/train_flow.rs` integration test: harvest → export → mock-finetune → evaluate with MockProvider → promote → rollback, all via `oneshot` HTTP requests. Asserts terminal state matches CLI round-trip.
+  - Add a `/browse`-driven e2e that exercises the same flow visually (runs against a spawned server).
+  - Append DEC-P26-* entries to DECISIONS.md with cross-references to the CLI-side DEC-P24-004/005/008 they wrap.
+  - Update `@decision` annotations in `sigint-web/src/routes.rs`, frontend pages, and any new shared `promotion.rs` module.
+  - Acceptance: integration test green in CI; USER_GUIDE section renders correctly; DECISIONS.md reflects the new decisions.
+
+### Risks
+
+1. **Long-running job leaks if the web server restarts mid-fine-tune.** The spawned `tokio::process::Command` is tied to the server's lifetime — a server restart orphans the child process. Mitigation: on startup, reconcile `jobs.json` entries that are `running` but whose PID is absent, mark them `failed` with an explanatory note; surface in the UI. Document restart behavior in USER_GUIDE. Severity: medium.
+2. **Stdout flooding overwhelms the WebSocket bus.** Chatty trainers (unsloth) can emit hundreds of lines per second; forwarding all of that as `TrainingJobProgress` can starve scan events. Mitigation: per-job rate-limit the heartbeat (default 1/sec or every N KB); store the full stdout to a file (`jobs/<id>.stdout`) for the drawer; the WS only carries the tail. Severity: medium.
+3. **Config rewrite races between CLI and web.** If the CLI calls `sigint model promote` while the web UI also posts to `POST /api/model/promote`, two processes could contend on `config.toml`. Mitigation: advisory file lock (`fs2::FileExt::try_lock_exclusive`) around the atomic rewrite; second caller receives `409 Conflict` or waits. The shared helper (Task 3) is the single place to add this. Severity: low-medium.
+4. **Browser operator force-promotes below eval threshold without reading the warning.** Destructive UX risk — the modal's `force` checkbox could be clicked reflexively. Mitigation: warning banner inside the modal with exact number ("Only 12 evaluation examples — below the 50-sample threshold. Model quality is not guaranteed."); `force` defaults unchecked; requires two distinct clicks (check, then Promote). Severity: medium.
+5. **WebSocket lag during concurrent scan + training.** With the broadcast bus shared, heavy scan activity could delay training progress events and vice versa. Mitigation: confirm the bus capacity (currently broadcast channel; audit during Task 2); if insufficient, either bump capacity or split into two channels. Severity: low.
+6. **PII leakage via `stdout_tail` on the jobs drawer.** The trainer might echo redacted-but-still-identifying strings (IP blocks, hostnames). Mitigation: pipe trainer stdout through `sigint-core::redact::scrub` (Phase 25 P3a) before storing or sending to the browser. Severity: medium — regulatory if not addressed.
+7. **Trainer command injection via output-name parameter.** If the frontend lets the user pass `output_name` that gets interpolated into `SIGINT_OUTPUT_PATH`, a crafted value could escape the path. Mitigation: server-side validation — `output_name` must match `[a-zA-Z0-9_.-]{1,64}`; rejected names return 400. Severity: medium — attacker-controllable if the web UI is exposed.
+8. **Evaluation runs blocking the event loop.** `run_comparison` loops over the test set doing LLM calls; if spawned on the main handler's task, the response hangs. Mitigation: same pattern as Task 1 — return `202` with eval_id immediately, run on a spawned task with progress events. Severity: low — well-understood pattern.
+
+### Worktree Strategy
+
+- Branch: `feature/phase26-finetune-ui`
+- Worktree: `.claude/worktrees/phase26-finetune-ui`
+- Implementer sequence:
+  - Wave 1 (backend foundations, parallel): Task 1 (REST routes) and Task 2 (events) — independent enough to share a single worktree, commit atomically, or split into sub-branches.
+  - Wave 2 (backend extension): Task 3 (evaluate + promote + rollback, depends on shared promotion helper from Task 1).
+  - Wave 3 (frontend wiring, parallel): Task 4 (types/api.ts) gates Tasks 5–7; Tasks 5, 6, 7 can be parallelized as sub-worktrees once Task 4 lands.
+  - Wave 4: Task 8 (docs + e2e + DECISIONS) — serialized last to capture the final state.
+- Merge to main only after all eight tasks pass cargo tests, `npm run build` is clean, and the `/browse` e2e demonstrates the full loop. Guardian PRs the phase plan update (this section) as a separate doc-only commit before implementation begins.
+
 ---
 
 ## References
