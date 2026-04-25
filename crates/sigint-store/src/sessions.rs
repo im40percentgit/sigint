@@ -39,7 +39,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id, trainable
                      FROM sessions WHERE id = ?1",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -61,7 +61,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id, trainable
                      FROM sessions ORDER BY created_at DESC",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -172,7 +172,7 @@ impl Database {
         self.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id
+                    "SELECT id, name, target, created_at, updated_at, parent_session_id, campaign_id, trainable
                      FROM sessions WHERE trainable = 1 ORDER BY created_at DESC",
                 )
                 .map_err(|e| Error::Database(e.to_string()))?;
@@ -214,6 +214,9 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
     let campaign_id: Option<String> = row
         .get("campaign_id")
         .map_err(|e| Error::Database(e.to_string()))?;
+    // trainable is a SQLite INTEGER (0/1); default to false if column absent
+    // (backward-compat with any query that does not SELECT trainable).
+    let trainable_int: i64 = row.get("trainable").unwrap_or(0);
 
     let id = Uuid::parse_str(&id_str)
         .map_err(|e| Error::Database(format!("Invalid UUID '{}': {}", id_str, e)))?;
@@ -232,6 +235,7 @@ pub(crate) fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, Error> 
         updated_at,
         parent_session_id: parent_session_id.and_then(|s| Uuid::parse_str(&s).ok()),
         campaign_id: campaign_id.and_then(|s| Uuid::parse_str(&s).ok()),
+        trainable: trainable_int != 0,
     })
 }
 

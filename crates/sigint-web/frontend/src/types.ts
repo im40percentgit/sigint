@@ -23,6 +23,11 @@ export interface Session {
   status: "active" | "completed" | "failed";
   finding_count: number;
   asset_count: number;
+  /**
+   * Whether this session is opted into fine-tune training harvest.
+   * Defaults to false. Set via POST /api/train/harvest/:id (DEC-P24-002).
+   */
+  trainable: boolean;
 }
 
 export interface Finding {

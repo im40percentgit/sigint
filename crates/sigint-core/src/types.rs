@@ -29,6 +29,10 @@ pub struct Session {
     pub parent_session_id: Option<Uuid>,
     /// When set, this session belongs to a multi-target campaign (DEC-CAMPAIGN-002).
     pub campaign_id: Option<Uuid>,
+    /// Whether this session has been opted into the fine-tune training pool
+    /// (DEC-P24-002). Defaults to false; set via `POST /api/train/harvest/:id`.
+    #[serde(default)]
+    pub trainable: bool,
 }
 
 impl Session {
@@ -42,6 +46,7 @@ impl Session {
             updated_at: now,
             parent_session_id: None,
             campaign_id: None,
+            trainable: false,
         }
     }
 
