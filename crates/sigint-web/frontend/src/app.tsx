@@ -23,6 +23,7 @@ import { wsManager } from "./ws";
 import { Dashboard } from "./pages/Dashboard";
 import { NewScan } from "./pages/NewScan";
 import { ScanLive } from "./pages/ScanLive";
+import { Sessions } from "./pages/Sessions";
 import { SessionDetail } from "./pages/SessionDetail";
 import { ReportViewer } from "./pages/ReportViewer";
 import { FindingsDetail } from "./pages/FindingsDetail";
@@ -64,7 +65,7 @@ function resolveRoute(hash: string): Route {
     return { name: "Scan", component: <ScanLive scanId={id} /> };
   }
   if (h2 === "sessions") {
-    return { name: "Sessions", component: <Placeholder name="Sessions" /> };
+    return { name: "Sessions", component: <Sessions /> };
   }
   if (h2.startsWith("sessions/")) {
     const rest = h2.slice(9); // strip "sessions/"

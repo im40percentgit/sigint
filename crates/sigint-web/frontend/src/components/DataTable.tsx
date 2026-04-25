@@ -20,6 +20,8 @@ import { useState } from "preact/hooks";
 export interface Column<T> {
   key: keyof T & string;
   label: string;
+  /** Optional tooltip shown on the column header <th>. */
+  headerTitle?: string;
   render?: (value: T[keyof T], row: T) => h.JSX.Element;
 }
 
@@ -31,7 +33,7 @@ interface DataTableProps<T> {
 
 type SortDir = "asc" | "desc";
 
-export function DataTable<T extends Record<string, unknown>>({
+export function DataTable<T extends object>({
   columns,
   data,
   onRowClick,
@@ -69,6 +71,7 @@ export function DataTable<T extends Record<string, unknown>>({
               <th
                 key={col.key}
                 onClick={() => handleHeaderClick(col.key)}
+                title={col.headerTitle}
                 aria-sort={
                   sortKey === col.key
                     ? sortDir === "asc" ? "ascending" : "descending"
