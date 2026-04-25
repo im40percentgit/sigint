@@ -740,3 +740,158 @@ sigint model rollback
 Reads the last entry from `promotion.log` and restores the previous provider
 and model in `config.toml`. A rollback entry is appended to the log for
 auditability.
+
+---
+
+## Fine-tuning from the Web UI
+
+Phase 26 surfaces the full fine-tuning pipeline as a browser-based workbench.
+Every operation available via `sigint train` and `sigint model` is also available
+from the web UI. The CLI and web UI share the same on-disk state:
+`~/.local/share/sigint/training/` (jobs.json, train.jsonl, test.jsonl,
+last_eval.json, promotion.log). There is no synchronisation step — changes made
+via one interface are immediately visible to the other.
+
+### Authentication
+
+The web UI uses the same Bearer token as the REST API. Set
+`[web].api_key` in `config.toml` and pass it via the browser's Bearer header,
+or log in through the `/login` page if your deployment has that route enabled.
+See the Phase 25 authentication documentation for full details.
+
+### Step 1 — Mark sessions for harvest
+
+Navigate to **`/sessions`**.
+
+The sessions table has a **Harvest** column. Clicking the toggle in that column
+flips `trainable = 1` on the session (a second click reverts it). The toggle
+matches the behaviour of `sigint train harvest <session_id>`.
+
+> **PII warning (also shown as a column tooltip):** Training data is derived
+> from your engagement logs. These logs may contain sensitive target information
+> (IP addresses, hostnames, credentials, tool output). Review all data before
+> fine-tuning or sharing the resulting adapter. You are responsible for ensuring
+> you have the right to use the data.
+
+### Step 2 — Open the Training Workbench
+
+Navigate to **`/train`**.
+
+The workbench has four cards arranged vertically:
+
+| Card | What it does |
+|------|-------------|
+| **Stats** | Shows `total_examples`, `trainable_sessions`, `total_sessions`. Refreshes on page load. |
+| **Export** | Runs `POST /api/train/export`. Returns paths and train/test counts. |
+| **Fine-tune** | Configures and launches a training job via `POST /api/train/finetune`. |
+| **Evaluate** | Links to `/train/evaluate` to compare base vs. candidate. |
+
+#### Stats card
+
+Displays the current harvest inventory: how many sessions are marked trainable
+and how many training examples they contain. If `total_examples` is below the
+`min_eval_examples` threshold (default: 50), the Promote button on the Evaluate
+page will require the force checkbox.
+
+#### Export card
+
+Click **Export** to write `train.jsonl` and `test.jsonl` to
+`~/.local/share/sigint/training/`. The card shows the file paths and
+example counts after the export completes. This is equivalent to
+`sigint train export`.
+
+#### Fine-tune card
+
+Fill in:
+- **Base model** — Ollama tag of the model to fine-tune (e.g. `llama3:8b`).
+- **Output name** — identifier for the adapter (e.g. `ft-v1`). The output file
+  will be written to `~/.local/share/sigint/training/<output-name>`.
+
+Click **Start fine-tune**. The handler launches the command configured in
+`[train].finetune_command` in `config.toml` (cross-reference the Phase 24
+fine-tuning documentation for command examples using unsloth, axolotl, or MLX).
+
+**Progress UX:** The server emits WebSocket events for the job lifecycle:
+
+| Event | Meaning |
+|-------|---------|
+| `TrainingJobStarted` | Job accepted; job_id assigned. |
+| `TrainingJobProgress` | Periodic progress lines from the trainer's stdout. Note: individual line events are deferred pending issue #21. An elapsed-time counter is shown as a fallback while the job is running. |
+| `TrainingJobCompleted` | Exit code 0; output file written. |
+| `TrainingJobFailed` | Non-zero exit; error message shown. |
+
+If you navigate away and return, the jobs list under the Fine-tune card shows
+all historical jobs (from `jobs.json`) with their terminal status.
+
+### Step 3 — Evaluate
+
+Click **Go to Evaluate** in the Evaluate card, or navigate directly to:
+
+```
+/train/evaluate?base=<base-tag>&candidate=<candidate-tag>
+```
+
+The page runs `POST /api/train/evaluate` and subscribes to
+`EvaluationStarted` / `EvaluationProgress` / `EvaluationCompleted` WebSocket
+events. When complete, a diff table shows:
+
+| Column | Content |
+|--------|---------|
+| Metric | `tool_accuracy`, `argument_match` |
+| Base | Score for the base model |
+| Candidate | Score for the candidate |
+| Δ | Delta, coloured green (improvement) or red (regression) |
+
+The evaluation result is saved to `last_eval.json` in the training directory.
+This file is read by the promote handler to enforce the `min_eval_examples` gate.
+
+If you navigate to `/train/evaluate` without query parameters, the page shows
+text inputs where you can enter base and candidate tags manually, then click
+**Run Evaluation**.
+
+### Step 4 — Promote
+
+On the Evaluate page, click **Promote candidate** once the evaluation is complete.
+
+An **ApprovalModal** opens, showing the candidate tag and the evaluation summary.
+Confirm the promotion by clicking **Promote** in the modal.
+
+**Force-promote flow:** If the evaluation used fewer than `min_eval_examples`
+examples (default: 50), the Promote button is still shown but the modal
+displays a warning and requires you to check the **Force promote** checkbox
+before the button becomes active. This mirrors the `--force` flag on the CLI.
+
+A successful promotion:
+1. Atomically rewrites `config.toml` to set `[llm].model` to the new adapter path.
+2. Saves `config.toml.bak` as a rollback point.
+3. Appends a `promote` entry to `promotion.log`.
+
+### Step 5 — View promotion history and rollback
+
+Navigate to **`/models`**.
+
+The page shows the full promotion history read from `promotion.log`. Each entry
+displays the action (`promote` or `rollback`), old/new provider and model, and
+timestamp.
+
+To revert to the previous model, click **Rollback** on the most recent `promote`
+entry. This calls `POST /api/model/rollback`, which reads the last entry from
+`promotion.log` and restores the previous provider and model in `config.toml`.
+A `rollback` entry is appended to `promotion.log`.
+
+### Shared state with the CLI
+
+The web UI and CLI share all training artefacts via the filesystem:
+
+| File | Written by | Read by |
+|------|-----------|---------|
+| `~/.local/share/sigint/training/jobs.json` | finetune (CLI + web) | jobs list (CLI + web) |
+| `~/.local/share/sigint/training/train.jsonl` | export (CLI + web) | finetune (CLI + web) |
+| `~/.local/share/sigint/training/test.jsonl` | export (CLI + web) | evaluate (CLI + web) |
+| `~/.local/share/sigint/training/last_eval.json` | evaluate (CLI + web) | promote gate (CLI + web) |
+| `~/.config/sigint/config.toml` | promote/rollback (CLI + web) | all components |
+| `~/.config/sigint/promotion.log` | promote/rollback (CLI + web) | `/models` page, rollback |
+
+You can mix CLI and web operations freely. For example, run `sigint train export`
+from the terminal, then use the web UI to launch the fine-tune job and monitor
+progress via the workbench — or vice versa.
