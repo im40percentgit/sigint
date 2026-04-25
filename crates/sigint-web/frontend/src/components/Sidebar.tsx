@@ -23,12 +23,14 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { icon: "⊞", label: "Dashboard", href: "#/"         },
-  { icon: "⊕", label: "New Scan",  href: "#/scan/new" },
-  { icon: "≡", label: "Sessions",  href: "#/sessions" },
-  { icon: "⎙", label: "Reports",   href: "#/reports"  },
-  { icon: "⊟", label: "Diff",      href: "#/diff"     },
-  { icon: "⚙", label: "Settings",  href: "#/settings" },
+  { icon: "⊞", label: "Dashboard",  href: "#/"                },
+  { icon: "⊕", label: "New Scan",   href: "#/scan/new"        },
+  { icon: "≡", label: "Sessions",   href: "#/sessions"        },
+  { icon: "⎙", label: "Reports",    href: "#/reports"         },
+  { icon: "⊟", label: "Diff",       href: "#/diff"            },
+  { icon: "◈", label: "Models",     href: "#/models"          },
+  { icon: "≈", label: "Evaluate",   href: "#/train/evaluate"  },
+  { icon: "⚙", label: "Settings",   href: "#/settings"        },
 ];
 
 interface SidebarProps {
