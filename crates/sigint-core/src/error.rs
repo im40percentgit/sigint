@@ -29,6 +29,12 @@ pub enum Error {
     #[error("Sandbox error: {0}")]
     Sandbox(String),
 
+    /// The config file lock is held by another process or concurrent request.
+    ///
+    /// Maps to HTTP 409 Conflict when returned from web handlers.
+    #[error("config.toml is locked by another process — try again shortly")]
+    ConfigLocked,
+
     #[error("{0}")]
     Other(String),
 }
