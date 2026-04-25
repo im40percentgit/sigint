@@ -1330,7 +1330,7 @@ A CSO-mode security audit between Phase 24 and this pass flagged (a) an unauthen
 - Live container verification (no Docker daemon available at P2 merge time; Dockerfile + compose changes verified by static read).
 
 ### Phase 26: Fine-Tune Web UI
-**Status:** planned
+**Status:** completed
 **Branch:** feature/phase26-finetune-ui
 **Decision IDs:** DEC-P26-001, DEC-P26-002, DEC-P26-003, DEC-P26-004, DEC-P26-005, DEC-P26-006, DEC-P26-007, DEC-P26-008
 **Requirements:** REQ-P26-P0-001 through REQ-P26-P0-007, REQ-P26-P1-001, REQ-P26-P1-002, REQ-P26-P2-001, REQ-P26-P2-002
@@ -1418,7 +1418,24 @@ Product value: one-click harvest from the session list, visual progress for fine
 - **DEC-P26-008**: Fine-tune job execution runs in-process on the web server via `tokio::process::Command`, streaming stdout to the event bus as `TrainingJobProgress` heartbeats. Concurrency is capped via a semaphore (`[web.train].max_concurrent_jobs`, default 1). Chosen over a separate trainer daemon (premature; no multi-host deployment), and over in-request blocking (would hang the axum handler for hours). The handler returns `202 Accepted` with the job ID immediately; the task runs to completion on the tokio runtime. A concurrent-job cap reuses the DEC-WEB-RATELIMIT-002 pattern (atomic semaphore try_reserve). — Addresses: REQ-P26-P0-003, REQ-P26-NOGO-004
 
 ### Decision Log
-<!-- Guardian appends here after phase completion -->
+
+| ID | Date | Decision | Context |
+|----|------|----------|---------|
+| DEC-P26-001 | 2026-04-24 | Long-running job transport = WebSocket event variants | Existing broadcast bus extended with `TrainingJob*`, `Evaluation*`, `Model*` variants. Chosen over SSE (second transport surface) and polling (latency, masks failures). T2 PR #20. |
+| DEC-P26-002 | 2026-04-24 | Job state persistence stays in `~/.local/share/sigint/training/jobs.json` (JSONL) | Not migrated to SQLite. CLI already reads/writes this file (Phase 24); single-operator scale never exceeds a few dozen rows. T1 PR #22. |
+| DEC-P26-003 | 2026-04-24 | Evaluation UI is a dedicated page (`/train/evaluate`), not a modal | Eval is the go/no-go decision point — deserves space, scroll, revisit behavior. T7 PR #27. |
+| DEC-P26-004 | 2026-04-24 | Promote and rollback reuse the existing `ApprovalModal` from Phase 17 | Same UX primitive as tool-call approvals. Extended with backward-compatible optional `warning` + `extraField` props for the force-promote-below-threshold flow. T7 PR #27. |
+| DEC-P26-005 | 2026-04-24 | Config additions scoped to `[web.train]` | UI-only knobs (`max_concurrent_jobs`, `stdout_tail_bytes`, `jobs_page_size`). Existing `[train]` stays single-sourced for CLI. T1 PR #22. |
+| DEC-P26-006 | 2026-04-24 | Promotion history inlined on `/models` | Discoverability — operator browsing models is the audience for "here's what you last switched to." Separate `/settings/promotions` would bury the capability. T7 PR #27. |
+| DEC-P26-007 | 2026-04-24 | WebSocket auth reuses Phase 25 P0 Bearer-subprotocol | No new auth surface. Same middleware gates `/api/train/*` and `/api/model/*` REST routes. T1 PR #22, T3 PR #23. |
+| DEC-P26-008 | 2026-04-24 | Fine-tune jobs run in-process via `tokio::process::Command` | Spawned task with semaphore cap (`[web.train].max_concurrent_jobs`, default 1). Handler returns 202 + job_id immediately. Mirrors DEC-WEB-RATELIMIT-002 semaphore pattern. T1 PR #22. |
+
+#### Follow-Ups (tracked as open issues)
+
+- **Issue #21** — TrainingJobProgress streaming (T1b). The Progress event variant was defined in T2 but is not emitted today. `sigint-train::finetune::run_finetune` uses synchronous `std::process::Command` (after T1 round 5 fix to avoid spawn_blocking deadlock); incremental stdout streaming requires an async finetune runner.
+- **DEC-P26-T6-002** — P1 job-detail drawer in the workbench page. Backend `JobRecord.stdout_tail` field doesn't exist; adding it is a small follow-up.
+- **DEC-P26-T8-001** — `full_loop.rs` integration test skips the evaluate step because `train_run_eval` hardcodes `OllamaProvider::new()`. Threading the provider through `AppState` is an architectural follow-up.
+- **REQ-P26-P1-002** — Bulk-harvest selection bar on the sessions page. DataTable lacks row-selection primitive. Tracked as follow-up against #15.
 
 ### Task Breakdown (8 discrete tasks)
 
