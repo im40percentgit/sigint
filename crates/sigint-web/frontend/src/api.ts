@@ -24,6 +24,12 @@ import type {
   StartScanParams,
   ReportFormat,
   ModelInfo,
+  TrainStats,
+  ExportResult,
+  TrainingJob,
+  EvaluationReport,
+  PromotionEntry,
+  ModelSwapResult,
 } from "./types";
 
 const BASE = "/api";
@@ -149,6 +155,126 @@ export const api = {
     /** List available GGUF models in the server's models directory. */
     list(): Promise<ModelInfo[]> {
       return get<ModelInfo[]>("/models");
+    },
+  },
+
+  /**
+   * Training pipeline endpoints — Phase 26.
+   *
+   * All routes are under `/api/train/*`.  Return types mirror the Rust serde
+   * structs verified against the source; see types.ts for field-level notes.
+   */
+  train: {
+    /**
+     * `POST /api/train/harvest/:id` — opt a session into the training pool.
+     * Returns `{ harvested: true, session_id: string }`.
+     */
+    harvest(sessionId: string): Promise<{ harvested: boolean; session_id: string }> {
+      return post(`/train/harvest/${sessionId}`);
+    },
+
+    /**
+     * `POST /api/train/unharvest/:id` — remove a session from the training pool.
+     * Returns `{ harvested: false, session_id: string }`.
+     */
+    unharvest(sessionId: string): Promise<{ harvested: boolean; session_id: string }> {
+      return post(`/train/unharvest/${sessionId}`);
+    },
+
+    /**
+     * `GET /api/train/stats` — return training dataset counts (no files written).
+     * Returns `TrainStats` (mirrors `TrainStatsResponse` in routes.rs).
+     */
+    stats(): Promise<TrainStats> {
+      return get<TrainStats>("/train/stats");
+    },
+
+    /**
+     * `POST /api/train/export` — extract training data and write JSONL files.
+     * Returns `ExportResult` with paths and sample counts.
+     */
+    export(): Promise<ExportResult> {
+      return post<ExportResult>("/train/export");
+    },
+
+    /**
+     * `POST /api/train/finetune` — start an async fine-tuning job.
+     *
+     * Request body: `{ base_model, output_name }`.
+     * Note: the field is `output_name` (a safe filename token), not `output_path`.
+     * Returns `{ job_id: string }` immediately with `202 Accepted`.
+     */
+    finetune(req: { base_model: string; output_name: string }): Promise<{ job_id: string }> {
+      return post<{ job_id: string }>("/train/finetune", req);
+    },
+
+    /**
+     * `GET /api/train/jobs` — list training job records, newest first.
+     * Supports optional `?page=N&page_size=N` query params (not typed here —
+     * callers may append them manually if needed).
+     */
+    jobs(): Promise<TrainingJob[]> {
+      return get<TrainingJob[]>("/train/jobs");
+    },
+
+    /**
+     * `GET /api/train/jobs/:id` — fetch a single job record by ID.
+     * Returns `TrainingJob` or throws on 404.
+     */
+    job(jobId: string): Promise<TrainingJob> {
+      return get<TrainingJob>(`/train/jobs/${jobId}`);
+    },
+
+    /**
+     * `POST /api/train/evaluate` — start an async A/B evaluation.
+     * Returns `{ eval_id: string }` immediately with `202 Accepted`.
+     */
+    evaluate(req: { base: string; candidate: string }): Promise<{ eval_id: string }> {
+      return post<{ eval_id: string }>("/train/evaluate", req);
+    },
+
+    /**
+     * `GET /api/train/evaluations/last` — fetch the most recent evaluation report.
+     * Returns `EvaluationReport` (mirrors `ComparisonReport` in evaluate.rs).
+     * Throws on 404 if no evaluation has been run yet.
+     */
+    lastEvaluation(): Promise<EvaluationReport> {
+      return get<EvaluationReport>("/train/evaluations/last");
+    },
+  },
+
+  /**
+   * Model promotion/rollback endpoints — Phase 26.
+   *
+   * All routes are under `/api/model/*`.
+   */
+  model: {
+    /**
+     * `POST /api/model/promote` — promote a fine-tuned model to active use.
+     *
+     * Pass `force: true` to skip the P1 gate (min_eval_examples check).
+     * Returns `ModelSwapResult` on success.
+     * Throws 409 if config.toml is locked or the eval gate fails.
+     */
+    promote(req: { tag: string; force: boolean }): Promise<ModelSwapResult> {
+      return post<ModelSwapResult>("/model/promote", req);
+    },
+
+    /**
+     * `POST /api/model/rollback` — revert to the model before the last promotion.
+     * Returns `ModelSwapResult` on success.
+     * Throws 404 if `promotion.log` is empty.
+     */
+    rollback(): Promise<ModelSwapResult> {
+      return post<ModelSwapResult>("/model/rollback");
+    },
+
+    /**
+     * `GET /api/model/promotions` — list all promotion and rollback log entries.
+     * Returns an empty array when no promotions have been made.
+     */
+    promotions(): Promise<PromotionEntry[]> {
+      return get<PromotionEntry[]>("/model/promotions");
     },
   },
 } as const;
