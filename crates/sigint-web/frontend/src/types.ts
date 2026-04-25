@@ -234,6 +234,158 @@ export interface ModelInfo {
   context_length: number | null;
 }
 
+// ── Phase 26: Training REST API types ─────────────────────────────────────
+//
+// These mirror the Rust serde types in crates/sigint-web/src/routes.rs and
+// crates/sigint-train/src/{finetune,promotion,evaluate}.rs.  Field names and
+// types are derived directly from the Rust source, not guessed from the spec.
+//
+// Divergences from the issue spec (T4) that were corrected to match Rust:
+//   - `TrainStats` (spec) → `TrainStats` (kept) but field set matches
+//     `TrainStatsResponse` in routes.rs (adds `trainable_session_count`,
+//     `examples_per_agent`, `examples_per_tool`).
+//   - `TrainingJob.job_id` (spec) → `TrainingJob.id` — `JobRecord` in
+//     finetune.rs uses the field name `id`, not `job_id`.
+//   - `JobStatus` serializes as an internally-tagged object
+//     `{"status":"Running"|"Success"|"Failed"}` per `#[serde(tag="status")]`
+//     in finetune.rs — NOT a flat bare string.
+//   - `PromotionEntry.ts` is an ISO 8601 datetime string (DateTime<Utc>),
+//     not a Unix epoch number.
+//   - `PromotionEntry.eval_result_ref` is `string | undefined` (skip_serializing_if
+//     = Option::is_none in Rust), not a required string.
+//   - Response type for promote/rollback is `ModelSwapResult` (Rust name); the
+//     shape is the same as the spec's `ModelState`.
+//   - `finetune` request body uses `output_name: string` not `output_path`.
+//
+// @decision DEC-P26-T4-001
+// @title TypeScript training types match Rust serde shapes exactly
+// @status accepted
+// @rationale Any divergence between the TS API client and the Rust handler
+// response shape produces silent type unsafety at runtime (no compile error
+// on the caller side when assigning to the wrong field).  All fields were
+// verified against the Rust source before being written here.
+
+/** Inline assessment results snapshot — mirrors SerializableAssessResults. */
+export interface SerializableAssessResults {
+  total_examples: number;
+  correct_tool: number;
+  tool_accuracy: number;
+  argument_exact_match: number;
+  argument_accuracy: number;
+}
+
+/**
+ * Response of `GET /api/train/stats`.
+ * Mirrors `TrainStatsResponse` in routes.rs.
+ * Note: spec called this `TrainStats`; the Rust struct adds
+ * `trainable_session_count`, `examples_per_agent`, `examples_per_tool`.
+ */
+export interface TrainStats {
+  total_examples: number;
+  total_sessions: number;
+  trainable_session_count: number;
+  examples_per_agent: Record<string, number>;
+  examples_per_tool: Record<string, number>;
+}
+
+/**
+ * Response of `POST /api/train/export`.
+ * Mirrors `ExportResult` in routes.rs.
+ */
+export interface ExportResult {
+  train_count: number;
+  test_count: number;
+  train_path: string;
+  test_path: string;
+}
+
+/**
+ * Internally-tagged status for a fine-tuning job.
+ * Rust: `#[serde(tag = "status")]` → serializes as `{"status":"Running"}` etc.
+ * NOT a bare string — the `status` discriminator is a key in the outer object.
+ */
+export type JobStatus = { status: "Running" } | { status: "Success" } | { status: "Failed" };
+
+/**
+ * Convenience type alias for the status discriminator string.
+ * Useful for `switch` exhaustiveness checks.
+ */
+export type JobStatusKind = JobStatus["status"];
+
+/**
+ * A single fine-tuning job record.
+ * Mirrors `JobRecord` in crates/sigint-train/src/finetune.rs.
+ *
+ * Note: the Rust field is `id` (not `job_id` as the spec suggested).
+ * Fields with `#[serde(skip_serializing_if = "Option::is_none")]` are
+ * optional (absent when None) and typed as `... | undefined` here.
+ */
+export interface TrainingJob {
+  id: string;
+  started_at: string;
+  finished_at?: string;
+  command: string;
+  base_model: string;
+  output_path: string;
+  exit_code?: number;
+  /** Internally-tagged: `{"status":"Running"}` | `{"status":"Success"}` | `{"status":"Failed"}` */
+  status: JobStatus;
+  failure_reason?: string;
+}
+
+/**
+ * A/B evaluation comparison report.
+ * Mirrors `ComparisonReport` in crates/sigint-train/src/evaluate.rs.
+ * Returned by `GET /api/train/evaluations/last`.
+ */
+export interface EvaluationReport {
+  base_tag: string;
+  candidate_tag: string;
+  base_results: SerializableAssessResults;
+  candidate_results: SerializableAssessResults;
+  /** candidate.tool_accuracy - base.tool_accuracy (fraction in [-1, 1]). */
+  tool_accuracy_delta: number;
+  /** candidate.argument_accuracy - base.argument_accuracy (fraction in [-1, 1]). */
+  argument_match_delta: number;
+  total_examples: number;
+  evaluated_at: string;
+}
+
+/**
+ * Action type in a promotion log entry.
+ * Rust: `#[serde(rename_all = "lowercase")]` on unit-variant enum
+ * → serializes as `"promote"` or `"rollback"` (bare lowercase string).
+ */
+export type PromotionAction = "promote" | "rollback";
+
+/**
+ * One entry in the append-only `promotion.log`.
+ * Mirrors `PromotionEntry` in crates/sigint-train/src/promotion.rs.
+ *
+ * Note: `ts` is an ISO 8601 datetime string (DateTime<Utc>), not a Unix
+ * epoch number. `eval_result_ref` is absent when the field was None in Rust.
+ */
+export interface PromotionEntry {
+  ts: string;
+  action: PromotionAction;
+  old_provider: string;
+  old_model: string;
+  new_provider: string;
+  new_model: string;
+  eval_result_ref?: string;
+}
+
+/**
+ * Response body for `POST /api/model/promote` and `POST /api/model/rollback`.
+ * Mirrors `ModelSwapResult` in routes.rs (spec called this `ModelState`).
+ */
+export interface ModelSwapResult {
+  old_provider: string;
+  old_model: string;
+  new_provider: string;
+  new_model: string;
+}
+
 // ── API Param Types ────────────────────────────────────────────────────────
 
 export interface StartScanParams {
