@@ -32,6 +32,11 @@
 //! | POST | `/api/train/finetune` | [`routes::train_finetune`] |
 //! | GET | `/api/train/jobs` | [`routes::train_list_jobs`] |
 //! | GET | `/api/train/jobs/{id}` | [`routes::train_get_job`] |
+//! | POST | `/api/train/evaluate` | [`routes::train_run_eval`] |
+//! | GET | `/api/train/evaluations/last` | [`routes::train_last_eval`] |
+//! | POST | `/api/model/promote` | [`routes::model_promote`] |
+//! | POST | `/api/model/rollback` | [`routes::model_rollback`] |
+//! | GET | `/api/model/promotions` | [`routes::model_promotions`] |
 //! | GET | `/ws/events` | [`ws::ws_events`] |
 //!
 //! @decision DEC-WEB-001
@@ -134,6 +139,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/train/finetune", post(routes::train_finetune))
         .route("/api/train/jobs", get(routes::train_list_jobs))
         .route("/api/train/jobs/{id}", get(routes::train_get_job))
+        // Evaluate routes (Phase 26 T3)
+        .route("/api/train/evaluate", post(routes::train_run_eval))
+        .route("/api/train/evaluations/last", get(routes::train_last_eval))
+        // Model swap routes (Phase 26 T3)
+        .route("/api/model/promote", post(routes::model_promote))
+        .route("/api/model/rollback", post(routes::model_rollback))
+        .route("/api/model/promotions", get(routes::model_promotions))
         // WebSocket event bridge
         .route("/ws/events", get(ws::ws_events))
         // Auth middleware (innermost — applied before CORS)

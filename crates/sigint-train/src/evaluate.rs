@@ -105,10 +105,51 @@ pub async fn run_comparison(
     base_tag: &str,
     candidate_tag: &str,
 ) -> Result<ComparisonReport> {
+    run_comparison_with_progress(
+        base,
+        candidate,
+        test_examples,
+        base_tag,
+        candidate_tag,
+        |_| {},
+    )
+    .await
+}
+
+/// Run a live A/B comparison with per-example progress callbacks.
+///
+/// This is the full implementation.  `run_comparison` delegates here with a
+/// no-op callback.  Web callers pass a closure that emits
+/// `Event::EvaluationProgress` after each example.
+///
+/// `on_progress(examples_done: usize)` is called after each example pair
+/// (base + candidate) is evaluated.
+///
+/// @decision DEC-P26-001
+/// @title EvaluationProgress emitted per-example via callback — no throttling needed
+/// @status accepted
+/// @rationale `run_comparison` is a pure async tokio loop; each iteration is
+/// one pair of LLM calls (base + candidate).  Emitting one EvaluationProgress
+/// event per iteration is safe — the event bus has a large capacity and eval
+/// sets are small (tens to hundreds of examples, not millions). No rate-limiting
+/// is applied; unlike TrainingJobProgress (which tails a process stdout stream),
+/// EvaluationProgress has a natural upper bound equal to total_examples.
+/// Addresses: REQ-P26-P0-004.
+pub async fn run_comparison_with_progress<F>(
+    base: &dyn LlmProvider,
+    candidate: &dyn LlmProvider,
+    test_examples: &[TrainingExample],
+    base_tag: &str,
+    candidate_tag: &str,
+    on_progress: F,
+) -> Result<ComparisonReport>
+where
+    F: Fn(usize),
+{
     let mut base_preds: Vec<(String, String)> = Vec::with_capacity(test_examples.len());
     let mut cand_preds: Vec<(String, String)> = Vec::with_capacity(test_examples.len());
 
-    for example in test_examples {
+    for (i, example) in test_examples.iter().enumerate() {
         let context = build_context_messages(&example.messages);
 
         // Base provider inference.
@@ -126,6 +167,9 @@ pub async fn run_comparison(
             .await
             .context("candidate provider chat() failed")?;
         cand_preds.push(extract_first_tool_call(&cand_resp.tool_calls));
+
+        // Emit progress after each example pair.  examples_done is 1-based.
+        on_progress(i + 1);
     }
 
     let base_results = assess::assess(&base_preds, test_examples);

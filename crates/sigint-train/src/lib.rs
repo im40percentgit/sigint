@@ -31,6 +31,7 @@ pub mod extract;
 pub mod finetune;
 pub mod format;
 pub mod modelfile;
+pub mod promotion;
 pub mod split;
 pub mod stats;
 
