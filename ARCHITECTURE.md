@@ -385,6 +385,46 @@ sigint model rollback               # revert via promotion.log last entry
 `--force` to override. This prevents promoting models evaluated on too few
 examples to be statistically meaningful.
 
+### Web UI closed loop (Phase 26)
+
+Phase 26 adds a browser-based workbench that exposes the same fine-tuning
+pipeline via REST + WebSocket. The CLI and web UI share all training state
+through the filesystem — there is no synchronisation layer.
+
+```
+Browser                  Axum routes             sigint-train / sigint-core
+──────                   ───────────             ──────────────────────────
+/sessions toggle     →   POST /api/train/harvest/<id>  →  db.set_trainable()
+/train Export        →   POST /api/train/export         →  extract_all() + split
+/train Fine-tune     →   POST /api/train/finetune        →  run_finetune()
+/train/evaluate      →   POST /api/train/evaluate        →  run_evaluation()
+/models Promote      →   POST /api/model/promote         →  promote_model()
+/models Rollback     →   POST /api/model/rollback        →  rollback_model()
+```
+
+**Shared filesystem state** — identical files read and written by both paths:
+
+| File | Location |
+|------|---------|
+| `jobs.json` | `~/.local/share/sigint/training/jobs.json` |
+| `train.jsonl` / `test.jsonl` | `~/.local/share/sigint/training/` |
+| `last_eval.json` | `~/.local/share/sigint/training/last_eval.json` |
+| `config.toml` | `~/.config/sigint/config.toml` |
+| `promotion.log` | `~/.config/sigint/promotion.log` |
+
+**Job state in jobs.json, not SQLite** (DEC-P26-002): the web routes read
+`jobs.json` directly. Migrating to SQLite would require CLI-side changes with
+no benefit at single-operator scale; the file is append-only and crash-safe.
+
+**WebSocket progress events**: `TrainingJobStarted`, `TrainingJobProgress`
+(deferred — issue #21), `TrainingJobCompleted`, `TrainingJobFailed`,
+`EvaluationStarted`, `EvaluationProgress`, `EvaluationCompleted`,
+`ModelPromoted`, `ModelRolledBack` — all fanned via the `EventBus` broadcast
+channel to subscribed browser clients (DEC-P26-001).
+
+**Auth**: all `/api/train/*` and `/api/model/*` routes sit behind the Phase 25
+Bearer middleware. No new auth surface is introduced (DEC-P26-007).
+
 ---
 
 ## Adding a New Tool

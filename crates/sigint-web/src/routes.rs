@@ -628,6 +628,14 @@ fn resolve_job_dir(config: &sigint_core::Config) -> std::path::PathBuf {
 /// Reads `jobs.json` (JSONL) from the training directory. Returns an empty
 /// array when no jobs have been run yet. Pagination defaults to
 /// `config.web.train.jobs_page_size` items per page.
+///
+/// @decision DEC-P26-002
+/// @title Job state stays in jobs.json (JSONL), not SQLite
+/// @status accepted
+/// @rationale The Phase 24 CLI reads/writes jobs.json; migrating to SQLite
+/// would require a CLI-side schema change with no operational benefit at
+/// single-operator scale. The file is append-only and crash-safe. SQLite is
+/// appropriate if cross-query or multi-user views are needed in a future phase.
 pub async fn train_list_jobs(
     State(state): State<AppState>,
     Query(params): Query<JobsQuery>,
