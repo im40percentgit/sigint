@@ -21,3 +21,19 @@ msfinstall
 # Plugin artifacts
 .superpowers/
 docs/superpowers/
+
+# Hook session state — internal, never commit
+.claude/.subagent-tracker-*
+.claude/.session-changes*
+.claude/.session-start-epoch
+.claude/.audit-log
+.claude/.lint-cache
+.claude/.lint-breaker
+.claude/.statusline-cache
+.claude/.proof-status
+.claude/.test-status
+.claude/.plan-churn-cache
+.claude/.plan-drift
+.claude/.agent-findings
+.claude/.subagent-finalize-*
+.claude/.prompt-count-*
