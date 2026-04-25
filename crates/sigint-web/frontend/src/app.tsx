@@ -30,6 +30,7 @@ import { FindingsDetail } from "./pages/FindingsDetail";
 import { AttackPlanView } from "./pages/AttackPlanView";
 import { ScanDiff } from "./pages/ScanDiff";
 import { Settings } from "./pages/Settings";
+import { Train } from "./pages/Train";
 
 // ── Fallback placeholder for unimplemented pages ───────────────────────────
 
@@ -96,6 +97,16 @@ function resolveRoute(hash: string): Route {
   }
   if (h2 === "settings") {
     return { name: "Settings", component: <Settings /> };
+  }
+  if (h2 === "train" || h2.startsWith("train/")) {
+    // Note: /train/evaluate and /train/jobs/:id are handled by T7 or future tasks.
+    // For now, all /train/* paths render the Train workbench unless T7 adds sub-routes.
+    if (h2 === "train") {
+      return { name: "Training Workbench", component: <Train /> };
+    }
+    // Sub-routes owned by T7 (evaluate) or future tasks (job detail).
+    // Render the Train workbench for the root; sub-paths fall through to placeholder.
+    return { name: "Training Workbench", component: <Placeholder name={h2} /> };
   }
 
   return { name: "Not Found", component: <Placeholder name="Not Found" /> };
