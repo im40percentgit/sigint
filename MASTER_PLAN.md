@@ -1431,6 +1431,7 @@ Product value: one-click harvest from the session list, visual progress for fine
 | DEC-P26-008 | 2026-04-24 | Fine-tune jobs run in-process via `tokio::process::Command` | Spawned task with semaphore cap (`[web.train].max_concurrent_jobs`, default 1). Handler returns 202 + job_id immediately. Mirrors DEC-WEB-RATELIMIT-002 semaphore pattern. T1 PR #22. |
 | DEC-P26-T1B-001 | 2026-04-27 | Streaming runner is a separate async fn (`run_finetune_streaming`); sync `run_finetune` unchanged | CLI path has no progress consumer; forcing tokio there adds unnecessary surface area. Shared persist + audit helpers avoid duplication. Closes issue #21. |
 | DEC-P26-T1B-002 | 2026-04-27 | Progress events rate-limited to ≤1/sec; tail bounded by `stdout_tail_bytes` (default 2048) | Plan Risk #2: line-rate trainer output would flood the broadcast bus. ≤1/sec is fast enough for human UX, safe for bus health. Implemented as `last_emitted: Instant` guard inside `run_finetune_streaming`. |
+| DEC-P26-T1B-003 | 2026-04-27 | `job_id` plumbed in by caller; not generated inside `run_finetune` / `run_finetune_streaming` | Previously each function called `Uuid::new_v4()` internally, so the UUID returned in the 202 body never matched the persisted `JobRecord`. `GET /api/train/jobs/<id>` always 404'd for web clients. Caller (web handler or CLI) now passes its own `job_id` string, closing issue #35. |
 
 #### Follow-Ups (tracked as open issues)
 
