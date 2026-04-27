@@ -1602,6 +1602,45 @@ Product value: one-click harvest from the session list, visual progress for fine
 
 ---
 
+## Phase 27 Candidate Themes (Planning Notes)
+
+> Drafted 2026-04-27 after Phase 26 close. **Not yet committed to.** The user picks one (or none) and the Planner then writes the formal Phase 27 spec with REQ-IDs, decisions, and tasks. Each theme below is a problem statement + product value + rough effort, not a design. Listed in no particular order.
+
+### Theme A — Plugin System Maturation
+**Problem.** Phase 22 shipped a compile-time plugin system: external crates implement `sigint_tools::Tool`, register via `register_tool!()`, and the binary collects them at link time. It works, but plugins are first-party-only — distribution, versioning, signing, and runtime safety are absent. A pentester who writes a custom recon tool today can scaffold a workspace member, but cannot share it without their consumers rebuilding from source. The compile-time model also means risky/experimental tools cannot be loaded without re-deploying the binary.
+
+**Product value.** A real plugin ecosystem makes sigint extensible by the community: package format (`.sgnt-pack`?), a local registry, signing for trust, and a sandboxed loader for runtime ACL enforcement. This is the single biggest lever for the project's reach — most pentest workflows are bespoke, and a plugin marketplace would let domain experts contribute without touching the core.
+
+**Rough effort.** Large (3-5 weeks). Touches packaging, signing, sandboxing, CLI, web UI for plugin management, and probably Phase 25-style security hardening for untrusted plugin code.
+
+### Theme B — Continuous Evaluation & Model Drift Detection
+**Problem.** Phase 24-26 turned fine-tuning into an interactive, web-driven workflow — a user can promote a model and roll back if it underperforms. But once a model is promoted, it stays promoted. There's no scheduled re-evaluation, no regression alarm if the model's accuracy on new corpora drifts, and no longitudinal tracking of which model version produced which findings. Operators learn about drift through field surprises, not telemetry.
+
+**Product value.** Continuous evaluation closes the observability loop on the fine-tune work that just shipped. Schedule nightly assessments against the most recent harvested sessions, alert on accuracy regression beyond a threshold, dashboard the trend, and keep enough history to attribute findings to model versions. This makes promoted models trustworthy over time, not just at promotion-day.
+
+**Rough effort.** Medium (2-3 weeks). Mostly built on top of existing primitives (`evaluate.rs`, training stats, event bus). New surface: a scheduler, a metrics-history table, and a web dashboard tab. No new crates likely.
+
+### Theme C — Closed-Loop Scan Automation (Continuous Surface Reassessment)
+**Problem.** Phases 11-12 built finding intelligence and Phase 4 added attack-surface mapping, but every scan today is operator-initiated. A real engagement involves baselining a target, checking back periodically for new exposures, and re-running narrow scans against changed assets. Today this requires the operator to remember, decide, and re-launch — there's no "watch this target and tell me when something changes" mode.
+
+**Product value.** A continuous-surface mode would turn sigint from a point-in-time tool into a persistent surveillance asset for engagement. Schedule recurring recon, diff against the last baseline, automatically queue narrow follow-up scans for changed assets, and surface only the deltas to the operator. Bridges sigint into the "exposure management" category that Wiz/Censys occupy commercially.
+
+**Rough effort.** Medium-Large (3-4 weeks). Builds on Phase 7's diff infrastructure and Phase 9's resume mode. New surface: a scheduling layer, automated triggers, a "watching" status concept, and notification channels (event bus → email/Slack/webhook).
+
+### Other themes worth naming (not fully scoped here)
+- **Multi-engagement / multi-tenant** — separate engagements isolated, role-based access, shared model artifacts. Architecturally invasive. Probably premature without paying customers.
+- **Mobile / responsive web UI** — Phase 26 explicitly declined this. Worth revisiting if remote/field operators turn out to be a real audience.
+- **Cloud-native / Kubernetes deployment** — helm chart, k8s manifests, multi-host operation. Phase 20 shipped Docker; this is the next deployment-maturity step.
+- **Report generation V2** — interactive HTML reports with embedded evidence, redaction controls, client-deliverable polish.
+
+### Small follow-ups (not phase-worthy)
+These are housekeeping items that can each be a one-shot ticket without a full phase:
+- Issue **#39** — `train_run_eval` factory error emits wrong event variant (P1 bug).
+- **DEC-P26-T6-002** — P1 job-detail drawer (needs `JobRecord.stdout_tail` field).
+- **REQ-P26-P1-002** — bulk-harvest selection bar (needs DataTable row-selection primitive).
+
+---
+
 ## References
 
 - Ollama /api/chat docs: https://github.com/ollama/ollama/blob/main/docs/api.md
