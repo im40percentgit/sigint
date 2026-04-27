@@ -42,6 +42,13 @@ fn make_train_semaphore(config: &Config) -> Arc<Semaphore> {
     Arc::new(Semaphore::new(permits))
 }
 
+/// Default mock provider factory for tests — returns an empty `MockProvider`.
+fn mock_factory() -> sigint_web::ProviderFactory {
+    std::sync::Arc::new(|_cfg| {
+        Ok(Box::new(sigint_llm::MockProvider::new()) as Box<dyn sigint_llm::LlmProvider>)
+    })
+}
+
 /// Start a real Axum server on a random port. Returns the bound address.
 ///
 /// Creates a fresh in-memory SQLite database for test isolation. The server
@@ -64,6 +71,7 @@ pub async fn start_server() -> SocketAddr {
         approval_registry,
         scan_service,
         api_key: E2E_API_KEY.to_string(),
+        provider_factory: mock_factory(),
     };
 
     let app = sigint_web::create_router(state);
@@ -103,6 +111,7 @@ pub async fn start_server_with_db() -> (SocketAddr, Arc<Database>) {
         approval_registry,
         scan_service,
         api_key: E2E_API_KEY.to_string(),
+        provider_factory: mock_factory(),
     };
 
     let app = sigint_web::create_router(state);
@@ -143,6 +152,7 @@ pub async fn start_server_with_mock(responses: Vec<MockResponse>) -> (SocketAddr
         approval_registry,
         scan_service,
         api_key: E2E_API_KEY.to_string(),
+        provider_factory: mock_factory(),
     };
 
     let app = sigint_web::create_router(state);

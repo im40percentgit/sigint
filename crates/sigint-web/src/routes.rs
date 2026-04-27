@@ -941,6 +941,7 @@ pub async fn train_run_eval(
     let bus = state.event_bus.clone();
     let config = state.config.clone();
     let eval_id_task = eval_id.clone();
+    let provider_factory = state.provider_factory.clone();
 
     // @decision DEC-P26-001 — EvaluationStarted emitted before spawn (mirrors TrainingJobStarted)
     bus.emit(sigint_core::event::Event::EvaluationStarted {
@@ -951,25 +952,45 @@ pub async fn train_run_eval(
     });
 
     tokio::spawn(async move {
-        use sigint_llm::OllamaProvider;
         use sigint_train::evaluate::{persist_last_eval, run_comparison_with_progress};
 
         // Build one provider per model tag, both using the configured base_url
         // and temperature but with their respective model tags overridden.
+        // @decision DEC-P26-T8-001 — use provider_factory from AppState (not hardcoded OllamaProvider)
         let mut base_llm_cfg = config.llm.clone();
         base_llm_cfg.model = base_tag.clone();
         let mut cand_llm_cfg = config.llm.clone();
         cand_llm_cfg.model = candidate_tag.clone();
 
-        let base_provider = OllamaProvider::from_config(&base_llm_cfg);
-        let cand_provider = OllamaProvider::from_config(&cand_llm_cfg);
+        let base_provider = match provider_factory(&base_llm_cfg) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(eval_id = %eval_id_task, error = %e, "failed to build base provider");
+                bus.emit(sigint_core::event::Event::TrainingJobFailed {
+                    job_id: eval_id_task,
+                    error: format!("failed to build base provider: {e}"),
+                });
+                return;
+            }
+        };
+        let cand_provider = match provider_factory(&cand_llm_cfg) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(eval_id = %eval_id_task, error = %e, "failed to build candidate provider");
+                bus.emit(sigint_core::event::Event::TrainingJobFailed {
+                    job_id: eval_id_task,
+                    error: format!("failed to build candidate provider: {e}"),
+                });
+                return;
+            }
+        };
 
         let bus_progress = bus.clone();
         let eval_id_progress = eval_id_task.clone();
 
         let result = run_comparison_with_progress(
-            &base_provider,
-            &cand_provider,
+            &*base_provider,
+            &*cand_provider,
             &test_examples,
             &base_tag,
             &candidate_tag,
@@ -1307,6 +1328,16 @@ mod tests {
         format!("Bearer {}", TEST_KEY)
     }
 
+    /// Build a no-op `ProviderFactory` that returns an empty `MockProvider`.
+    ///
+    /// Used in every test AppState so `train_run_eval` can be exercised without
+    /// a live Ollama backend. @decision DEC-P26-T8-001
+    fn mock_provider_factory() -> crate::state::ProviderFactory {
+        std::sync::Arc::new(|_cfg| {
+            Ok(Box::new(sigint_llm::MockProvider::new()) as Box<dyn sigint_llm::LlmProvider>)
+        })
+    }
+
     fn test_state() -> AppState {
         let db = Database::open_in_memory().expect("in-memory db");
         let event_bus = EventBus::new();
@@ -1331,6 +1362,7 @@ mod tests {
             scan_service,
             api_key: "test-key".to_string(),
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
+            provider_factory: mock_provider_factory(),
         }
     }
 
@@ -1641,6 +1673,7 @@ mod tests {
             scan_service,
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(train_permits)),
+            provider_factory: mock_provider_factory(),
         };
 
         let app = create_router(state);
@@ -1870,6 +1903,7 @@ mod tests {
             scan_service,
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(_train_permits)),
+            provider_factory: mock_provider_factory(),
         };
 
         // First request — must not be rejected by rate limit (429).
@@ -1918,6 +1952,7 @@ mod tests {
             scan_service,
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(_train_permits)),
+            provider_factory: mock_provider_factory(),
         };
 
         use tower::Service;
@@ -1983,6 +2018,7 @@ mod tests {
             scan_service,
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(_train_permits)),
+            provider_factory: mock_provider_factory(),
         };
 
         use tower::Service;
@@ -2060,6 +2096,7 @@ mod tests {
             scan_service,
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
+            provider_factory: mock_provider_factory(),
         }
     }
 
@@ -2084,6 +2121,7 @@ mod tests {
                 scan_service: scan_service.clone(),
                 api_key: TEST_KEY.to_string(),
                 training_job_semaphore: state.training_job_semaphore.clone(),
+                provider_factory: mock_provider_factory(),
             };
             let app = create_router(state_clone);
             let handle = tokio::spawn(async move {
@@ -2138,6 +2176,7 @@ mod tests {
             scan_service: state.scan_service.clone(),
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: state.training_job_semaphore.clone(),
+            provider_factory: mock_provider_factory(),
         });
         let req = Request::builder()
             .method("POST")
@@ -2164,6 +2203,7 @@ mod tests {
             scan_service: state.scan_service.clone(),
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: state.training_job_semaphore.clone(),
+            provider_factory: mock_provider_factory(),
         });
         let req2 = Request::builder()
             .method("POST")
@@ -2498,6 +2538,7 @@ mod tests {
             scan_service,
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
+            provider_factory: mock_provider_factory(),
         };
         drop(state);
 
@@ -2553,6 +2594,7 @@ mod tests {
             scan_service,
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: semaphore.clone(),
+            provider_factory: mock_provider_factory(),
         };
 
         // Hold the single permit.
@@ -2601,6 +2643,7 @@ mod tests {
             scan_service,
             api_key: TEST_KEY.to_string(),
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(permits)),
+            provider_factory: mock_provider_factory(),
         }
     }
 
@@ -2908,6 +2951,7 @@ mod tests {
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 tokio::sync::Semaphore::MAX_PERMITS,
             )),
+            provider_factory: mock_provider_factory(),
         };
 
         let app = create_router(state);
@@ -3018,6 +3062,7 @@ mod tests {
             training_job_semaphore: Arc::new(tokio::sync::Semaphore::new(
                 tokio::sync::Semaphore::MAX_PERMITS,
             )),
+            provider_factory: mock_provider_factory(),
         };
 
         let app = create_router(state);

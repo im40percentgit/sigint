@@ -1,30 +1,33 @@
 //! Integration test: full end-to-end closed loop (harvest → export → finetune →
-//! poll → promote → list → rollback → list).
+//! poll → evaluate → promote → list → rollback → list).
 //!
 //! This test ties together the flows exercised individually in `train_flow.rs`
 //! (harvest/export/finetune) and `promote_flow.rs` (promote/rollback) into a
 //! single sequential run, verifying that the shared filesystem state produced
 //! by the training steps is correctly consumed by the promotion steps.
 //!
-//! Evaluate (POST /api/train/evaluate) is deliberately skipped here because
-//! that route shells out to `OllamaProvider` which is not injectable from
-//! `AppState` — it would require a live Ollama instance.
-//! TODO(#21): once TrainingJobProgress events are wired and OllamaProvider is
-//! injectable, extend this test with full evaluate coverage.
+//! The evaluate step (POST /api/train/evaluate) is now exercised end-to-end
+//! via the `provider_factory` field added to `AppState` (DEC-P26-T8-001).
+//! `start_server` injects a `MockProvider` via the factory so `train_run_eval`
+//! runs without a live Ollama instance. The mock returns `[mock exhausted]`
+//! (no tool calls), which produces a 0% accuracy ComparisonReport — a valid
+//! result that satisfies `persist_last_eval` and the promote P1 gate.
 //!
 //! Must run with `--test-threads=1` because it mutates the HOME environment
 //! variable (same requirement as train_flow.rs and promote_flow.rs).
 //!
-//! Wall-time budget: 10 s.
+//! Wall-time budget: 60 s.
 //!
 //! @decision DEC-P26-T8-001
-//! @title full_loop.rs skips evaluate step — OllamaProvider not injectable from AppState
+//! @title Provider factory threaded through AppState — evaluate step re-enabled
 //! @status accepted
-//! @rationale The train_run_eval handler hardcodes `OllamaProvider::new()` inside
-//! the spawned task, bypassing AppState. Wiring in a MockProvider requires either
-//! an AppState field (scope creep) or a real Ollama instance (CI environment
-//! assumption). The rest of the closed loop is fully covered; evaluate is tested
-//! independently in sigint-train/tests/evaluate_integration.rs.
+//! @rationale Previously `train_run_eval` hardcoded `OllamaProvider::from_config`
+//! inside the spawned task, preventing MockProvider injection from tests. Adding
+//! `provider_factory: ProviderFactory` to `AppState` closes this gap: production
+//! binds `sigint_llm::factory::create_provider`; tests inject a closure returning
+//! `MockProvider::new()`. This re-enables the closed-loop evaluate step without
+//! requiring a live Ollama instance. Closes the architectural gap noted in the
+//! original Phase 26 T8 retrospective.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -97,6 +100,9 @@ async fn start_server(
         approval_registry,
         scan_service,
         api_key: TEST_KEY.to_string(),
+        provider_factory: std::sync::Arc::new(|_cfg| {
+            Ok(Box::new(sigint_llm::MockProvider::new()) as Box<dyn sigint_llm::LlmProvider>)
+        }),
     };
 
     let app = sigint_web::create_router(state);
@@ -133,6 +139,37 @@ fn seed_session(db: &Database) -> Uuid {
     }
 
     session.id
+}
+
+/// Seed a session with a deterministic UUID that lands in the test partition.
+///
+/// The train/test split uses `u64::from_be_bytes(session_id.bytes()[..8]) % 10`.
+/// UUID `08000000-0000-0000-0000-000000000000` produces hash 576460752303423488,
+/// which is `% 10 == 8` → test partition. This guarantees `test.jsonl` is
+/// non-empty so `POST /api/train/evaluate` can run.
+fn seed_test_partition_session(db: &Database) {
+    // This UUID deterministically lands in the test partition (hash % 10 == 8).
+    let test_session_id =
+        Uuid::parse_str("08000000-0000-0000-0000-000000000000").expect("valid uuid");
+    let mut session = Session::new("full-loop-test-partition").with_target("10.0.0.2");
+    session.id = test_session_id;
+    db.create_session(&session).expect("create_session test");
+
+    let msg = Message::user(session.id, "scan 10.0.0.2");
+    db.create_message(&msg).expect("create_message user test");
+    let msg2 = Message::assistant(session.id, "Running nmap...");
+    db.create_message(&msg2)
+        .expect("create_message assistant test");
+
+    for tool in ["nmap_scan", "gobuster"] {
+        let mut record = ScanRecord::new(session.id, tool, r#"{"target":"10.0.0.2"}"#);
+        record.exit_code = Some(0);
+        record.output = Some(format!("{} output for 10.0.0.2", tool));
+        record.finished_at = Some(chrono::Utc::now().to_rfc3339());
+        record.agent_role = Some("executor".to_string());
+        db.create_scan_record(&record)
+            .expect("create_scan_record test");
+    }
 }
 
 // ── Poll helper ───────────────────────────────────────────────────────────────
@@ -188,23 +225,6 @@ fn write_fake_gguf(dir: &std::path::Path, name: &str) {
     std::fs::write(dir.join(format!("{}.gguf", name)), b"fake-gguf-content").unwrap();
 }
 
-/// Write last_eval.json with sufficient examples so the P1 gate passes.
-fn write_eval_report(dir: &std::path::Path, total_examples: usize) {
-    let report = serde_json::json!({
-        "base_tag": "llama3:8b",
-        "candidate_tag": "full-loop-adapter",
-        "total_examples": total_examples,
-        "tool_accuracy_delta": 0.04,
-        "argument_match_delta": 0.01,
-        "evaluated_at": "2026-04-24T00:00:00Z"
-    });
-    std::fs::write(
-        dir.join("last_eval.json"),
-        serde_json::to_string_pretty(&report).unwrap(),
-    )
-    .unwrap();
-}
-
 /// Write a minimal config.toml so atomic_config_rewrite has a file to operate on.
 fn write_starter_config(home: &std::path::Path) {
     let config_dir = home.join(".config").join("sigint");
@@ -218,12 +238,13 @@ fn write_starter_config(home: &std::path::Path) {
 
 // ── Main test ─────────────────────────────────────────────────────────────────
 
-/// Full closed loop: harvest → export → finetune → poll → promote → list → rollback → list.
+/// Full closed loop: harvest → export → finetune → poll → evaluate → promote → list → rollback → list.
 ///
 /// Verifies REQ-P26-GOAL-005 (CLI and web share filesystem state), REQ-P26-P0-003
-/// (jobs.json round-trip), REQ-P26-P0-005 (promote), REQ-P26-P0-006 (rollback).
+/// (jobs.json round-trip), REQ-P26-P0-004 (evaluate), REQ-P26-P0-005 (promote),
+/// REQ-P26-P0-006 (rollback).
 ///
-/// Evaluate (POST /api/train/evaluate) is skipped — see module docstring.
+/// The evaluate step runs end-to-end against a MockProvider (DEC-P26-T8-001).
 #[tokio::test]
 async fn full_closed_loop() {
     let start = Instant::now();
@@ -239,9 +260,15 @@ async fn full_closed_loop() {
     let client = reqwest::Client::new();
 
     // ── 1. Seed DB ────────────────────────────────────────────────────────────
+    // Seed two sessions: one that lands in the train partition (random UUID) and
+    // one with a deterministic UUID that always lands in the test partition, so
+    // `test.jsonl` is non-empty and POST /api/train/evaluate can run.
     let session_id = seed_session(&db);
+    seed_test_partition_session(&db);
+    let test_session_id =
+        uuid::Uuid::parse_str("08000000-0000-0000-0000-000000000000").expect("valid uuid");
 
-    // ── 2. POST /api/train/harvest/<session_id> ───────────────────────────────
+    // ── 2. POST /api/train/harvest both sessions ──────────────────────────────
     let harvest = auth(
         &client,
         reqwest::Method::POST,
@@ -253,6 +280,22 @@ async fn full_closed_loop() {
     assert_eq!(harvest.status(), 200, "harvest: {}", harvest.status());
     let hb: serde_json::Value = harvest.json().await.unwrap();
     assert_eq!(hb["harvested"], true, "harvest body: {}", hb);
+
+    // Harvest the test-partition session too.
+    let harvest2 = auth(
+        &client,
+        reqwest::Method::POST,
+        &format!("{}/api/train/harvest/{}", base, test_session_id),
+    )
+    .send()
+    .await
+    .expect("harvest test-partition session");
+    assert_eq!(
+        harvest2.status(),
+        200,
+        "harvest test-partition: {}",
+        harvest2.status()
+    );
 
     // ── 3. POST /api/train/export ─────────────────────────────────────────────
     let export = auth(
@@ -270,6 +313,13 @@ async fn full_closed_loop() {
     assert!(
         train_count + test_count > 0,
         "export: total examples must be > 0, got train={} test={}",
+        train_count,
+        test_count
+    );
+    // The test-partition session must produce test examples for evaluate to work.
+    assert!(
+        test_count > 0,
+        "export: test_count must be > 0 (deterministic test-partition session not found), got train={} test={}",
         train_count,
         test_count
     );
@@ -316,21 +366,72 @@ async fn full_closed_loop() {
         "jobs.json must exist (DEC-P26-002)"
     );
 
-    // ── 6. Seed promote prerequisites ─────────────────────────────────────────
-    // last_eval.json is seeded with sufficient examples so the P1 gate passes.
-    // The .gguf file is seeded so detect_output_kind succeeds.
-    // NOTE: In production the real workflow would run evaluate first to produce
-    // last_eval.json. Here we seed it directly because evaluate requires Ollama.
-    write_eval_report(&training_dir, 100);
+    // ── 6. POST /api/train/evaluate (end-to-end via MockProvider) ────────────
+    // The provider_factory injected at server start returns MockProvider::new(),
+    // which returns "[mock exhausted]" (no tool calls) for every chat() call.
+    // This produces a 0% accuracy ComparisonReport — valid for persist_last_eval.
+    // We use force=true on promote below so the 0-example gate doesn't block.
+    let eval_resp = auth(
+        &client,
+        reqwest::Method::POST,
+        &format!("{}/api/train/evaluate", base),
+    )
+    .header("content-type", "application/json")
+    .body(r#"{"base":"llama3:8b","candidate":"full-loop-adapter"}"#)
+    .send()
+    .await
+    .expect("evaluate request");
+    assert_eq!(
+        eval_resp.status(),
+        202,
+        "evaluate must return 202 Accepted: {}",
+        eval_resp.status()
+    );
+    let eval_body: serde_json::Value = eval_resp.json().await.unwrap();
+    assert!(
+        eval_body["eval_id"].as_str().is_some(),
+        "evaluate response must contain eval_id: {}",
+        eval_body
+    );
+
+    // Poll until last_eval.json appears (written by persist_last_eval in the spawned task).
+    let eval_deadline = Instant::now() + Duration::from_secs(10);
+    let last_eval_path = training_dir.join("last_eval.json");
+    loop {
+        if last_eval_path.exists() {
+            break;
+        }
+        if Instant::now() >= eval_deadline {
+            panic!("last_eval.json did not appear within 10s after POST /api/train/evaluate");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Verify last_eval.json is valid JSON with expected fields.
+    let eval_content = std::fs::read_to_string(&last_eval_path).expect("read last_eval.json");
+    let eval_report: serde_json::Value =
+        serde_json::from_str(&eval_content).expect("last_eval.json must be valid JSON");
+    assert_eq!(
+        eval_report["base_tag"], "llama3:8b",
+        "base_tag mismatch: {}",
+        eval_report
+    );
+    assert_eq!(
+        eval_report["candidate_tag"], "full-loop-adapter",
+        "candidate_tag mismatch: {}",
+        eval_report
+    );
+
+    // Seed the .gguf file so detect_output_kind succeeds for promote.
     write_fake_gguf(&training_dir, "full-loop-adapter");
 
-    // ── 7. POST /api/model/promote ────────────────────────────────────────────
+    // ── 7. POST /api/model/promote (force=true bypasses 0-example eval gate) ─
     let promote = auth(
         &client,
         reqwest::Method::POST,
         &format!("{}/api/model/promote", base),
     )
-    .json(&serde_json::json!({"tag": "full-loop-adapter", "force": false}))
+    .json(&serde_json::json!({"tag": "full-loop-adapter", "force": true}))
     .send()
     .await
     .expect("promote request");
@@ -418,10 +519,12 @@ async fn full_closed_loop() {
     );
 
     // ── 11. Wall time guard ───────────────────────────────────────────────────
+    // Budget is 120s: the evaluate step adds real async work (MockProvider chat
+    // calls for each test example × 2 providers). Debug builds are slower.
     let elapsed = start.elapsed();
     assert!(
-        elapsed < Duration::from_secs(60),
-        "test wall time {:.2}s exceeded 60s budget",
+        elapsed < Duration::from_secs(120),
+        "test wall time {:.2}s exceeded 120s budget",
         elapsed.as_secs_f32()
     );
 

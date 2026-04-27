@@ -114,6 +114,9 @@ async fn start_server_with_train_config(
         approval_registry,
         scan_service,
         api_key: TEST_KEY.to_string(),
+        provider_factory: std::sync::Arc::new(|_cfg| {
+            Ok(Box::new(sigint_llm::MockProvider::new()) as Box<dyn sigint_llm::LlmProvider>)
+        }),
     };
 
     let app = sigint_web::create_router(state);
@@ -186,6 +189,9 @@ async fn start_server_with_event_bus(
         approval_registry,
         scan_service,
         api_key: TEST_KEY.to_string(),
+        provider_factory: std::sync::Arc::new(|_cfg| {
+            Ok(Box::new(sigint_llm::MockProvider::new()) as Box<dyn sigint_llm::LlmProvider>)
+        }),
     };
 
     let app = sigint_web::create_router(state);
