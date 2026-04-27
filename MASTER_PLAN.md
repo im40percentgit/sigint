@@ -1429,10 +1429,12 @@ Product value: one-click harvest from the session list, visual progress for fine
 | DEC-P26-006 | 2026-04-24 | Promotion history inlined on `/models` | Discoverability — operator browsing models is the audience for "here's what you last switched to." Separate `/settings/promotions` would bury the capability. T7 PR #27. |
 | DEC-P26-007 | 2026-04-24 | WebSocket auth reuses Phase 25 P0 Bearer-subprotocol | No new auth surface. Same middleware gates `/api/train/*` and `/api/model/*` REST routes. T1 PR #22, T3 PR #23. |
 | DEC-P26-008 | 2026-04-24 | Fine-tune jobs run in-process via `tokio::process::Command` | Spawned task with semaphore cap (`[web.train].max_concurrent_jobs`, default 1). Handler returns 202 + job_id immediately. Mirrors DEC-WEB-RATELIMIT-002 semaphore pattern. T1 PR #22. |
+| DEC-P26-T1B-001 | 2026-04-27 | Streaming runner is a separate async fn (`run_finetune_streaming`); sync `run_finetune` unchanged | CLI path has no progress consumer; forcing tokio there adds unnecessary surface area. Shared persist + audit helpers avoid duplication. Closes issue #21. |
+| DEC-P26-T1B-002 | 2026-04-27 | Progress events rate-limited to ≤1/sec; tail bounded by `stdout_tail_bytes` (default 2048) | Plan Risk #2: line-rate trainer output would flood the broadcast bus. ≤1/sec is fast enough for human UX, safe for bus health. Implemented as `last_emitted: Instant` guard inside `run_finetune_streaming`. |
 
 #### Follow-Ups (tracked as open issues)
 
-- **Issue #21** — TrainingJobProgress streaming (T1b). The Progress event variant was defined in T2 but is not emitted today. `sigint-train::finetune::run_finetune` uses synchronous `std::process::Command` (after T1 round 5 fix to avoid spawn_blocking deadlock); incremental stdout streaming requires an async finetune runner.
+- **Issue #21** — CLOSED. TrainingJobProgress streaming implemented in T1b: `run_finetune_streaming` async function added to `sigint-train::finetune`, web handler wired to call it. DEC-P26-T1B-001 and DEC-P26-T1B-002 record the design choices.
 - **DEC-P26-T6-002** — P1 job-detail drawer in the workbench page. Backend `JobRecord.stdout_tail` field doesn't exist; adding it is a small follow-up.
 - **DEC-P26-T8-001** — `full_loop.rs` integration test skips the evaluate step because `train_run_eval` hardcodes `OllamaProvider::new()`. Threading the provider through `AppState` is an architectural follow-up.
 - **REQ-P26-P1-002** — Bulk-harvest selection bar on the sessions page. DataTable lacks row-selection primitive. Tracked as follow-up against #15.
