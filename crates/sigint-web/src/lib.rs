@@ -74,9 +74,10 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use sigint_agents::ScanService;
 use sigint_core::{event::EventBus, ApprovalRegistry, Config};
+use sigint_llm::factory::create_provider;
 use sigint_store::Database;
 
-pub use state::AppState;
+pub use state::{AppState, ProviderFactory};
 
 /// Build the semaphore permit count from `max_concurrent_jobs`.
 ///
@@ -253,6 +254,7 @@ pub async fn serve_with_shutdown(
         scan_service,
         api_key,
         training_job_semaphore,
+        provider_factory: std::sync::Arc::new(create_provider),
     };
     let app = create_router(state);
     let listener = tokio::net::TcpListener::bind(addr)
@@ -302,6 +304,9 @@ mod tests {
             scan_service,
             api_key: TEST_TOKEN.to_string(),
             training_job_semaphore: Arc::new(Semaphore::new(permits)),
+            provider_factory: std::sync::Arc::new(|_cfg| {
+                Ok(Box::new(sigint_llm::MockProvider::new()) as Box<dyn sigint_llm::LlmProvider>)
+            }),
         }
     }
 

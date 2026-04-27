@@ -16,10 +16,29 @@
 //! the dependency injection explicit and avoids global state.
 
 use sigint_agents::ScanService;
-use sigint_core::{event::EventBus, ApprovalRegistry, Config};
+use sigint_core::{config::LlmConfig, event::EventBus, ApprovalRegistry, Config};
+use sigint_llm::LlmProvider;
 use sigint_store::Database;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
+
+/// A factory closure that builds an `LlmProvider` from an `LlmConfig`.
+///
+/// Production binds this to [`sigint_llm::factory::create_provider`]. Tests
+/// inject a closure that returns a `MockProvider` configured with the right
+/// responses, so the `train_run_eval` handler can be exercised end-to-end
+/// without a live Ollama backend.
+///
+/// @decision DEC-P26-T8-001
+/// @title Provider construction is plumbed via AppState factory
+/// @status accepted
+/// @rationale `train_run_eval` previously hardcoded `OllamaProvider::from_config`,
+/// preventing closed-loop e2e tests (e.g. `full_loop.rs`) from exercising the
+/// evaluate step. Storing the factory in `AppState` lets tests inject a mock
+/// without touching production code paths. Closes the architectural gap noted
+/// in `full_loop.rs` lines 9-27.
+pub type ProviderFactory =
+    Arc<dyn Fn(&LlmConfig) -> Result<Box<dyn LlmProvider>, sigint_core::Error> + Send + Sync>;
 
 /// Axum application state shared across all request handlers.
 ///
@@ -64,4 +83,13 @@ pub struct AppState {
     /// is released on completion or panic. Default cap = 1 (single-operator
     /// GPU avoids contention). Addresses: REQ-P26-NOGO-004.
     pub training_job_semaphore: Arc<Semaphore>,
+
+    /// Factory that builds an `LlmProvider` from an `LlmConfig`.
+    ///
+    /// In production this delegates to [`sigint_llm::factory::create_provider`].
+    /// Tests inject a closure that returns a `MockProvider` so they can drive
+    /// `train_run_eval` without a live Ollama backend.
+    ///
+    /// See [`ProviderFactory`] for the type alias.
+    pub provider_factory: ProviderFactory,
 }

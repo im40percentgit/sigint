@@ -121,6 +121,9 @@ mod tests {
             scan_service,
             api_key: "test-key".to_string(),
             training_job_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(permits)),
+            provider_factory: std::sync::Arc::new(|_cfg| {
+                Ok(Box::new(sigint_llm::MockProvider::new()) as Box<dyn sigint_llm::LlmProvider>)
+            }),
         }
     }
 
