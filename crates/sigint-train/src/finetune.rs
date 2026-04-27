@@ -735,7 +735,7 @@ mod tests {
         let contents = std::fs::read_to_string(&jobs_file).unwrap();
         let parsed: JobRecord = serde_json::from_str(contents.lines().next().unwrap()).unwrap();
         assert!(
-            matches!(parsed.status, JobStatus::Failed { .. }),
+            matches!(parsed.status, JobStatus::Failed),
             "expected Failed status, got {:?}",
             parsed.status
         );

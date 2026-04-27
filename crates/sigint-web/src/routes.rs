@@ -1300,7 +1300,7 @@ mod tests {
 
     /// Test API key — must match the one set in `test_state().api_key`.
     const TEST_KEY: &str = "test-key";
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Return the `Authorization: Bearer <token>` header value for test requests.
     fn auth_header() -> String {
@@ -2857,7 +2857,7 @@ mod tests {
 
     #[tokio::test]
     async fn model_promote_with_force_skips_p1_gate() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
+        let _env_guard = ENV_LOCK.lock().await;
         let tmp = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let config_path = home
@@ -2966,7 +2966,7 @@ mod tests {
     async fn model_rollback_happy_path() {
         use sigint_train::promotion::{append_promotion_log, PromotionAction, PromotionEntry};
 
-        let _env_guard = ENV_LOCK.lock().unwrap();
+        let _env_guard = ENV_LOCK.lock().await;
         let tmp = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let config_path = home

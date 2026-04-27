@@ -49,10 +49,12 @@ mod tests {
 
     #[test]
     fn print_stats_does_not_panic_with_data() {
-        let mut stats = TrainingStats::default();
-        stats.total_examples = 42;
-        stats.total_sessions = 5;
-        stats.skipped_failures = 3;
+        let mut stats = TrainingStats {
+            total_examples: 42,
+            total_sessions: 5,
+            skipped_failures: 3,
+            ..Default::default()
+        };
         stats.examples_per_agent.insert("executor".to_string(), 30);
         stats
             .examples_per_agent

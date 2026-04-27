@@ -30,7 +30,7 @@ use sigint_web::AppState;
 use tokio::sync::Semaphore;
 
 const TEST_KEY: &str = "promote-flow-test-token";
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn auth(client: &reqwest::Client, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
     client.request(method, url).bearer_auth(TEST_KEY)
@@ -116,7 +116,7 @@ fn write_starter_config(home: &std::path::Path) {
 /// promotion log JSONL serde shape (action is a flat lowercase string).
 #[tokio::test]
 async fn promote_rollback_round_trip() {
-    let _env_guard = ENV_LOCK.lock().unwrap();
+    let _env_guard = ENV_LOCK.lock().await;
     let start = Instant::now();
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -257,7 +257,7 @@ async fn promote_rollback_round_trip() {
 /// force=false + 1 example (below min 50) -> 409.
 #[tokio::test]
 async fn p1_gate_blocks_below_threshold() {
-    let _env_guard = ENV_LOCK.lock().unwrap();
+    let _env_guard = ENV_LOCK.lock().await;
     let tmp = tempfile::tempdir().expect("tempdir");
     write_report(tmp.path(), 1);
     write_fake_gguf(tmp.path(), "ft-v1");
@@ -294,7 +294,7 @@ async fn p1_gate_blocks_below_threshold() {
 /// force=true + 1 example -> not 409 (gate bypassed).
 #[tokio::test]
 async fn p1_gate_bypassed_with_force() {
-    let _env_guard = ENV_LOCK.lock().unwrap();
+    let _env_guard = ENV_LOCK.lock().await;
     let tmp = tempfile::tempdir().expect("tempdir");
     write_report(tmp.path(), 1);
     write_fake_gguf(tmp.path(), "ft-v1");
