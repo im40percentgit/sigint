@@ -295,8 +295,13 @@ pub async fn run_finetune(
     let job_dir = cfg.job_dir.clone().map(Ok).unwrap_or_else(training_dir)?;
     let output_path = job_dir.join(&output);
 
-    let record = finetune::run_finetune(cfg, &base, &output_path, &train_jsonl, &test_jsonl)
-        .map_err(|e| Error::Other(format!("fine-tune failed: {}", e)))?;
+    // Generate the job_id here so the CLI and persist layer share the same UUID.
+    // This mirrors the web handler pattern (DEC-P26-T1B-003) — the caller owns
+    // the job_id, run_finetune no longer generates its own.
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let record =
+        finetune::run_finetune(cfg, &job_id, &base, &output_path, &train_jsonl, &test_jsonl)
+            .map_err(|e| Error::Other(format!("fine-tune failed: {}", e)))?;
 
     let duration = record
         .finished_at

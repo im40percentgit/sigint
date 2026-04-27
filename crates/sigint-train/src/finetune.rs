@@ -61,7 +61,6 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncBufReadExt;
-use uuid::Uuid;
 
 use sigint_core::config::TrainConfig;
 
@@ -196,8 +195,20 @@ fn split_command(s: &str) -> Result<Vec<String>> {
 /// @title Fine-tune backend is an external shell-out command
 /// @status accepted
 /// @rationale See module-level doc and config.rs for full rationale.
+///
+/// @decision DEC-P26-T1B-003
+/// @title job_id is plumbed in by caller, not generated internally
+/// @status accepted
+/// @rationale The caller (web handler or CLI) owns the job_id so it is the same
+/// value used in the 202 Accepted response body, the persisted JobRecord, and any
+/// event-bus events. Previously run_finetune and run_finetune_streaming each called
+/// Uuid::new_v4() internally, producing a UUID that was never surfaced to the
+/// caller — making GET /api/train/jobs/<id> always 404 for web clients. Plumbing
+/// job_id in as a parameter closes issue #35 and keeps the CLI path deterministic
+/// (it inlines Uuid::new_v4() immediately before the call).
 pub fn run_finetune(
     cfg: &TrainConfig,
+    job_id: &str,
     base_model: &str,
     output_path: &Path,
     train_jsonl: &Path,
@@ -225,7 +236,7 @@ pub fn run_finetune(
     std::fs::create_dir_all(&job_dir)
         .with_context(|| format!("failed to create job_dir: {}", job_dir.display()))?;
 
-    let job_id = Uuid::new_v4().to_string();
+    let job_id = job_id.to_string();
     let started_at = Utc::now();
 
     // Audit trail: echo the full resolved command to stderr before exec.
@@ -332,8 +343,15 @@ pub fn run_finetune(
 /// @title Rate-limit progress to ≤1 event/sec
 /// @status accepted
 /// @rationale See module-level doc for full rationale.
+///
+/// @decision DEC-P26-T1B-003
+/// @title job_id is plumbed in by caller, not generated internally
+/// @status accepted
+/// @rationale See run_finetune annotation for full rationale. Closes issue #35.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_finetune_streaming(
     cfg: &TrainConfig,
+    job_id: &str,
     base_model: &str,
     output_path: &Path,
     train_jsonl: &Path,
@@ -360,7 +378,7 @@ pub async fn run_finetune_streaming(
     std::fs::create_dir_all(&job_dir)
         .with_context(|| format!("failed to create job_dir: {}", job_dir.display()))?;
 
-    let job_id = Uuid::new_v4().to_string();
+    let job_id = job_id.to_string();
     let started_at = Utc::now();
 
     // Audit trail — matches the sync path (Risk #4).
@@ -634,7 +652,8 @@ mod tests {
         let out = tmp.path().join("output");
         let train = tmp.path().join("train.jsonl");
         let test = tmp.path().join("test.jsonl");
-        let err = run_finetune(&cfg, "llama3.2:8b", &out, &train, &test).unwrap_err();
+        let err =
+            run_finetune(&cfg, "test-job-id", "llama3.2:8b", &out, &train, &test).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("finetune_command") && msg.contains("DEC-P24-001"),
@@ -661,13 +680,20 @@ mod tests {
             job_dir: Some(job_dir.clone()),
         };
 
-        let rec = run_finetune(&cfg, "llama3.2:8b", &out, &train, &test).expect("should succeed");
+        let fixed_job_id = "happy-path-job-id-001";
+        let rec = run_finetune(&cfg, fixed_job_id, "llama3.2:8b", &out, &train, &test)
+            .expect("should succeed");
         assert!(matches!(rec.status, JobStatus::Success));
         assert_eq!(rec.exit_code, Some(0));
         assert_eq!(rec.base_model, "llama3.2:8b");
         assert_eq!(rec.output_path, out);
         assert!(out.exists(), "output file must exist");
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "line1\nline2\n");
+        // Caller-supplied job_id must be stored in the record (DEC-P26-T1B-003).
+        assert_eq!(
+            rec.id, fixed_job_id,
+            "record id must match caller-supplied job_id"
+        );
 
         let jobs_file = job_dir.join("jobs.json");
         assert!(jobs_file.exists());
@@ -698,7 +724,7 @@ mod tests {
             job_dir: Some(job_dir.clone()),
         };
 
-        let err = run_finetune(&cfg, "base", &out, &train, &test).unwrap_err();
+        let err = run_finetune(&cfg, "fail-job-id-001", "base", &out, &train, &test).unwrap_err();
         assert!(
             err.to_string().contains("exited with status"),
             "expected exit-status err, got: {}",
@@ -791,6 +817,7 @@ mod tests {
 
         let rec = run_finetune_streaming(
             &cfg,
+            "streaming-job-id-001",
             "llama3.2:8b",
             &out,
             &train,
@@ -853,9 +880,18 @@ mod tests {
         let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count_clone = count.clone();
 
-        run_finetune_streaming(&cfg, "base", &out, &train, &test, 2048, move |_tail| {
-            count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        })
+        run_finetune_streaming(
+            &cfg,
+            "rate-limit-job-id-001",
+            "base",
+            &out,
+            &train,
+            &test,
+            2048,
+            move |_tail| {
+                count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            },
+        )
         .await
         .expect("should succeed");
 
@@ -899,9 +935,18 @@ mod tests {
         let tails_clone = tails.clone();
         let cap = 2048usize;
 
-        run_finetune_streaming(&cfg, "base", &out, &train, &test, cap, move |tail| {
-            tails_clone.lock().unwrap().push(tail);
-        })
+        run_finetune_streaming(
+            &cfg,
+            "tail-bounded-job-id-001",
+            "base",
+            &out,
+            &train,
+            &test,
+            cap,
+            move |tail| {
+                tails_clone.lock().unwrap().push(tail);
+            },
+        )
         .await
         .expect("should succeed");
 
@@ -943,9 +988,18 @@ mod tests {
             job_dir: Some(job_dir.clone()),
         };
 
-        let err = run_finetune_streaming(&cfg, "base", &out, &train, &test, 2048, |_| {})
-            .await
-            .unwrap_err();
+        let err = run_finetune_streaming(
+            &cfg,
+            "streaming-fail-job-id-001",
+            "base",
+            &out,
+            &train,
+            &test,
+            2048,
+            |_| {},
+        )
+        .await
+        .unwrap_err();
 
         assert!(
             err.to_string().contains("exited with status"),

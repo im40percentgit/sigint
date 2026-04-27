@@ -818,6 +818,7 @@ pub async fn train_finetune(
         // @rationale Plan Risk #2: event-bus flooding from line-rate trainer output.
         let result = sigint_train::finetune::run_finetune_streaming(
             &cfg,
+            &job_id_inner,
             &base_model,
             &output_path,
             &train_jsonl,
