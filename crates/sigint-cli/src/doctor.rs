@@ -798,8 +798,9 @@ mod tests {
     /// three checks must pass without a models_dir or promotion.log present.
     #[test]
     fn check_train_config_default_config_passes() {
-        let cfg = make_train_config_default();
+        let mut cfg = make_train_config_default();
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        cfg.llm.models_dir = Some(tmp.path().join("models").to_string_lossy().into_owned());
         // No promotion.log exists — passes silently.
         let results = check_train_config(&cfg, tmp.path());
         // Two results: finetune_command (optional, pass) + models_dir writable.
