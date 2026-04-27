@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use sigint_llm::mock::MockResponse;
 
-use sigint_e2e::{base_url, start_server_with_mock};
+use sigint_e2e::{auth, base_url, start_server_with_mock};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -51,8 +51,7 @@ async fn wait_for_terminal_status(
 ) -> String {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let resp = client
-            .get(format!("{}/api/scan/{}/status", base, session_id))
+        let resp = auth(client.get(format!("{}/api/scan/{}/status", base, session_id)))
             .send()
             .await
             .expect("status request failed");
@@ -91,8 +90,7 @@ async fn scan_with_mock_provider_completes() {
     let base = base_url(addr);
 
     // Start the scan.
-    let resp = client
-        .post(format!("{}/api/scan", base))
+    let resp = auth(client.post(format!("{}/api/scan", base)))
         .json(&serde_json::json!({"target": "mock.example.com"}))
         .send()
         .await
@@ -116,8 +114,7 @@ async fn scan_with_mock_provider_completes() {
     );
 
     // The session must appear in /api/sessions.
-    let sessions_resp = client
-        .get(format!("{}/api/sessions", base))
+    let sessions_resp = auth(client.get(format!("{}/api/sessions", base)))
         .send()
         .await
         .unwrap();
@@ -162,8 +159,7 @@ async fn scan_with_mock_tool_calls() {
     let client = reqwest::Client::new();
     let base = base_url(addr);
 
-    let resp = client
-        .post(format!("{}/api/scan", base))
+    let resp = auth(client.post(format!("{}/api/scan", base)))
         .json(&serde_json::json!({"target": "toolcall.example.com"}))
         .send()
         .await
@@ -196,8 +192,7 @@ async fn scan_cancel_stops_execution() {
     let base = base_url(addr);
 
     // Start the scan.
-    let resp = client
-        .post(format!("{}/api/scan", base))
+    let resp = auth(client.post(format!("{}/api/scan", base)))
         .json(&serde_json::json!({"target": "cancel.example.com"}))
         .send()
         .await
@@ -210,8 +205,7 @@ async fn scan_cancel_stops_execution() {
     // Give the scan a brief moment to start, then cancel it.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let cancel_resp = client
-        .delete(format!("{}/api/scan/{}", base, session_id))
+    let cancel_resp = auth(client.delete(format!("{}/api/scan/{}", base, session_id)))
         .send()
         .await
         .unwrap();
@@ -225,8 +219,7 @@ async fn scan_cancel_stops_execution() {
 
     if cancel_resp.status() == 200 {
         // If we cancelled, the status endpoint should now report cancelled.
-        let status_resp = client
-            .get(format!("{}/api/scan/{}/status", base, session_id))
+        let status_resp = auth(client.get(format!("{}/api/scan/{}/status", base, session_id)))
             .send()
             .await
             .unwrap();
@@ -249,8 +242,7 @@ async fn scan_findings_endpoint_reachable() {
     let client = reqwest::Client::new();
     let base = base_url(addr);
 
-    let resp = client
-        .post(format!("{}/api/scan", base))
+    let resp = auth(client.post(format!("{}/api/scan", base)))
         .json(&serde_json::json!({"target": "findings.example.com"}))
         .send()
         .await
@@ -269,8 +261,7 @@ async fn scan_findings_endpoint_reachable() {
     );
 
     // /api/sessions/{id}/findings must return 200 with a JSON array.
-    let findings_resp = client
-        .get(format!("{}/api/sessions/{}/findings", base, session_id))
+    let findings_resp = auth(client.get(format!("{}/api/sessions/{}/findings", base, session_id)))
         .send()
         .await
         .unwrap();

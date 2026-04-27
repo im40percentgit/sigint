@@ -20,7 +20,7 @@
 //!
 //! Browsers cannot set arbitrary headers on `new WebSocket()`. The middleware
 //! therefore also accepts the token via:
-//! - `?token=<token>` query parameter (simplest — works from any JS client)
+//! - `?token=<token>` query parameter on `/ws/events` only
 //! - `Sec-WebSocket-Protocol: bearer.<token>` subprotocol header
 //!
 //! @decision DEC-WEB-AUTH-001
@@ -182,7 +182,7 @@ fn api_key_path() -> PathBuf {
 ///
 /// Token is accepted via:
 /// - `Authorization: Bearer <token>` header (preferred)
-/// - `?token=<token>` query parameter (WebSocket JS clients)
+/// - `?token=<token>` query parameter (WebSocket JS clients, `/ws/events` only)
 /// - `Sec-WebSocket-Protocol: bearer.<token>` subprotocol header (WS)
 pub async fn auth_middleware(
     State(api_key): axum::extract::State<Arc<String>>,
@@ -233,14 +233,12 @@ fn extract_token(req: &Request<Body>) -> Option<String> {
         }
     }
 
-    // 2. ?token= query parameter (primary WS path for browser JS clients)
-    if let Some(query) = req.uri().query() {
-        for pair in query.split('&') {
-            if let Some(val) = pair.strip_prefix("token=") {
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            }
+    // 2. ?token= query parameter (primary WS path for browser JS clients).
+    // Restrict this to the WebSocket endpoint so REST tokens are not accepted
+    // through URLs, which are more likely to be logged or copied around.
+    if req.uri().path() == "/ws/events" {
+        if let Some(token) = extract_query_token(req.uri().query()) {
+            return Some(token);
         }
     }
 
@@ -258,6 +256,19 @@ fn extract_token(req: &Request<Body>) -> Option<String> {
         }
     }
 
+    None
+}
+
+fn extract_query_token(query: Option<&str>) -> Option<String> {
+    if let Some(query) = query {
+        for pair in query.split('&') {
+            if let Some(val) = pair.strip_prefix("token=") {
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
     None
 }
 
@@ -372,6 +383,17 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_token_via_query_param_rejected_for_rest() {
+        let app = test_router();
+        let req = Request::builder()
+            .uri(format!("/api/sessions?token={}", TEST_TOKEN))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

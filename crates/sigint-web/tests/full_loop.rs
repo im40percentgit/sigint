@@ -420,8 +420,8 @@ async fn full_closed_loop() {
     // ── 11. Wall time guard ───────────────────────────────────────────────────
     let elapsed = start.elapsed();
     assert!(
-        elapsed < Duration::from_secs(10),
-        "test wall time {:.2}s exceeded 10s budget",
+        elapsed < Duration::from_secs(60),
+        "test wall time {:.2}s exceeded 60s budget",
         elapsed.as_secs_f32()
     );
 

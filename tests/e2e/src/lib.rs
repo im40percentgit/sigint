@@ -25,6 +25,12 @@ use sigint_store::Database;
 use sigint_web::AppState;
 use tokio::sync::Semaphore;
 
+pub const E2E_API_KEY: &str = "e2e-test-token";
+
+pub fn auth(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    req.bearer_auth(E2E_API_KEY)
+}
+
 /// Build a training-job semaphore from a `Config`.
 /// 0 → usize::MAX (cap disabled); otherwise the configured value.
 fn make_train_semaphore(config: &Config) -> Arc<Semaphore> {
@@ -57,7 +63,7 @@ pub async fn start_server() -> SocketAddr {
         config,
         approval_registry,
         scan_service,
-        api_key: "e2e-test-token".to_string(),
+        api_key: E2E_API_KEY.to_string(),
     };
 
     let app = sigint_web::create_router(state);
@@ -96,7 +102,7 @@ pub async fn start_server_with_db() -> (SocketAddr, Arc<Database>) {
         config,
         approval_registry,
         scan_service,
-        api_key: "e2e-test-token".to_string(),
+        api_key: E2E_API_KEY.to_string(),
     };
 
     let app = sigint_web::create_router(state);
@@ -136,7 +142,7 @@ pub async fn start_server_with_mock(responses: Vec<MockResponse>) -> (SocketAddr
         config,
         approval_registry,
         scan_service,
-        api_key: "e2e-test-token".to_string(),
+        api_key: E2E_API_KEY.to_string(),
     };
 
     let app = sigint_web::create_router(state);

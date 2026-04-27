@@ -8,7 +8,7 @@
 //! (all-zeros) is used for "not found" cases to avoid depending on real data.
 //! Bad UUID input tests that the router/extractor returns 404 rather than 500.
 
-use sigint_e2e::{base_url, start_server};
+use sigint_e2e::{auth, base_url, start_server};
 
 #[tokio::test]
 async fn list_sessions_empty() {
@@ -16,7 +16,7 @@ async fn list_sessions_empty() {
     let client = reqwest::Client::new();
     let url = format!("{}/api/sessions", base_url(addr));
 
-    let resp = client.get(&url).send().await.unwrap();
+    let resp = auth(client.get(&url)).send().await.unwrap();
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -33,7 +33,7 @@ async fn get_nonexistent_session_returns_404() {
         base_url(addr)
     );
 
-    let resp = client.get(&url).send().await.unwrap();
+    let resp = auth(client.get(&url)).send().await.unwrap();
     assert_eq!(resp.status(), 404);
 }
 
@@ -43,7 +43,7 @@ async fn get_session_bad_uuid_returns_404() {
     let client = reqwest::Client::new();
     let url = format!("{}/api/sessions/not-a-uuid", base_url(addr));
 
-    let resp = client.get(&url).send().await.unwrap();
+    let resp = auth(client.get(&url)).send().await.unwrap();
     assert_eq!(resp.status(), 404);
 }
 
@@ -56,6 +56,6 @@ async fn delete_nonexistent_session_returns_404() {
         base_url(addr)
     );
 
-    let resp = client.delete(&url).send().await.unwrap();
+    let resp = auth(client.delete(&url)).send().await.unwrap();
     assert_eq!(resp.status(), 404);
 }

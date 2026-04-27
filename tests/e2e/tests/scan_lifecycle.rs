@@ -10,7 +10,7 @@
 //! The cancel test accepts both 200 (cancelled) and 404 (scan failed before cancel)
 //! because in-memory scans against synthetic targets may fail immediately.
 
-use sigint_e2e::{base_url, start_server};
+use sigint_e2e::{auth, base_url, start_server};
 
 /// POST /api/scan returns 201 with a session_id UUID.
 #[tokio::test]
@@ -18,8 +18,7 @@ async fn start_scan_returns_201() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(format!("{}/api/scan", base_url(addr)))
+    let resp = auth(client.post(format!("{}/api/scan", base_url(addr))))
         .json(&serde_json::json!({"target": "test.example.com"}))
         .send()
         .await
@@ -39,8 +38,7 @@ async fn start_scan_empty_target_returns_400() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(format!("{}/api/scan", base_url(addr)))
+    let resp = auth(client.post(format!("{}/api/scan", base_url(addr))))
         .json(&serde_json::json!({"target": ""}))
         .send()
         .await
@@ -55,8 +53,7 @@ async fn scan_status_after_start() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(format!("{}/api/scan", base_url(addr)))
+    let resp = auth(client.post(format!("{}/api/scan", base_url(addr))))
         .json(&serde_json::json!({"target": "lifecycle.test"}))
         .send()
         .await
@@ -64,8 +61,7 @@ async fn scan_status_after_start() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let session_id = body["session_id"].as_str().unwrap();
 
-    let resp = client
-        .get(format!("{}/api/scan/{}/status", base_url(addr), session_id))
+    let resp = auth(client.get(format!("{}/api/scan/{}/status", base_url(addr), session_id)))
         .send()
         .await
         .unwrap();
@@ -86,14 +82,13 @@ async fn scan_status_unknown_returns_404() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .get(format!(
-            "{}/api/scan/00000000-0000-0000-0000-000000000000/status",
-            base_url(addr)
-        ))
-        .send()
-        .await
-        .unwrap();
+    let resp = auth(client.get(format!(
+        "{}/api/scan/00000000-0000-0000-0000-000000000000/status",
+        base_url(addr)
+    )))
+    .send()
+    .await
+    .unwrap();
 
     assert_eq!(resp.status(), 404);
 }
@@ -104,8 +99,7 @@ async fn list_scans_contains_started_scan() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(format!("{}/api/scan", base_url(addr)))
+    let resp = auth(client.post(format!("{}/api/scan", base_url(addr))))
         .json(&serde_json::json!({"target": "list.test"}))
         .send()
         .await
@@ -113,8 +107,7 @@ async fn list_scans_contains_started_scan() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let session_id = body["session_id"].as_str().unwrap();
 
-    let resp = client
-        .get(format!("{}/api/scans", base_url(addr)))
+    let resp = auth(client.get(format!("{}/api/scans", base_url(addr))))
         .send()
         .await
         .unwrap();
@@ -136,8 +129,7 @@ async fn cancel_scan_returns_200() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(format!("{}/api/scan", base_url(addr)))
+    let resp = auth(client.post(format!("{}/api/scan", base_url(addr))))
         .json(&serde_json::json!({"target": "cancel.test"}))
         .send()
         .await
@@ -145,8 +137,7 @@ async fn cancel_scan_returns_200() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let session_id = body["session_id"].as_str().unwrap();
 
-    let resp = client
-        .delete(format!("{}/api/scan/{}", base_url(addr), session_id))
+    let resp = auth(client.delete(format!("{}/api/scan/{}", base_url(addr), session_id)))
         .send()
         .await
         .unwrap();
@@ -165,14 +156,13 @@ async fn cancel_unknown_scan_returns_404() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .delete(format!(
-            "{}/api/scan/00000000-0000-0000-0000-000000000000",
-            base_url(addr)
-        ))
-        .send()
-        .await
-        .unwrap();
+    let resp = auth(client.delete(format!(
+        "{}/api/scan/00000000-0000-0000-0000-000000000000",
+        base_url(addr)
+    )))
+    .send()
+    .await
+    .unwrap();
 
     assert_eq!(resp.status(), 404);
 }
@@ -183,8 +173,7 @@ async fn scan_creates_session() {
     let addr = start_server().await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(format!("{}/api/scan", base_url(addr)))
+    let resp = auth(client.post(format!("{}/api/scan", base_url(addr))))
         .json(&serde_json::json!({"target": "session.test"}))
         .send()
         .await
@@ -192,8 +181,7 @@ async fn scan_creates_session() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let session_id = body["session_id"].as_str().unwrap();
 
-    let resp = client
-        .get(format!("{}/api/sessions", base_url(addr)))
+    let resp = auth(client.get(format!("{}/api/sessions", base_url(addr))))
         .send()
         .await
         .unwrap();

@@ -21,6 +21,7 @@ msfinstall
 # Plugin artifacts
 .superpowers/
 docs/superpowers/
+.claude/skills/
 
 # Hook session state — internal, never commit
 .claude/.subagent-tracker-*
