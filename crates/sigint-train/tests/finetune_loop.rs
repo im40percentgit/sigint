@@ -172,9 +172,15 @@ async fn finetune_loop_end_to_end() {
         job_dir: Some(job_dir.clone()),
     };
 
-    let record =
-        finetune::run_finetune(&cfg, "llama3.2:8b", &output_path, &train_jsonl, &test_jsonl)
-            .expect("run_finetune");
+    let record = finetune::run_finetune(
+        &cfg,
+        "finetune-loop-job-id-001",
+        "llama3.2:8b",
+        &output_path,
+        &train_jsonl,
+        &test_jsonl,
+    )
+    .expect("run_finetune");
 
     assert!(
         matches!(record.status, sigint_train::finetune::JobStatus::Success),

@@ -232,23 +232,16 @@ fn seed_session(db: &Database) -> Uuid {
 
 // ── Poll helper ──────────────────────────────────────────────────────────────
 
-/// Poll GET /api/train/jobs (list) until any job has a non-Running status.
+/// Poll GET /api/train/jobs/<job_id> until the job has a non-Running status.
 ///
-/// NOTE: train_finetune generates a job_id in the handler and returns it in the
-/// 202 body, but run_finetune (in sigint-train) generates its own separate UUID
-/// when it persists the JobRecord to jobs.json. The two IDs do not match, so
-/// GET /api/train/jobs/<handler-job-id> always returns 404 — the returned job_id
-/// cannot currently be used to look up the persisted record.
+/// Since issue #35 is fixed, the job_id from the 202 body now matches the
+/// persisted JobRecord id, so we can look up directly by id.
 ///
-/// This is a known pre-existing discrepancy in T1's implementation. The correct
-/// fix (passing the handler job_id into run_finetune) touches sigint-train which
-/// is out of scope for this PR. This poll works around the mismatch by listing
-/// all jobs and waiting for any job to reach a terminal state.
-///
-/// Returns the terminal job JSON value from the list.
-async fn wait_for_any_job_terminal(
+/// Returns the terminal job JSON value.
+async fn wait_for_job_terminal(
     client: &reqwest::Client,
     base: &str,
+    job_id: &str,
     timeout: Duration,
 ) -> serde_json::Value {
     let deadline = Instant::now() + timeout;
@@ -256,35 +249,29 @@ async fn wait_for_any_job_terminal(
         let resp = auth(
             client,
             reqwest::Method::GET,
-            &format!("{}/api/train/jobs", base),
+            &format!("{}/api/train/jobs/{}", base, job_id),
         )
         .send()
         .await
-        .expect("GET /api/train/jobs failed");
+        .expect("GET /api/train/jobs/<id> failed");
 
         if resp.status() == 200 {
             let body: serde_json::Value = resp.json().await.unwrap();
-            // GET /api/train/jobs returns {"jobs":[...], "total":N, "page":0, "page_size":20}.
-            if let Some(jobs) = body["jobs"].as_array() {
-                // JobStatus uses serde(tag="status", content="reason"):
-                //   running  → {"status":"Running"}
-                //   success  → {"status":"Success"}
-                //   failed   → {"status":"Failed","reason":"..."}
-                // j["status"] is an object like {"status":"Success"}, so we
-                // drill into j["status"]["status"] to get the inner string.
-                if let Some(terminal) = jobs.iter().find(|j| {
-                    let inner = &j["status"]["status"];
-                    inner.as_str().map(|s| s != "Running").unwrap_or(false)
-                }) {
-                    return terminal.clone();
-                }
+            // JobStatus uses serde(tag="status", content="reason"):
+            //   running  → {"status":"Running"}
+            //   success  → {"status":"Success"}
+            //   failed   → {"status":"Failed","reason":"..."}
+            // body["status"] is an object; drill into body["status"]["status"].
+            let inner = &body["status"]["status"];
+            if inner.as_str().map(|s| s != "Running").unwrap_or(false) {
+                return body;
             }
         }
 
         if Instant::now() >= deadline {
             panic!(
-                "no training job reached terminal state within {:?}",
-                timeout
+                "job '{}' did not reach terminal state within {:?}",
+                job_id, timeout
             );
         }
 
@@ -436,16 +423,12 @@ async fn train_flow_end_to_end() {
         .expect("finetune response must contain job_id")
         .to_string();
 
-    // ── 6. Poll GET /api/train/jobs (list) until any job is terminal ─────────
+    // ── 6. Poll GET /api/train/jobs/<job_id> until terminal ──────────────────
     //
-    // We poll the list endpoint rather than GET /api/train/jobs/<job_id> because
-    // of a known T1 ID mismatch: the handler generates a job_id for the 202 body,
-    // but run_finetune generates its own UUID when persisting the JobRecord.
-    // The two IDs are different, so looking up by handler job_id always returns 404.
-    // See the wait_for_any_job_terminal docstring for full explanation.
-    // The follow-up fix (threading job_id into run_finetune) is tracked separately.
-    let _ = job_id; // handler job_id — not usable for lookup; acknowledged above
-    let job = wait_for_any_job_terminal(&client, &base, Duration::from_secs(5)).await;
+    // issue #35 fix: the handler's job_id is now threaded into run_finetune_streaming
+    // so the persisted JobRecord carries the same UUID. Looking up by the 202
+    // body's job_id now reliably returns the record.
+    let job = wait_for_job_terminal(&client, &base, &job_id, Duration::from_secs(5)).await;
 
     // ── 7. Assertions on completed job ───────────────────────────────────────
     // JobStatus serde representation: job["status"] = {"status":"Success"}.
@@ -455,6 +438,14 @@ async fn train_flow_end_to_end() {
         job
     );
     assert_eq!(job["exit_code"], 0, "expected exit_code=0, got: {}", job);
+
+    // Issue #35 regression guard: the record's id must match the 202 job_id.
+    assert_eq!(
+        job["id"].as_str(),
+        Some(job_id.as_str()),
+        "persisted JobRecord id must match the 202 body job_id (issue #35): got job={}",
+        job
+    );
 
     // jobs.json must exist in training_dir (= config.train.job_dir).
     let jobs_json = training_dir.join("jobs.json");
@@ -571,6 +562,11 @@ async fn finetune_handler_emits_training_job_progress_events() {
         "finetune expected 202, got {}",
         resp.status()
     );
+    let finetune_body: serde_json::Value = resp.json().await.unwrap();
+    let job_id = finetune_body["job_id"]
+        .as_str()
+        .expect("202 body must contain job_id")
+        .to_string();
 
     // Drain events until TrainingJobCompleted (or 8 s timeout).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
@@ -618,6 +614,34 @@ async fn finetune_handler_emits_training_job_progress_events() {
     assert!(
         saw_progress,
         "expected at least one TrainingJobProgress event before TrainingJobCompleted"
+    );
+
+    // ── Issue #35 regression guard ────────────────────────────────────────────
+    // After TrainingJobCompleted, the persisted JobRecord must be retrievable
+    // via the job_id from the 202 body (previously always 404 due to UUID mismatch).
+    let lookup_resp = auth(
+        &client,
+        reqwest::Method::GET,
+        &format!("{}/api/train/jobs/{}", base, job_id),
+    )
+    .send()
+    .await
+    .expect("GET /api/train/jobs/<id> failed");
+
+    assert_eq!(
+        lookup_resp.status(),
+        200,
+        "GET /api/train/jobs/{} expected 200 (issue #35 regression), got: {}",
+        job_id,
+        lookup_resp.status()
+    );
+
+    let record: serde_json::Value = lookup_resp.json().await.unwrap();
+    assert_eq!(
+        record["id"].as_str(),
+        Some(job_id.as_str()),
+        "persisted JobRecord id must match the 202 job_id (issue #35): got record={}",
+        record
     );
 
     std::env::set_var("HOME", orig_home);
