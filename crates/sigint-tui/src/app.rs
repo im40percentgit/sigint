@@ -413,13 +413,12 @@ impl TuiApp {
             }
             (Mode::Normal, KeyCode::Enter)
                 if self.state.focused_panel == Panel::Input
-                    && self.state.current_view == View::Scan =>
+                    && self.state.current_view == View::Scan
+                    && !self.state.input.is_empty() =>
             {
-                if !self.state.input.is_empty() {
-                    let text = std::mem::take(&mut self.state.input);
-                    let session_id = self.state.session_id;
-                    let _ = self.event_tx.send(Event::UserInput { session_id, text });
-                }
+                let text = std::mem::take(&mut self.state.input);
+                let session_id = self.state.session_id;
+                let _ = self.event_tx.send(Event::UserInput { session_id, text });
             }
 
             // ── Command mode: character accumulation ─────────────────────

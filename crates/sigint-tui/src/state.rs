@@ -425,13 +425,11 @@ impl AppState {
             } => {
                 self.streaming_buffer.push_str(&token);
             }
-            Event::StreamCompleted { session_id: _ } => {
-                if !self.streaming_buffer.is_empty() {
-                    self.messages.push(DisplayMessage {
-                        role: "assistant".to_string(),
-                        content: std::mem::take(&mut self.streaming_buffer),
-                    });
-                }
+            Event::StreamCompleted { session_id: _ } if !self.streaming_buffer.is_empty() => {
+                self.messages.push(DisplayMessage {
+                    role: "assistant".to_string(),
+                    content: std::mem::take(&mut self.streaming_buffer),
+                });
             }
             Event::MessageCreated(msg) => {
                 self.messages.push(DisplayMessage {
