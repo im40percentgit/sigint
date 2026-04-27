@@ -16,7 +16,7 @@
 //! seeded data → HTTP request → diff engine → JSON response validation.
 
 use sigint_core::types::{Finding, Session, Severity};
-use sigint_e2e::{base_url, start_server_with_db};
+use sigint_e2e::{auth, base_url, start_server_with_db};
 use uuid::Uuid;
 
 // ── Helper ────────────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ async fn diff_endpoint_returns_correct_categorisation() {
 
     let client = reqwest::Client::new();
     let url = format!("{}/api/diff/{}/{}", base_url(addr), s1.id, s2.id);
-    let resp = client.get(&url).send().await.unwrap();
+    let resp = auth(client.get(&url)).send().await.unwrap();
 
     assert_eq!(resp.status(), 200, "expected 200 OK from diff endpoint");
 
@@ -133,7 +133,7 @@ async fn diff_nonexistent_session_returns_404() {
 
     let client = reqwest::Client::new();
     let url = format!("{}/api/diff/{}/{}", base_url(addr), s1.id, fake_id);
-    let resp = client.get(&url).send().await.unwrap();
+    let resp = auth(client.get(&url)).send().await.unwrap();
 
     assert_eq!(
         resp.status(),
@@ -155,7 +155,7 @@ async fn diff_empty_sessions_returns_all_zeros() {
 
     let client = reqwest::Client::new();
     let url = format!("{}/api/diff/{}/{}", base_url(addr), s1.id, s2.id);
-    let resp = client.get(&url).send().await.unwrap();
+    let resp = auth(client.get(&url)).send().await.unwrap();
 
     assert_eq!(
         resp.status(),
