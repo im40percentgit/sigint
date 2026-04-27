@@ -305,6 +305,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is an arbitrary sentinel, not pi
     fn redact_json_preserves_non_string_types() {
         let value = json!({
             "count": 42,

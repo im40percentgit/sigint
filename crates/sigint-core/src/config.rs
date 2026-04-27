@@ -739,8 +739,8 @@ approval_timeout = 60
     #[test]
     fn agent_config_memory_defaults_false() {
         let cfg = Config::default();
-        assert_eq!(cfg.agent.memory, false);
-        assert_eq!(cfg.agent.recon, false);
+        assert!(!cfg.agent.memory);
+        assert!(!cfg.agent.recon);
     }
 
     #[test]
@@ -751,8 +751,8 @@ memory = true
 recon = true
 "#;
         let cfg: Config = toml::from_str(toml_str).expect("parse failed");
-        assert_eq!(cfg.agent.memory, true);
-        assert_eq!(cfg.agent.recon, true);
+        assert!(cfg.agent.memory);
+        assert!(cfg.agent.recon);
     }
 
     #[test]

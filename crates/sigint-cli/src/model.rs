@@ -568,7 +568,7 @@ mod tests {
         let path = dir.path().join("llama.gguf");
         std::fs::write(&path, b"fake").unwrap();
 
-        let result = resolve_model_path(&dir.path().to_path_buf(), "llama.gguf");
+        let result = resolve_model_path(dir.path(), "llama.gguf");
         assert!(result.is_ok(), "{:?}", result);
         assert_eq!(result.unwrap(), path);
     }
@@ -580,7 +580,7 @@ mod tests {
         std::fs::write(&path, b"fake").unwrap();
 
         // Pass "llama" without extension -- should still resolve.
-        let result = resolve_model_path(&dir.path().to_path_buf(), "llama");
+        let result = resolve_model_path(dir.path(), "llama");
         assert!(result.is_ok(), "{:?}", result);
         assert_eq!(result.unwrap(), path);
     }
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn resolve_model_path_not_found() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let result = resolve_model_path(&dir.path().to_path_buf(), "nonexistent");
+        let result = resolve_model_path(dir.path(), "nonexistent");
         assert!(result.is_err());
     }
 

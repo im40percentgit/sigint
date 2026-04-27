@@ -288,6 +288,16 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
+    /// Six-column enrichment row returned by the M8 migration tests.
+    type EnrichRow = (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+    );
+
     fn in_memory() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
@@ -555,9 +565,8 @@ mod tests {
             .unwrap();
 
             // Verify all 6 new columns default to NULL.
-            let (remediation, exploitability, impact, evidence_ref, chain_id, chain_order):
-                (Option<String>, Option<String>, Option<String>,
-                 Option<String>, Option<String>, Option<i64>) = conn.query_row(
+            let (remediation, exploitability, impact, evidence_ref, chain_id, chain_order): EnrichRow =
+                conn.query_row(
                 "SELECT remediation, exploitability, impact, evidence_ref, chain_id, chain_order
                  FROM findings WHERE id = 'find-m8'",
                 [],
@@ -586,9 +595,7 @@ mod tests {
             )
             .unwrap();
 
-            let (rem, expl, imp, eref, cid, cord):
-                (Option<String>, Option<String>, Option<String>,
-                 Option<String>, Option<String>, Option<i64>) = conn.query_row(
+            let (rem, expl, imp, eref, cid, cord): EnrichRow = conn.query_row(
                 "SELECT remediation, exploitability, impact, evidence_ref, chain_id, chain_order
                  FROM findings WHERE id = 'find-m8b'",
                 [],
