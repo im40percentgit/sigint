@@ -62,20 +62,18 @@ impl OsintModule {
             }
 
             match key.as_str() {
-                "registrar" => {
-                    if result.registrar.is_none() {
-                        result.registrar = Some(value);
-                    }
+                "registrar" if result.registrar.is_none() => {
+                    result.registrar = Some(value);
                 }
-                "creation date" | "created" | "registered" | "domain registered" => {
-                    if result.creation_date.is_none() {
-                        result.creation_date = Some(value);
-                    }
+                "creation date" | "created" | "registered" | "domain registered"
+                    if result.creation_date.is_none() =>
+                {
+                    result.creation_date = Some(value);
                 }
-                "registry expiry date" | "expiration date" | "expiry date" | "expires" => {
-                    if result.expiry_date.is_none() {
-                        result.expiry_date = Some(value);
-                    }
+                "registry expiry date" | "expiration date" | "expiry date" | "expires"
+                    if result.expiry_date.is_none() =>
+                {
+                    result.expiry_date = Some(value);
                 }
                 "name server" | "nameserver" | "nserver" => {
                     let ns = value
@@ -87,15 +85,13 @@ impl OsintModule {
                         result.nameservers.push(ns);
                     }
                 }
-                "registrant organization" | "registrant org" | "org" | "organisation" => {
-                    if result.registrant_org.is_none() {
-                        result.registrant_org = Some(value);
-                    }
+                "registrant organization" | "registrant org" | "org" | "organisation"
+                    if result.registrant_org.is_none() =>
+                {
+                    result.registrant_org = Some(value);
                 }
-                "registrant email" | "tech email" => {
-                    if result.registrant_email.is_none() {
-                        result.registrant_email = Some(value);
-                    }
+                "registrant email" | "tech email" if result.registrant_email.is_none() => {
+                    result.registrant_email = Some(value);
                 }
                 _ => {}
             }
