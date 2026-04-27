@@ -1292,6 +1292,7 @@ mod tests {
 
     /// Test API key — must match the one set in `test_state().api_key`.
     const TEST_KEY: &str = "test-key";
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Return the `Authorization: Bearer <token>` header value for test requests.
     fn auth_header() -> String {
@@ -2848,7 +2849,23 @@ mod tests {
 
     #[tokio::test]
     async fn model_promote_with_force_skips_p1_gate() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let config_path = home
+            .path()
+            .join(".config")
+            .join("sigint")
+            .join("config.toml");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            "[llm]\nprovider = \"ollama\"\nmodel = \"llama3.2\"\n",
+        )
+        .unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+
         // Write a last_eval.json with only 1 example (below threshold).
         // Also create a fake .gguf so detect_output_kind succeeds.
         let eval = serde_json::json!({"total_examples": 1});
@@ -2894,10 +2911,11 @@ mod tests {
             .body(Body::from(r#"{"tag":"ft-v1","force":true}"#))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
+        match old_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
         // Should succeed (200) because force=true skips the P1 gate.
-        // The config rewrite will target the real config path but that's
-        // acceptable in this unit test (it would succeed or fail based on
-        // filesystem permissions — either way the gate test passes).
         let status = resp.status();
         assert!(
             status == StatusCode::OK || status == StatusCode::INTERNAL_SERVER_ERROR,
@@ -2940,9 +2958,15 @@ mod tests {
     async fn model_rollback_happy_path() {
         use sigint_train::promotion::{append_promotion_log, PromotionAction, PromotionEntry};
 
+        let _env_guard = ENV_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        let config_tmp = tempfile::tempdir().unwrap();
-        let config_path = config_tmp.path().join("config.toml");
+        let home = tempfile::tempdir().unwrap();
+        let config_path = home
+            .path()
+            .join(".config")
+            .join("sigint")
+            .join("config.toml");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
 
         // Seed a promotion.log entry so rollback has something to reverse.
         let entry = PromotionEntry {
@@ -2962,11 +2986,9 @@ mod tests {
             "[llm]\nprovider = \"embedded\"\nmodel = \"/models/ft-v1.gguf\"\n",
         )
         .unwrap();
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
 
-        // Override config_path by overriding HOME so Config::config_path() resolves there.
-        // Simpler: we just test the route returns 200 and the body shape is correct,
-        // accepting that the config rewrite may succeed or fail depending on HOME.
-        // The important assertion is the log structure and status code.
         let db = Database::open_in_memory().expect("in-memory db");
         let event_bus = EventBus::new();
         let mut config = Config::default();
@@ -2998,6 +3020,10 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
+        match old_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
         // Either succeeds (200) or fails with a filesystem-level error (500),
         // but must NOT be 404 (log is non-empty) or 409 (no lock contention).
         let status = resp.status();
