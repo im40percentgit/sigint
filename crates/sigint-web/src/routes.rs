@@ -766,6 +766,7 @@ pub async fn train_finetune(
     let bus = state.event_bus.clone();
     let job_id_task = job_id.clone();
     let output_path_str = output_path.to_string_lossy().into_owned();
+    let stdout_tail_bytes = state.config.web.train.stdout_tail_bytes;
 
     // Emit TrainingJobStarted immediately (before spawn so the event precedes 202 body).
     //
@@ -786,48 +787,62 @@ pub async fn train_finetune(
 
         let started = std::time::Instant::now();
 
-        // Run the blocking finetune command on the blocking thread pool so we
-        // don't starve the async runtime.  Use spawn_blocking which returns a
-        // JoinHandle we can await, giving us the Result<JobRecord>.
-        //
-        // We pass a closure that:
-        //   1. Builds a TrainConfig with the right job_dir.
-        //   2. Calls run_finetune (synchronous, blocks the OS thread).
-        //   3. Returns Result<JobRecord, anyhow::Error>.
-        //
-        // The stdout-tail is captured by overriding the job_dir in the config
-        // so persist_job writes to our known location.
-        let config_clone = config_train.clone();
-        let base_clone = base_model.clone();
-        let out_clone = output_path.clone();
-        let train_clone = train_jsonl.clone();
-        let test_clone = test_jsonl.clone();
-        let job_id_inner = job_id_task.clone();
+        // Override job_dir in the config so persist_job writes to our known location.
+        let mut cfg = config_train.clone();
+        cfg.job_dir = Some(job_dir.clone());
 
-        let result = tokio::task::spawn_blocking(move || {
-            // Override job_dir so the record lands in the right place.
-            let mut cfg = config_clone.clone();
-            cfg.job_dir = Some(job_dir.clone());
-            sigint_train::finetune::run_finetune(
-                &cfg,
-                &base_clone,
-                &out_clone,
-                &train_clone,
-                &test_clone,
-            )
-        })
+        let job_id_inner = job_id_task.clone();
+        let bus_progress = bus.clone();
+        let job_id_progress = job_id_task.clone();
+
+        // Use run_finetune_streaming (async, tokio::process::Command) so we can
+        // stream incremental stdout to the event bus as TrainingJobProgress heartbeats.
+        //
+        // Progress delivery contract (per DEC-P26-T1B-002 + plan Risk #2):
+        //   - on_progress is called at most once per second (rate-limited inside
+        //     run_finetune_streaming by a `last_emitted` Instant guard).
+        //   - The tail passed to on_progress is bounded to `stdout_tail_bytes`
+        //     (config: [web.train].stdout_tail_bytes, default 2048) so chatty
+        //     trainers cannot flood the broadcast bus.
+        //   - stderr is merged into the same reader (piped into the same mpsc
+        //     channel), so loss curves and error output both appear in the tail.
+        //
+        // @decision DEC-P26-T1B-001
+        // @title run_finetune_streaming used here; CLI path keeps sync run_finetune
+        // @status accepted
+        // @rationale See sigint-train::finetune module doc for full rationale.
+        //
+        // @decision DEC-P26-T1B-002
+        // @title Progress events rate-limited to ≤1/sec; tail bounded by stdout_tail_bytes
+        // @status accepted
+        // @rationale Plan Risk #2: event-bus flooding from line-rate trainer output.
+        let result = sigint_train::finetune::run_finetune_streaming(
+            &cfg,
+            &base_model,
+            &output_path,
+            &train_jsonl,
+            &test_jsonl,
+            stdout_tail_bytes,
+            move |stdout_tail| {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let heartbeat_at = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                // @decision DEC-P26-001
+                bus_progress.emit(sigint_core::event::Event::TrainingJobProgress {
+                    job_id: job_id_progress.clone(),
+                    heartbeat_at,
+                    stdout_tail,
+                });
+            },
+        )
         .await;
 
         let duration_secs = started.elapsed().as_secs();
 
-        // TrainingJobProgress events are not emitted in this wave.
-        // sigint-train::finetune::run_finetune uses std::process::Command (synchronous),
-        // so incremental stdout cannot be streamed without a broader refactor to
-        // tokio::process::Command. Started/Completed/Failed are emitted;
-        // Progress is tracked in issue #21.
-        // See DEC-P26-001 and plan Risk #2 for rationale.
         match result {
-            Ok(Ok(record)) => {
+            Ok(record) => {
                 let exit_code = record.exit_code.unwrap_or(0);
                 // @decision DEC-P26-001
                 bus.emit(sigint_core::event::Event::TrainingJobCompleted {
@@ -836,20 +851,12 @@ pub async fn train_finetune(
                     duration_secs,
                 });
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 tracing::error!(job_id = %job_id_task, error = %e, "training job failed");
                 // @decision DEC-P26-001
                 bus.emit(sigint_core::event::Event::TrainingJobFailed {
                     job_id: job_id_inner,
                     error: "training job failed — see server logs".to_string(),
-                });
-            }
-            Err(join_err) => {
-                tracing::error!(job_id = %job_id_task, "training task panicked: {}", join_err);
-                // @decision DEC-P26-001
-                bus.emit(sigint_core::event::Event::TrainingJobFailed {
-                    job_id: job_id_inner,
-                    error: "training task panicked".to_string(),
                 });
             }
         }

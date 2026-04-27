@@ -129,6 +129,77 @@ async fn start_server_with_train_config(
     (addr, db, training_dir)
 }
 
+/// Like `start_server_with_train_config` but also returns the `EventBus` so
+/// tests can subscribe to events before the finetune request is sent.
+///
+/// The finetune command emits multiple lines via `echo` with short sleeps so the
+/// streaming runner has time to deliver at least one `TrainingJobProgress` event
+/// before the process exits and `TrainingJobCompleted` is emitted.
+async fn start_server_with_event_bus(
+    fake_home: &std::path::Path,
+) -> (
+    std::net::SocketAddr,
+    Arc<Database>,
+    std::path::PathBuf,
+    sigint_core::event::EventBus,
+) {
+    let training_dir = fake_home
+        .join(".local")
+        .join("share")
+        .join("sigint")
+        .join("training");
+    std::fs::create_dir_all(&training_dir).expect("create training_dir");
+
+    let db = Arc::new(Database::open_in_memory().expect("in-memory db"));
+    let event_bus = sigint_core::event::EventBus::new();
+
+    let mut config = Config::default();
+    // Emit several lines with small delays so at least one TrainingJobProgress
+    // arrives before TrainingJobCompleted. printf writes the output file.
+    config.train.finetune_command = concat!(
+        "sh -c '",
+        "echo progress-line-1; sleep 0.05; ",
+        "echo progress-line-2; sleep 0.05; ",
+        "echo progress-line-3; ",
+        "printf \"mock-training-complete\\n\" > \"$SIGINT_OUTPUT_PATH\"",
+        "'"
+    )
+    .to_string();
+    config.train.job_dir = Some(training_dir.clone());
+    config.web.train.max_concurrent_jobs = 0;
+    // Small tail cap to exercise the bounded-tail path.
+    config.web.train.stdout_tail_bytes = 512;
+
+    let config = Arc::new(config);
+    let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(30)));
+    let scan_service = Arc::new(ScanService::new(
+        config.clone(),
+        event_bus.clone(),
+        approval_registry.clone(),
+    ));
+
+    let state = AppState {
+        db: Arc::clone(&db),
+        event_bus: event_bus.clone(),
+        training_job_semaphore: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
+        config,
+        approval_registry,
+        scan_service,
+        api_key: TEST_KEY.to_string(),
+    };
+
+    let app = sigint_web::create_router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind to random port");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    (addr, db, training_dir, event_bus)
+}
+
 // ── DB seeding helper ─────────────────────────────────────────────────────────
 
 /// Seed a session with three successful scan records and two messages.
@@ -427,5 +498,127 @@ async fn train_flow_end_to_end() {
     );
 
     // Restore HOME so other tests in the workspace aren't affected.
+    std::env::set_var("HOME", orig_home);
+}
+
+// ── TrainingJobProgress integration test ─────────────────────────────────────
+
+/// Verify that `POST /api/train/finetune` emits at least one `TrainingJobProgress`
+/// event on the event bus before `TrainingJobCompleted` is emitted.
+///
+/// This test subscribes to the event bus before the HTTP request is sent, then
+/// collects events until `TrainingJobCompleted` arrives (or timeout).  It asserts
+/// that at least one `TrainingJobProgress` was observed in between, proving that
+/// the async streaming runner (run_finetune_streaming) is wired into the web
+/// handler and progress events reach the bus.
+///
+/// Must run with `--test-threads=1` (mutates HOME env var, same as the sibling
+/// tests in this file).
+#[tokio::test]
+async fn finetune_handler_emits_training_job_progress_events() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let orig_home = std::env::var("HOME").unwrap_or_default();
+    std::env::set_var("HOME", tmp.path());
+
+    let (addr, db, _training_dir, event_bus) = start_server_with_event_bus(tmp.path()).await;
+    let base = format!("http://{}", addr);
+    let client = reqwest::Client::new();
+
+    // Subscribe to the bus BEFORE the HTTP request so we don't miss early events.
+    let mut rx = event_bus.subscribe();
+
+    // Seed a session with scan records so export produces JSONL files.
+    let session_id = seed_session(&db);
+
+    // Harvest + export so train.jsonl / test.jsonl exist for the finetune command.
+    auth(
+        &client,
+        reqwest::Method::POST,
+        &format!("{}/api/train/harvest/{}", base, session_id),
+    )
+    .send()
+    .await
+    .expect("harvest")
+    .error_for_status()
+    .expect("harvest 200");
+
+    auth(
+        &client,
+        reqwest::Method::POST,
+        &format!("{}/api/train/export", base),
+    )
+    .send()
+    .await
+    .expect("export")
+    .error_for_status()
+    .expect("export 200");
+
+    // Fire the finetune request.
+    let resp = auth(
+        &client,
+        reqwest::Method::POST,
+        &format!("{}/api/train/finetune", base),
+    )
+    .header("content-type", "application/json")
+    .body(r#"{"base_model":"llama3:8b","output_name":"progress-test-adapter"}"#)
+    .send()
+    .await
+    .expect("finetune request");
+
+    assert_eq!(
+        resp.status(),
+        202,
+        "finetune expected 202, got {}",
+        resp.status()
+    );
+
+    // Drain events until TrainingJobCompleted (or 8 s timeout).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let mut saw_progress = false;
+    let mut saw_completed = false;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(event)) => match &event {
+                sigint_core::event::Event::TrainingJobProgress { .. } => {
+                    saw_progress = true;
+                }
+                sigint_core::event::Event::TrainingJobCompleted { .. } => {
+                    saw_completed = true;
+                    break;
+                }
+                sigint_core::event::Event::TrainingJobFailed { error, .. } => {
+                    panic!("training job failed unexpectedly: {}", error);
+                }
+                _ => {}
+            },
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                // Receiver fell behind — messages were dropped. The test is still
+                // valid; we may have missed events but continue draining.
+                eprintln!("warn: event bus receiver lagged by {} messages", n);
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                break;
+            }
+            Err(_timeout) => {
+                break;
+            }
+        }
+    }
+
+    assert!(
+        saw_completed,
+        "expected TrainingJobCompleted within 8 s timeout"
+    );
+    assert!(
+        saw_progress,
+        "expected at least one TrainingJobProgress event before TrainingJobCompleted"
+    );
+
     std::env::set_var("HOME", orig_home);
 }
