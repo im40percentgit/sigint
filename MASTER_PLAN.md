@@ -1432,12 +1432,13 @@ Product value: one-click harvest from the session list, visual progress for fine
 | DEC-P26-T1B-001 | 2026-04-27 | Streaming runner is a separate async fn (`run_finetune_streaming`); sync `run_finetune` unchanged | CLI path has no progress consumer; forcing tokio there adds unnecessary surface area. Shared persist + audit helpers avoid duplication. Closes issue #21. |
 | DEC-P26-T1B-002 | 2026-04-27 | Progress events rate-limited to ≤1/sec; tail bounded by `stdout_tail_bytes` (default 2048) | Plan Risk #2: line-rate trainer output would flood the broadcast bus. ≤1/sec is fast enough for human UX, safe for bus health. Implemented as `last_emitted: Instant` guard inside `run_finetune_streaming`. |
 | DEC-P26-T1B-003 | 2026-04-27 | `job_id` plumbed in by caller; not generated inside `run_finetune` / `run_finetune_streaming` | Previously each function called `Uuid::new_v4()` internally, so the UUID returned in the 202 body never matched the persisted `JobRecord`. `GET /api/train/jobs/<id>` always 404'd for web clients. Caller (web handler or CLI) now passes its own `job_id` string, closing issue #35. |
+| DEC-P26-T8-001 | 2026-04-27 | Provider construction plumbed via `AppState.provider_factory`; `full_loop.rs` evaluate step re-enabled | `train_run_eval` previously hardcoded `OllamaProvider::from_config`, preventing MockProvider injection from tests. `ProviderFactory` type alias (`Arc<dyn Fn(&LlmConfig) -> Result<Box<dyn LlmProvider>, Error> + Send + Sync>`) added to `AppState`. Production binds `sigint_llm::factory::create_provider`; tests inject a closure returning `MockProvider::new()`. Closed the architectural gap noted in the original Phase 26 T8 retrospective. All 4 CI gates pass. |
 
 #### Follow-Ups (tracked as open issues)
 
 - **Issue #21** — CLOSED. TrainingJobProgress streaming implemented in T1b: `run_finetune_streaming` async function added to `sigint-train::finetune`, web handler wired to call it. DEC-P26-T1B-001 and DEC-P26-T1B-002 record the design choices.
 - **DEC-P26-T6-002** — P1 job-detail drawer in the workbench page. Backend `JobRecord.stdout_tail` field doesn't exist; adding it is a small follow-up.
-- **DEC-P26-T8-001** — `full_loop.rs` integration test skips the evaluate step because `train_run_eval` hardcodes `OllamaProvider::new()`. Threading the provider through `AppState` is an architectural follow-up.
+- **DEC-P26-T8-001** — CLOSED. Provider factory threaded through `AppState`; `full_loop.rs` evaluate step re-enabled end-to-end. `ProviderFactory` type alias added to `state.rs`; production binds `create_provider`, tests inject `MockProvider`. Decision recorded in decision log above.
 - **REQ-P26-P1-002** — Bulk-harvest selection bar on the sessions page. DataTable lacks row-selection primitive. Tracked as follow-up against #15.
 
 ### Task Breakdown (8 discrete tasks)
