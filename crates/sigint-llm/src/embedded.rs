@@ -490,9 +490,8 @@ mod inner {
         let mut decoder = encoding_rs::UTF_8.new_decoder();
 
         let mut output = String::new();
-        let mut n_cur = tokens.len() as i32;
 
-        for _ in 0..max_new_tokens {
+        for (n_cur, _) in (tokens.len() as i32..).zip(0..max_new_tokens) {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
 
             if model.is_eog_token(token) {
@@ -521,7 +520,6 @@ mod inner {
                 .map_err(|e| Error::Llm(format!("batch add (generation): {}", e)))?;
             ctx.decode(&mut batch)
                 .map_err(|e| Error::Llm(format!("decode (generation): {}", e)))?;
-            n_cur += 1;
         }
 
         // 8. Parse tool calls when the template flagged the output for parsing.

@@ -93,7 +93,7 @@ pub fn wrap_tool_output(raw: &str) -> String {
     }
 
     // Sort descending by start offset so replacements don't shift earlier positions.
-    ranges.sort_by(|a, b| b.0.cmp(&a.0));
+    ranges.sort_by_key(|b| std::cmp::Reverse(b.0));
     for (offset, len) in ranges {
         scrubbed.replace_range(offset..offset + len, &"*".repeat(len));
     }
