@@ -261,6 +261,39 @@ sigint-cli ─── sigint-agents ─── sigint-llm (Ollama/OpenAI)
 
 ---
 
+## Plugins
+
+SIGINT supports a runtime plugin system. Third-party tool packs are distributed
+as `.sgnt-pack` files — a platform-native shared library bundled with a JSON
+manifest — and installed locally without rebuilding the sigint binary.
+
+Installed plugins appear alongside built-in tools in `sigint plugin list` and
+are loaded at startup via `dlopen`. Agents see one unified tool registry.
+
+**Trust model (Phase 27):** no signature verification, no remote registry, no
+sandbox. Installed code runs in-process with full host privileges. Only install
+plugins from sources you trust. Signing, a remote registry, and sandboxed
+execution are planned for Phase 28.
+
+### Plugin commands
+
+| Command | Description |
+|---------|-------------|
+| `sigint plugin pack <crate-path>` | Build a `.sgnt-pack` from a plugin crate |
+| `sigint plugin install <path.sgnt-pack>` | Install a pack into `~/.local/share/sigint/plugins/` |
+| `sigint plugin uninstall <id>` | Remove an installed plugin (use `--version` to disambiguate) |
+| `sigint plugin list` | Show all tools — built-in, compile-time plugins, and installed plugins |
+| `sigint plugin info <id>` | Inspect the full manifest and install path for a plugin |
+
+For a full authoring guide, quickstart, manifest schema reference, and failure
+mode documentation, see the
+[Plugins chapter in USER_GUIDE.md](USER_GUIDE.md#plugins).
+
+The canonical worked example is
+[`examples/sigint-plugin-hello/`](examples/sigint-plugin-hello/).
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE)
