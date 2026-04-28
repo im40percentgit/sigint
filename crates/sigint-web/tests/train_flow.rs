@@ -652,3 +652,145 @@ async fn finetune_handler_emits_training_job_progress_events() {
 
     std::env::set_var("HOME", orig_home);
 }
+
+// ── Issue #39 regression guard ────────────────────────────────────────────────
+
+/// When the provider factory fails, `train_run_eval` must emit `EvaluationFailed`
+/// (not `TrainingJobFailed`) with the eval_id from the 202 response body.
+///
+/// Regression test for issue #39: copy-paste from training handler used the wrong
+/// event variant, so WS clients on the eval channel never received the error.
+///
+/// @decision DEC-E2E-001
+#[tokio::test]
+async fn provider_factory_error_emits_evaluation_failed() {
+    use sigint_core::event::Event;
+    use tokio::time::timeout;
+
+    // ── Server with a failing provider factory ────────────────────────────────
+    let fake_home = tempfile::tempdir().expect("tempdir");
+    let training_dir = fake_home
+        .path()
+        .join(".local")
+        .join("share")
+        .join("sigint")
+        .join("training");
+    std::fs::create_dir_all(&training_dir).expect("create training_dir");
+
+    // Write a minimal test.jsonl so the endpoint passes its existence/empty checks.
+    let test_jsonl = training_dir.join("test.jsonl");
+    std::fs::write(
+        &test_jsonl,
+        r#"{"messages":[{"role":"user","content":"ping"},{"role":"assistant","content":"pong"}]}"#,
+    )
+    .expect("write test.jsonl");
+
+    let db = Arc::new(Database::open_in_memory().expect("in-memory db"));
+    let event_bus = sigint_core::event::EventBus::new();
+
+    let mut config = Config::default();
+    config.train.job_dir = Some(training_dir.clone());
+    config.web.train.max_concurrent_jobs = 0;
+    let config = Arc::new(config);
+
+    let approval_registry = Arc::new(ApprovalRegistry::new(Duration::from_secs(30)));
+    let scan_service = Arc::new(ScanService::new(
+        config.clone(),
+        event_bus.clone(),
+        approval_registry.clone(),
+    ));
+
+    // Factory that always fails — simulates an invalid Ollama URL or missing API key.
+    let failing_factory: sigint_web::ProviderFactory = std::sync::Arc::new(|_cfg| {
+        Err(sigint_core::Error::Other(
+            "forced factory failure for issue #39 test".to_string(),
+        ))
+    });
+
+    let state = AppState {
+        db: Arc::clone(&db),
+        event_bus: event_bus.clone(),
+        training_job_semaphore: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
+        config,
+        approval_registry,
+        scan_service,
+        api_key: TEST_KEY.to_string(),
+        provider_factory: failing_factory,
+    };
+
+    let app = sigint_web::create_router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind to random port");
+    let addr = listener.local_addr().expect("local addr");
+    let base = format!("http://{}", addr);
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    // Subscribe before posting so we don't miss the event.
+    let mut rx = event_bus.subscribe();
+
+    let client = reqwest::Client::new();
+    let resp = auth(
+        &client,
+        reqwest::Method::POST,
+        &format!("{}/api/train/evaluate", base),
+    )
+    .json(&serde_json::json!({ "base": "llama3:8b", "candidate": "llama3:8b-ft" }))
+    .send()
+    .await
+    .expect("POST /api/train/evaluate");
+
+    assert_eq!(
+        resp.status(),
+        202,
+        "evaluate must return 202 Accepted: {}",
+        resp.status()
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let expected_eval_id = body["eval_id"]
+        .as_str()
+        .expect("202 body must contain eval_id")
+        .to_string();
+
+    // Drain events for up to 3 s — factory error fires synchronously in the
+    // spawned task so EvaluationFailed should arrive within milliseconds.
+    let deadline = Duration::from_secs(3);
+    let mut saw_evaluation_failed = false;
+    let mut saw_training_job_failed = false;
+    let mut matched_eval_id = false;
+
+    let _ = timeout(deadline, async {
+        loop {
+            match rx.recv().await {
+                Ok(Event::EvaluationFailed { ref eval_id, .. }) => {
+                    saw_evaluation_failed = true;
+                    matched_eval_id = eval_id == &expected_eval_id;
+                    break;
+                }
+                Ok(Event::TrainingJobFailed { .. }) => {
+                    saw_training_job_failed = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    })
+    .await;
+
+    assert!(
+        !saw_training_job_failed,
+        "must NOT emit TrainingJobFailed for eval factory error (issue #39 regression)"
+    );
+    assert!(
+        saw_evaluation_failed,
+        "must emit EvaluationFailed when provider factory fails"
+    );
+    assert!(
+        matched_eval_id,
+        "EvaluationFailed.eval_id must match the 202 response eval_id (expected {})",
+        expected_eval_id
+    );
+}
