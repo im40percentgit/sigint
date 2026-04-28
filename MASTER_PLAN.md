@@ -1796,6 +1796,32 @@ Effort estimate: ~2 weeks for the full eight tasks at the project's existing PR 
 
 ---
 
+### Phase 28: Plugin Trust & Distribution
+**Status:** planned (deferred sibling of Phase 27)
+**Decision IDs:** TBD (planner run after Phase 27 close)
+**Requirements:** TBD
+**Issues:** TBD
+**Depends on:** Phase 27 (plugin packaging + local install)
+
+Deferred work that hardens Phase 27's trusted-local-only model into a distributable, untrusted-friendly plugin ecosystem. This stub records what Phase 27 explicitly leaves on the table — full scope to be written in a future planner run.
+
+Scope candidates (not committed):
+- Plugin signing: cosign / minisign / x509 — pick one; populate the manifest signature field reserved by REQ-P27-P2-003.
+- Public-key trust roots: a per-installation `trusted_keys.toml` plus first-run TOFU prompts.
+- Signature-verification gate at the registry-merge function (Phase 28 seam #4).
+- Remote registry / discovery: `sigint plugin search`, `sigint plugin install <id>@<version>` from a registry index. Index protocol + hosting model TBD.
+- Sandboxed execution: WASM (REQ-P27-P2-002) or seccomp + namespaces around the host-process loader (Phase 28 seam #3). Capability boundaries on what plugin tools can do.
+- Manifest version bump to v2 (signed manifests) per Phase 28 seam #2.
+- Plugin-management web UI (REQ-P27-P2-004).
+- Security audit pass on the full plugin trust chain.
+
+Phase 27 seams to extend (do not rework): see "Phase 28 Seams" section in Phase 27.
+
+### Decision Log
+<!-- Guardian appends here after Phase 28 completes -->
+
+---
+
 ## Backlog: Future Phase Themes
 
 > Carryover from the Phase 27 candidate-themes planning notes. The user picked Theme A (split into Phase 27 + Phase 28 above). The remaining themes are preserved here so the analysis isn't lost — each is a problem statement + product value + rough effort, not a design. Pick one when scoping the next phase.
