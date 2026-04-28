@@ -1603,11 +1603,12 @@ Product value: one-click harvest from the session list, visual progress for fine
 ---
 
 ### Phase 27: Plugin Packaging + Local Install
-**Status:** planned
-**Branch:** feature/phase-27-plugin-pack (created at implementation time)
+**Status:** completed
+**Branch:** feature/phase-27-plugin-pack (per-task feature branches landed via PRs #50, #52, #53, #54, #55, #56, #57, #58)
+**PRs:** #50 (T1), #54 (T2), #52 (T3), #55 (T4), #56 (T5), #58 (T6), #53 (T7), #57 (T8)
 **Decision IDs:** DEC-P27-001, DEC-P27-002, DEC-P27-003, DEC-P27-004, DEC-P27-005, DEC-P27-006, DEC-P27-007, DEC-P27-008
 **Requirements:** REQ-P27-GOAL-001 through REQ-P27-GOAL-004, REQ-P27-NOGO-001 through REQ-P27-NOGO-006, REQ-P27-P0-001 through REQ-P27-P0-010, REQ-P27-P1-001 through REQ-P27-P1-003, REQ-P27-P2-001 through REQ-P27-P2-004
-**Issues:** TBD (orchestrator opens after docs PR merges)
+**Issues:** #42 (T1, closed), #43 (T2, closed), #44 (T3, closed), #45 (T4, closed), #46 (T5, closed), #47 (T6, closed), #48 (T7, closed), #49 (T8, closed)
 **Depends on:** Phase 22 (compile-time plugin system, `sigint-plugin` crate, `Tool` trait, `inventory`-based registration), Phase 25 (security pass — applies to install-path validation)
 
 #### Problem Statement
@@ -1792,7 +1793,25 @@ Effort estimate: ~2 weeks for the full eight tasks at the project's existing PR 
 - DEC-P27-008: CLI surface extends Phase 22's `sigint plugin` with `pack`, `install`, `uninstall`, `info`; existing `list` and `new` retained — principle of least surprise, single command tree for all plugin operations — Addresses: REQ-P27-P0-007, REQ-P27-P0-008
 
 ### Decision Log
-<!-- Guardian appends here after Phase 27 completes -->
+
+| ID | Date | Decision | Context |
+|----|------|----------|---------|
+| DEC-P27-001 | 2026-04-28 | Pack format = `.tar.gz` archive with fixed internal layout (`manifest.json` at root, `lib/<library>`, optional `README.md` / `LICENSE`) | Universal, streamable, strong Rust toolchain support (`tar` + `flate2` crates). Rejected `.zip` (less-Rusty toolchain), custom binary (gratuitous), raw directory (loses single-artifact distribution). Anchored in `crates/sigint-plugin/src/pack.rs`. T1 PR #50. |
+| DEC-P27-002 | 2026-04-28 | Manifest schema = JSON with `manifest_version: 1` discriminator | Required: `manifest_version`, `id`, `version`, `target_triple`, `entry_symbol`. Open for additive optional fields; unknown required fields fail validation. Reserves slots for Phase 28 (`signature`, `signed_by`, `signature_algorithm`, `library_kind`). Anchored in `crates/sigint-plugin/src/manifest.rs`. T1 PR #50. |
+| DEC-P27-003 | 2026-04-28 | Loader = `libloading` + C-ABI entry symbol (`extern "C" fn` returning `*const PluginEntrypoint`) | Standard Rust dynamic-loading crate, in-process, zero-overhead, matches unsandboxed-trust model. WASM/wasmtime deferred to REQ-P27-P2-002. Phase 28 seam: swap `Library::new` for `SandboxedLibrary::new` without touching the C-ABI contract. Anchored in `crates/sigint-plugin/src/abi.rs` and `loader.rs`. T1 PR #50, T3 PR #52. |
+| DEC-P27-004 | 2026-04-28 | Install dir layout = `<install-dir>/<plugin-id>-<plugin-version>/` under platform user-data dir | Linux: `${XDG_DATA_HOME:-~/.local/share}/sigint/plugins/`. macOS: `~/Library/Application Support/sigint/plugins/`. Windows: `%APPDATA%/sigint/plugins/`. Subdirs let multiple versions coexist for inspection. `--prefix` flag overrides for test isolation. Anchored in `crates/sigint-cli/src/install.rs`. T4 PR #55. |
+| DEC-P27-005 | 2026-04-28 | Discovery = filesystem scan at startup, runtime tools merged into single registry consulted by agents | `inventory` stays compile-time; runtime tools land in `RUNTIME_TOOL_REGISTRY` (separate state) and `collect_plugin_tools()` returns the merged Vec. Agent-side tool-lookup contract unchanged (REQ-P27-GOAL-003). Phase 28 seam: registry-merge function is the natural insertion point for the signature-verification gate. Anchored in `crates/sigint-plugin/src/loader.rs`. T3 PR #52, helper added in T5 PR #56. |
+| DEC-P27-006 | 2026-04-28 | Failure mode = log-and-skip via `tracing::warn!` carrying `plugin_id` / `plugin_path` / `failure_reason` | Failure categories: `manifest_invalid`, `target_mismatch`, `library_missing`, `dlopen_failed`, `entry_symbol_missing`, `entry_panicked`, `manifest_version_too_new`. Rejected abort-on-failure (hostile in trust-the-operator model — one broken plugin would block the binary). Phase 28 seam: enum extends with `signature_invalid`, `signature_unknown_signer`, `sandbox_setup_failed`. Anchored in `crates/sigint-plugin/src/loader.rs`. T3 PR #52. |
+| DEC-P27-007 | 2026-04-28 | Plugin metadata source-of-truth = `[package.metadata.sigint-plugin]` table in `Cargo.toml` | Cargo-standard extension point. `pack` reads `Cargo.toml`, derives manifest from `name`+`version`+metadata, fills `target_triple` from build target. Mirrors `cargo-deny` / `cargo-about` / `cargo-dist` convention. Anchored in `crates/sigint-cli/src/pack.rs`. T2 PR #54. |
+| DEC-P27-008 | 2026-04-28 | CLI surface = extend Phase 22's `sigint plugin` with `pack`, `install`, `uninstall`, `list`, `info` | Existing `list` and `new` retained. Single command tree for all plugin operations — principle of least surprise. Each subcommand emits structured `--help` per clap idioms. Anchored across `crates/sigint-cli/src/{plugin,pack,install}.rs`. T2 PR #54, T4 PR #55, T5 PR #56. |
+| DEC-P27-T7-001 | 2026-04-28 | Example plugin lives at `examples/sigint-plugin-hello/` with a single `HelloEcho` tool | `crate-type = ["cdylib"]`, `[package.metadata.sigint-plugin]` declared, exports `sigint_plugin_entry`. Used by T2 integration tests, T3 loader fixtures, T6 USER_GUIDE quickstart, and the T8 closed-loop e2e. Anchored in `examples/sigint-plugin-hello/src/lib.rs`. T7 PR #53. |
+
+#### Retrospective
+
+- T3 (PR #52) shipped without a dlopen-success-path assertion (the loader test path covered failure modes but not "loaded plugin's tool actually appears in the merged registry"). T8 (PR #57) closed the gap with a closed-loop e2e that mutation-tests the assertion (`api_version=99` → `len=0`) so the green path is provably non-vacuous.
+- The `tokio::sync::Mutex` held across `await` clippy lint surfaced during T3's `--all-targets` work and was rolled into the issue #33 sweep rather than blocking the runtime loader PR.
+- The eight Phase 28 seams are enumerated in MASTER_PLAN.md ("Phase 28 Seams" section above). Seam #3 (loader insertion point) carries a `// @seam Phase28-loader` marker in `crates/sigint-plugin/src/loader.rs` so the next phase planner has a code-anchored landing pad; the remaining seams (manifest reservation, registry-merge gate, failure-enum extensibility, install-arg shape, install-dir layout, C-ABI contract, manifest version discriminator) are documented at the spec level only — Phase 28 will add code-level seam markers as it lands each one.
+- Two follow-up issues filed during the phase: #51 (path-traversal regression test for `extract_archive`) — both tracked separately and out of scope for the Phase 27 close.
 
 ---
 
