@@ -3394,12 +3394,17 @@ name = "sigint-plugin"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "flate2",
  "inventory",
+ "serde",
  "serde_json",
  "sigint-agents",
  "sigint-core",
  "sigint-llm",
  "sigint-tools",
+ "tar",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

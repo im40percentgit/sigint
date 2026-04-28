@@ -105,3 +105,8 @@ ipnet = "2"
 
 # File locking (promotion helper — advisory exclusive lock around config.toml rewrite)
 fs2 = "0.4"
+
+# Plugin pack format (Phase 27)
+flate2 = "1"
+tar = "0.4"
+tempfile = "3"
