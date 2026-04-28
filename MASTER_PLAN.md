@@ -593,7 +593,7 @@ Depends on: P2-5
 **Sub-phases:** 5A (Doctor) → 5B (OpenAI Provider) → 5C (Reports) → 5D (REST API) → 5E (SPA)
 **Design:** `docs/plans/2026-03-01-phase5-web-ui-polish-design.md`
 **Plan:** `docs/plans/2026-03-01-phase5-implementation.md`
-**Decisions:** DEC-P5-DOCTOR, DEC-P5-OPENAI, DEC-LLM-005, DEC-P5-REPORT, DEC-REPORT-001, DEC-WEB-001–010
+**Decisions:** DEC-P5-DOCTOR, DEC-P5-OPENAI, DEC-LLM-005, DEC-P5-REPORT, DEC-REPORT-001, DEC-WEB-001, DEC-WEB-002, DEC-WEB-003, DEC-WEB-004, DEC-WEB-005, DEC-WEB-006, DEC-WEB-007, DEC-WEB-008, DEC-WEB-009, DEC-WEB-010, DEC-WEB-011, DEC-WEB-012
 
 - [x] Sub-Phase 5A: `sigint doctor` — 6 health checks (config, Ollama, model, tools, sandbox, DB)
 - [x] Sub-Phase 5B: OpenAI-compatible LLM provider + factory + SSE streaming
@@ -912,7 +912,9 @@ Sub-phases:
 ### Phase 14: Agent Intelligence
 **Status:** completed
 **Sub-phases:** 14A (Memory Wiring) → 14B (Strategist Overhaul) → 14C (Recon Integration) → 14D (Asset-Finding Linking) → 14E (Configurable Output Caps)
-**Decision IDs:** DEC-P14-001, DEC-P14-002, DEC-P14-003, DEC-P14-004, DEC-P14-005
+**Decision IDs:** DEC-P14-001, DEC-P14-002, DEC-P14-003, DEC-P14-004, DEC-P14-005, DEC-AGENT-019
+
+> Anchored retroactively (2026-04-27): DEC-AGENT-019 — KNOWN_OUTPUT_TOOLS const in `sigint-agents/src/registry.rs` lets `for_agent()` suppress the "unregistered tool" warning for `create_attack_plan` (DEC-P14-001) and `create_finding` (DEC-FINDING-001) since both are output channels, not executable tools. Introduced as a clean-up alongside Phase 14B's CreateAttackPlanTool when the second output tool joined the first.
 **Definition of Done:**
 - `--memory` flag and `config.memory.enabled` gate MemoryService injection into agent context
 - Strategist uses CreateAttackPlanTool with MITRE ATT&CK-enriched system prompt; plans collected via Arc<Mutex<Vec>>
@@ -1120,6 +1122,70 @@ Sub-phases:
 - [x] CONTAINER.md: Docker quickstart and docker-compose usage docs
 - [x] config.example.toml: added Docker Ollama URL comment
 - [x] .dockerignore: target, node_modules, .git, .claude exclusions
+
+---
+
+### Phase 21: TUI Polish — Tab-Based Multi-View Architecture
+**Status:** completed (commits 81c07c5, 2ecf9cb, 3a6a53b)
+**Decision IDs:** (none requiring formal anchoring)
+
+Refactored the ratatui TUI from a single-pane scroll view into a tabbed multi-view layout (Sessions / Engagement Log / Findings / Help). No code-level @decision annotations were introduced; the change was structural-only. Listed here for traceability since it occupies the Phase 21 slot referenced by issue numbering.
+
+---
+
+### Phase 22: Compile-Time Plugin System
+**Status:** completed (commits 7691267, a9c6916, 93026e3)
+**Decision IDs:** DEC-PLUGIN-001, DEC-PLUGIN-002, DEC-PLUGIN-003
+
+> Anchored retroactively (2026-04-27): this section captures decisions originally made during the Phase 22 work that landed before MASTER_PLAN.md adopted the structured Phase format for new phases. The decisions are live in code.
+
+#### Scope
+Introduced a compile-time plugin system: external crates implement `sigint_tools::Tool`, register via `register_tool!()`, and the main binary calls `collect_plugin_tools()` at startup. Added a `sigint plugin` CLI subcommand (`list`, `new`) that scaffolds workspace-member plugin crates so plugins are linked in on the next `cargo build`.
+
+#### Definition of Done
+- `sigint-plugin` crate exists with `register_tool!()`, `collect_plugin_tools()`, `find_prompt_pack()` APIs
+- `sigint plugin list` shows built-in tools + plugin tools side-by-side
+- `sigint plugin new <name>` scaffolds a new workspace-member crate with a working example tool
+- Orchestrator accepts a prompt-override fn pointer for per-pack system-prompt customization
+- No circular crate dependency between `sigint-agents` and `sigint-plugin`
+
+### Planned Decisions
+- DEC-PLUGIN-001: `inventory` crate for zero-boilerplate link-time tool registration — Platform-specific linker sections collect static submissions at link time; no runtime reflection, no manual wiring per plugin. — Source: `crates/sigint-plugin/src/lib.rs`
+- DEC-PLUGIN-002: `sigint plugin new` generates workspace-member crates — Workspace members are linked automatically on `cargo build`; scaffolding writes Cargo.toml + lib.rs + example tool so authors only replace the example. — Source: `crates/sigint-cli/src/plugin.rs`
+- DEC-PLUGIN-003: PromptPack defined in sigint-plugin; Orchestrator uses fn-pointer bridge — `inventory::collect!(T)` requires T to be defined in the calling crate. To break a would-be circular dependency between `sigint-plugin` and `sigint-agents`, the override is a bare `fn(AgentRole) -> Option<&'static str>` defined in `sigint-agents`; the CLI bridges between PromptPack and that fn pointer. — Source: `crates/sigint-plugin/src/lib.rs`, `crates/sigint-agents/src/prompt_pack.rs`
+
+### Decision Log
+<!-- Backfill: anchored retroactively 2026-04-27, no live work in progress -->
+
+---
+
+### Phase 23: Model Fine-Tuning Pipeline (sigint-train crate)
+**Status:** completed (commits 272d2a7, c97cad0)
+**Decision IDs:** DEC-TRAIN-001, DEC-TRAIN-002, DEC-TRAIN-003, DEC-TRAIN-004, DEC-TRAIN-006, DEC-TRAIN-007
+**Superseded:** DEC-TRAIN-005 superseded by DEC-P24-007 (Modelfile ADAPTER semantics — see Phase 24)
+
+> Anchored retroactively (2026-04-27): this section captures decisions originally made during the Phase 23 work that landed before MASTER_PLAN.md adopted the structured Phase format for new phases. The decisions are live in code. Phase 24 ("Close the Fine-Tune Loop") consumes these primitives end-to-end.
+
+#### Scope
+Introduced `sigint-train` crate: extracts tool-calling training data from scan history, formats as OpenAI-compatible JSONL, generates Ollama Modelfiles, and provides an accuracy assessment harness. CLI exposes the workflow as `sigint train export | create | stats | assess`. Phase 24 then closed the loop with harvest opt-in, async finetune runner, evaluation, promote/rollback.
+
+#### Definition of Done
+- `sigint train export` produces `train.jsonl`, `test.jsonl`, `Modelfile` from scan history
+- 80/20 deterministic split based on session_id hash (no leakage between splits)
+- JSONL files conform to OpenAI chat-completion schema (portable to Axolotl, Ollama, etc.)
+- Output goes to `~/.local/share/sigint/training/` (XDG data home)
+- `sigint train assess` returns tool-selection accuracy, argument exact-match rate, per-tool precision/recall
+
+### Planned Decisions
+- DEC-TRAIN-001: OpenAI chat-completion format for training JSONL — De-facto standard accepted by Ollama, Axolotl, and other local fine-tuning toolchains; data portable across toolchains without conversion. — Source: `crates/sigint-train/src/lib.rs`
+- DEC-TRAIN-002: One TrainingExample per successful ScanRecord tool call — Each successful invocation is a discrete supervisory signal; failed calls (exit_code != 0) are noise, not ground truth. Includes up to 5 prior message turns so the model learns sequencing. — Source: `crates/sigint-train/src/extract.rs`
+- DEC-TRAIN-003: One JSON object per line with `session_id` not serialized — JSONL with `#[serde(skip_serializing)]` on session_id keeps output strictly OpenAI-compatible. — Source: `crates/sigint-train/src/format.rs`
+- DEC-TRAIN-004: Session-based 80/20 split using session_id hash, not example index — Index-based splits leak context from the same scan into both train and test; session-based hashing prevents cross-contamination and is deterministic. — Source: `crates/sigint-train/src/split.rs`
+- DEC-TRAIN-006: Argument comparison uses exact string match on normalized JSON — Tool wrappers already serialize args deterministically, so exact string match is sufficient for first-pass assessment without re-parsing every invocation. — Source: `crates/sigint-train/src/assess.rs`
+- DEC-TRAIN-007: Training output goes to `~/.local/share/sigint/training/` (XDG data home) — Follows XDG Base Directory spec; matches the existing sigint data-dir convention (sigint.db, sigint.log); keeps training artifacts out of the project directory. — Source: `crates/sigint-cli/src/train.rs`
+
+### Decision Log
+<!-- Backfill: anchored retroactively 2026-04-27, no live work in progress -->
 
 ---
 
@@ -1533,6 +1599,45 @@ Product value: one-click harvest from the session list, visual progress for fine
   - Wave 3 (frontend wiring, parallel): Task 4 (types/api.ts) gates Tasks 5–7; Tasks 5, 6, 7 can be parallelized as sub-worktrees once Task 4 lands.
   - Wave 4: Task 8 (docs + e2e + DECISIONS) — serialized last to capture the final state.
 - Merge to main only after all eight tasks pass cargo tests, `npm run build` is clean, and the `/browse` e2e demonstrates the full loop. Guardian PRs the phase plan update (this section) as a separate doc-only commit before implementation begins.
+
+---
+
+## Phase 27 Candidate Themes (Planning Notes)
+
+> Drafted 2026-04-27 after Phase 26 close. **Not yet committed to.** The user picks one (or none) and the Planner then writes the formal Phase 27 spec with REQ-IDs, decisions, and tasks. Each theme below is a problem statement + product value + rough effort, not a design. Listed in no particular order.
+
+### Theme A — Plugin System Maturation
+**Problem.** Phase 22 shipped a compile-time plugin system: external crates implement `sigint_tools::Tool`, register via `register_tool!()`, and the binary collects them at link time. It works, but plugins are first-party-only — distribution, versioning, signing, and runtime safety are absent. A pentester who writes a custom recon tool today can scaffold a workspace member, but cannot share it without their consumers rebuilding from source. The compile-time model also means risky/experimental tools cannot be loaded without re-deploying the binary.
+
+**Product value.** A real plugin ecosystem makes sigint extensible by the community: package format (`.sgnt-pack`?), a local registry, signing for trust, and a sandboxed loader for runtime ACL enforcement. This is the single biggest lever for the project's reach — most pentest workflows are bespoke, and a plugin marketplace would let domain experts contribute without touching the core.
+
+**Rough effort.** Large (3-5 weeks). Touches packaging, signing, sandboxing, CLI, web UI for plugin management, and probably Phase 25-style security hardening for untrusted plugin code.
+
+### Theme B — Continuous Evaluation & Model Drift Detection
+**Problem.** Phase 24-26 turned fine-tuning into an interactive, web-driven workflow — a user can promote a model and roll back if it underperforms. But once a model is promoted, it stays promoted. There's no scheduled re-evaluation, no regression alarm if the model's accuracy on new corpora drifts, and no longitudinal tracking of which model version produced which findings. Operators learn about drift through field surprises, not telemetry.
+
+**Product value.** Continuous evaluation closes the observability loop on the fine-tune work that just shipped. Schedule nightly assessments against the most recent harvested sessions, alert on accuracy regression beyond a threshold, dashboard the trend, and keep enough history to attribute findings to model versions. This makes promoted models trustworthy over time, not just at promotion-day.
+
+**Rough effort.** Medium (2-3 weeks). Mostly built on top of existing primitives (`evaluate.rs`, training stats, event bus). New surface: a scheduler, a metrics-history table, and a web dashboard tab. No new crates likely.
+
+### Theme C — Closed-Loop Scan Automation (Continuous Surface Reassessment)
+**Problem.** Phases 11-12 built finding intelligence and Phase 4 added attack-surface mapping, but every scan today is operator-initiated. A real engagement involves baselining a target, checking back periodically for new exposures, and re-running narrow scans against changed assets. Today this requires the operator to remember, decide, and re-launch — there's no "watch this target and tell me when something changes" mode.
+
+**Product value.** A continuous-surface mode would turn sigint from a point-in-time tool into a persistent surveillance asset for engagement. Schedule recurring recon, diff against the last baseline, automatically queue narrow follow-up scans for changed assets, and surface only the deltas to the operator. Bridges sigint into the "exposure management" category that Wiz/Censys occupy commercially.
+
+**Rough effort.** Medium-Large (3-4 weeks). Builds on Phase 7's diff infrastructure and Phase 9's resume mode. New surface: a scheduling layer, automated triggers, a "watching" status concept, and notification channels (event bus → email/Slack/webhook).
+
+### Other themes worth naming (not fully scoped here)
+- **Multi-engagement / multi-tenant** — separate engagements isolated, role-based access, shared model artifacts. Architecturally invasive. Probably premature without paying customers.
+- **Mobile / responsive web UI** — Phase 26 explicitly declined this. Worth revisiting if remote/field operators turn out to be a real audience.
+- **Cloud-native / Kubernetes deployment** — helm chart, k8s manifests, multi-host operation. Phase 20 shipped Docker; this is the next deployment-maturity step.
+- **Report generation V2** — interactive HTML reports with embedded evidence, redaction controls, client-deliverable polish.
+
+### Small follow-ups (not phase-worthy)
+These are housekeeping items that can each be a one-shot ticket without a full phase:
+- Issue **#39** — `train_run_eval` factory error emits wrong event variant (P1 bug).
+- **DEC-P26-T6-002** — P1 job-detail drawer (needs `JobRecord.stdout_tail` field).
+- **REQ-P26-P1-002** — bulk-harvest selection bar (needs DataTable row-selection primitive).
 
 ---
 

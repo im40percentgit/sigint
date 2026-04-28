@@ -416,7 +416,9 @@ accepted
   - Source: `web/src/components/ScanView.js`
   - Status: accepted
 
-- **DEC-WEB-012**: [source not found]
+- **DEC-WEB-012**: [reference-only — bidirectional WebSocket for approval responses]
+  - Source: referenced in `web/src/components/ScanView.js` (DEC-WEB-011 rationale); no standalone @decision block. Captures the bidirectional /ws/events upgrade made when Phase 6's approval modal began sending decisions back over the same socket. Anchored to Phase 5 alongside other legacy SPA decisions.
+  - Status: accepted
 
 - **DEC-WEB-021**: Discriminated union for WebSocket events using `type` literal field
   - Source: `crates/sigint-web/frontend/src/types.ts`
@@ -471,19 +473,10 @@ accepted
   - Status: accepted
 
 ## Unplanned Decisions (in code, not in any MASTER_PLAN)
-- DEC-AGENT-019
-- DEC-PLUGIN-001
-- DEC-PLUGIN-002
-- DEC-PLUGIN-003
-- DEC-TRAIN-001
-- DEC-TRAIN-002
-- DEC-TRAIN-003
-- DEC-TRAIN-004
-- DEC-TRAIN-006
-- DEC-TRAIN-007
-- DEC-WEB-006
-- DEC-WEB-008
-- DEC-WEB-009
-- DEC-WEB-011
-- DEC-WEB-012
+
+> 2026-04-27: All previously-unplanned decisions have been anchored to phases in MASTER_PLAN.md.
+> See: Phase 5 (DEC-WEB-006/008/009/011/012), Phase 14 (DEC-AGENT-019), Phase 22 (DEC-PLUGIN-001/002/003),
+> Phase 23 (DEC-TRAIN-001/002/003/004/006/007). DEC-TRAIN-005 was superseded by DEC-P24-007 (Phase 24).
+
+(none)
 
