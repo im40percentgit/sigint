@@ -24,6 +24,23 @@
 //! ambiguity.  Addresses REQ-P27-P0-001.  Phase 28 seam: the archive format
 //! is stable; Phase 28 adds a sibling `<id>-<version>.sig` file or extends
 //! the manifest — it never restructures the layout (Phase 27 seam #7).
+//!
+//! @decision DEC-P27-T1B-001
+//! @title extract_archive refuses symlink and hardlink tar entries entirely
+//! @status accepted
+//! @rationale Plugin packs are simple file+library bundles (manifest.json,
+//! lib/<library>, optional README/LICENSE).  Symlinks and hardlinks have no
+//! legitimate use case in this format.  Refusing them outright eliminates a
+//! class of path-traversal escape: a crafted archive could supply
+//! `name="safe.txt"` (which passes the entry-name guard) with
+//! `linkname="../../etc/passwd"` (typeflag=2, symlink) or
+//! `linkname="../../etc/shadow"` (typeflag=1, hardlink), causing a link to
+//! land inside `dest` whose target resolves outside it.  Validating the
+//! linkname field is an alternative; refusing the entry type entirely is
+//! simpler, shrinks the attack surface, and matches the pack threat model.
+//! Unsupported entry types (device nodes, FIFOs, character specials) are
+//! likewise refused.  Closes issue #62.  Surfaced by tester during #51
+//! verification.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -158,6 +175,40 @@ pub fn extract_archive(archive_path: &Path, dest: &Path) -> Result<PluginManifes
             if component == std::path::Component::ParentDir {
                 return Err(PackError::Archive(format!(
                     "archive entry attempts path traversal: {entry_path}"
+                )));
+            }
+        }
+
+        // Entry-type guard: refuse symlinks, hardlinks, and all other
+        // non-regular / non-directory entry types.
+        //
+        // A symlink entry with name="safe.txt" (passes the name guard above)
+        // and linkname="../../etc/passwd" would write a link inside `dest`
+        // whose target escapes the sandbox.  Since plugin packs never contain
+        // symlinks or hardlinks legitimately, refusing the entire entry type
+        // is simpler and safer than validating the linkname field.
+        // (DEC-P27-T1B-001)
+        match entry.header().entry_type() {
+            tar::EntryType::Regular | tar::EntryType::GNUSparse | tar::EntryType::Directory => {
+                // Allowed — proceed with extraction.
+            }
+            tar::EntryType::Symlink | tar::EntryType::Link => {
+                let link_target = entry
+                    .link_name()
+                    .ok()
+                    .flatten()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                return Err(PackError::Archive(format!(
+                    "rejected: link entries are not supported in plugin archives \
+                     (entry {:?} → {:?})",
+                    entry_path, link_target
+                )));
+            }
+            other => {
+                return Err(PackError::Archive(format!(
+                    "rejected: unsupported tar entry type {:?} for {:?}",
+                    other, entry_path
                 )));
             }
         }
@@ -479,15 +530,32 @@ mod tests {
     /// path sanitisation.  `entry_name` is written verbatim into the header
     /// name field; `content` is the file payload.
     ///
-    /// This deliberately produces an archive with a malicious entry path so
-    /// `extract_archive` can exercise its path-traversal guard.
-    fn build_malicious_archive(entry_name: &[u8], content: &[u8]) -> Vec<u8> {
+    /// `typeflag` is the single byte written at header offset 156:
+    ///   - `b'0'` = regular file (POSIX)
+    ///   - `b'1'` = hardlink
+    ///   - `b'2'` = symlink
+    ///   - `b'3'` = character special
+    ///   - `b'4'` = block special
+    ///   - `b'5'` = directory
+    ///   - `b'6'` = FIFO
+    ///
+    /// `linkname` is written verbatim into the header linkname field
+    /// (bytes 157..257); pass `b""` for regular-file entries.
+    ///
+    /// This deliberately produces archives that bypass the `tar` crate's own
+    /// write-time sanitisation so `extract_archive` can exercise its guards.
+    fn build_malicious_archive(
+        entry_name: &[u8],
+        content: &[u8],
+        typeflag: u8,
+        linkname: &[u8],
+    ) -> Vec<u8> {
         use std::io::Write as _;
 
         // --- Tar header (512 bytes) -------------------------------------------
         let mut hdr = [0u8; 512];
 
-        // name field [0..100]: write the raw malicious path
+        // name field [0..100]: write the raw entry path verbatim
         let name_len = entry_name.len().min(99); // keep a NUL terminator
         hdr[..name_len].copy_from_slice(&entry_name[..name_len]);
 
@@ -508,8 +576,13 @@ mod tests {
         // checksum placeholder [148..156]: will be filled below
         hdr[148..156].copy_from_slice(b"        "); // 8 spaces for checksum calc
 
-        // typeflag [156]: '0' = regular file
-        hdr[156] = b'0';
+        // typeflag [156]: caller-supplied (b'0' = regular, b'1' = hardlink,
+        //                                  b'2' = symlink, etc.)
+        hdr[156] = typeflag;
+
+        // linkname [157..257]: link target, written verbatim
+        let link_len = linkname.len().min(99);
+        hdr[157..157 + link_len].copy_from_slice(&linkname[..link_len]);
 
         // magic "ustar\0" [257..263] + version "00" [263..265]
         hdr[257..263].copy_from_slice(b"ustar\0");
@@ -612,7 +685,7 @@ mod tests {
     fn extract_archive_rejects_parent_dir_traversal() {
         // The malicious path has two ".." components — the guard catches the
         // first `Component::ParentDir` and returns an error immediately.
-        let archive = build_malicious_archive(b"../../etc/passwd", b"pwned");
+        let archive = build_malicious_archive(b"../../etc/passwd", b"pwned", b'0', b"");
         assert_traversal_rejected(&archive, "traversal");
     }
 
@@ -625,7 +698,7 @@ mod tests {
     // -------------------------------------------------------------------------
     #[test]
     fn extract_archive_rejects_single_parent_dir_traversal() {
-        let archive = build_malicious_archive(b"../escape_target", b"pwned");
+        let archive = build_malicious_archive(b"../escape_target", b"pwned", b'0', b"");
         assert_traversal_rejected(&archive, "traversal");
     }
 
@@ -638,7 +711,7 @@ mod tests {
     #[test]
     fn extract_archive_rejects_absolute_path() {
         // The path starts with '/' — the `is_absolute()` guard fires first.
-        let archive = build_malicious_archive(b"/tmp/foo", b"pwned");
+        let archive = build_malicious_archive(b"/tmp/foo", b"pwned", b'0', b"");
         assert_traversal_rejected(&archive, "absolute");
     }
 
@@ -653,7 +726,136 @@ mod tests {
     fn extract_archive_rejects_nested_parent_dir_traversal() {
         // A subtler variant: the path looks safe at first glance but escapes
         // the dest dir by embedding ".." after a normal component.
-        let archive = build_malicious_archive(b"safe/../../etc/passwd", b"pwned");
+        let archive = build_malicious_archive(b"safe/../../etc/passwd", b"pwned", b'0', b"");
         assert_traversal_rejected(&archive, "traversal");
+    }
+
+    // =========================================================================
+    // Symlink / hardlink / unsupported entry-type rejection tests (issue #62)
+    //
+    // The name-guard above only checks the entry NAME field.  A crafted
+    // archive can supply a benign name ("safe.txt") while setting typeflag=2
+    // (symlink) with linkname="../../etc/passwd", writing a link inside dest
+    // whose target resolves outside it.  DEC-P27-T1B-001 closes this by
+    // refusing all link and unsupported-type entries before any extraction.
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // extract_archive_rejects_symlink_entry
+    //
+    // Entry: name="safe.txt" (passes name guard), typeflag=2 (symlink),
+    //        linkname="../../etc/passwd"
+    // Guard: entry-type check → PackError::Archive containing "link"
+    // -------------------------------------------------------------------------
+    #[test]
+    fn extract_archive_rejects_symlink_entry() {
+        // The entry name is deliberately benign — it would pass the existing
+        // name-traversal guard.  The attack vector is the linkname field.
+        let archive = build_malicious_archive(
+            b"safe.txt",         // benign name — passes the name guard
+            b"",                 // no file content for a symlink
+            b'2',                // typeflag 2 = symlink
+            b"../../etc/passwd", // malicious link target
+        );
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pack_path = tmp.path().join("symlink.sgnt-pack");
+        std::fs::write(&pack_path, &archive).expect("write archive");
+
+        let result = extract_archive(&pack_path, tmp.path());
+
+        assert!(
+            result.is_err(),
+            "extract_archive must reject symlink entries"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PackError::Archive(_)),
+            "expected PackError::Archive, got: {err}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("link"),
+            "error message should contain \"link\", got: {msg:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // extract_archive_rejects_hardlink_entry
+    //
+    // Entry: name="safe.txt" (passes name guard), typeflag=1 (hardlink),
+    //        linkname="../../etc/shadow"
+    // Guard: entry-type check → PackError::Archive containing "link"
+    // -------------------------------------------------------------------------
+    #[test]
+    fn extract_archive_rejects_hardlink_entry() {
+        let archive = build_malicious_archive(
+            b"safe.txt",         // benign name — passes the name guard
+            b"",                 // hardlinks carry no payload in the tar stream
+            b'1',                // typeflag 1 = hardlink
+            b"../../etc/shadow", // malicious link target
+        );
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pack_path = tmp.path().join("hardlink.sgnt-pack");
+        std::fs::write(&pack_path, &archive).expect("write archive");
+
+        let result = extract_archive(&pack_path, tmp.path());
+
+        assert!(
+            result.is_err(),
+            "extract_archive must reject hardlink entries"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PackError::Archive(_)),
+            "expected PackError::Archive, got: {err}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("link"),
+            "error message should contain \"link\", got: {msg:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // extract_archive_rejects_unsupported_entry_type
+    //
+    // Entry: name="safe.txt" (passes name guard), typeflag=6 (FIFO / named pipe)
+    // Guard: entry-type check → PackError::Archive containing "unsupported"
+    // -------------------------------------------------------------------------
+    #[test]
+    fn extract_archive_rejects_unsupported_entry_type() {
+        // typeflag '6' = FIFO (named pipe) — never legitimate in a plugin pack.
+        // Character special ('3'), block special ('4'), and socket ('0'+8=56)
+        // hit the same `other` arm; FIFO is the easiest to construct in a raw
+        // header without triggering the tar crate's decoder errors.
+        let archive = build_malicious_archive(
+            b"safe.txt", // benign name
+            b"",         // no payload
+            b'6',        // typeflag 6 = FIFO
+            b"",         // no linkname
+        );
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pack_path = tmp.path().join("fifo.sgnt-pack");
+        std::fs::write(&pack_path, &archive).expect("write archive");
+
+        let result = extract_archive(&pack_path, tmp.path());
+
+        assert!(
+            result.is_err(),
+            "extract_archive must reject unsupported entry types"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PackError::Archive(_)),
+            "expected PackError::Archive, got: {err}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unsupported"),
+            "error message should contain \"unsupported\", got: {msg:?}"
+        );
     }
 }
