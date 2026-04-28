@@ -448,4 +448,212 @@ mod tests {
             "expected Archive error, got: {err}"
         );
     }
+
+    // =========================================================================
+    // Path-traversal regression tests for extract_archive
+    //
+    // Rationale: The tar crate's Builder::append_data rejects `..` and
+    // absolute paths at write time (see `copy_path_into_inner` in the tar
+    // crate source), so malicious archives cannot be constructed via the
+    // normal API.  Instead, these tests build the tar+gz bytes manually by
+    // writing raw POSIX tar header bytes, bypassing the tar crate's
+    // sanitisation.  This mirrors what an attacker-controlled archive would
+    // look like on disk.
+    //
+    // The POSIX/ustar tar header layout (512 bytes):
+    //   [0..100]   name
+    //   [100..108] mode (octal, null-terminated)
+    //   [108..116] uid
+    //   [116..124] gid
+    //   [124..136] size (octal, null-terminated)
+    //   [136..148] mtime (octal, null-terminated)
+    //   [148..156] checksum
+    //   [156]      typeflag  ('0' = regular file)
+    //   [157..257] linkname
+    //   [257..263] "ustar\0"
+    //   [263..265] version "00"
+    //   ... (rest padding)
+    // =========================================================================
+
+    /// Build a tar+gzip archive in raw bytes, bypassing the `tar` crate's
+    /// path sanitisation.  `entry_name` is written verbatim into the header
+    /// name field; `content` is the file payload.
+    ///
+    /// This deliberately produces an archive with a malicious entry path so
+    /// `extract_archive` can exercise its path-traversal guard.
+    fn build_malicious_archive(entry_name: &[u8], content: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+
+        // --- Tar header (512 bytes) -------------------------------------------
+        let mut hdr = [0u8; 512];
+
+        // name field [0..100]: write the raw malicious path
+        let name_len = entry_name.len().min(99); // keep a NUL terminator
+        hdr[..name_len].copy_from_slice(&entry_name[..name_len]);
+
+        // mode [100..108]: "0000644\0"
+        hdr[100..108].copy_from_slice(b"0000644\0");
+
+        // uid [108..116], gid [116..124]: all zeros (valid)
+        hdr[108..116].copy_from_slice(b"0000000\0");
+        hdr[116..124].copy_from_slice(b"0000000\0");
+
+        // size [124..136]: octal representation of content length
+        let size_str = format!("{:011o}\0", content.len());
+        hdr[124..136].copy_from_slice(size_str.as_bytes());
+
+        // mtime [136..148]: zero
+        hdr[136..148].copy_from_slice(b"00000000000\0");
+
+        // checksum placeholder [148..156]: will be filled below
+        hdr[148..156].copy_from_slice(b"        "); // 8 spaces for checksum calc
+
+        // typeflag [156]: '0' = regular file
+        hdr[156] = b'0';
+
+        // magic "ustar\0" [257..263] + version "00" [263..265]
+        hdr[257..263].copy_from_slice(b"ustar\0");
+        hdr[263..265].copy_from_slice(b"00");
+
+        // Compute checksum: unsigned sum of all 512 bytes
+        let cksum: u32 = hdr.iter().map(|&b| b as u32).sum();
+        // Write 6-digit octal + NUL + space into [148..156]
+        let cksum_str = format!("{:06o}\0 ", cksum);
+        hdr[148..156].copy_from_slice(cksum_str.as_bytes());
+
+        // --- Tar data blocks (content padded to 512-byte boundary) -----------
+        let mut tar_bytes: Vec<u8> = Vec::new();
+        tar_bytes.extend_from_slice(&hdr);
+        tar_bytes.extend_from_slice(content);
+        // pad to 512-byte boundary
+        let rem = content.len() % 512;
+        if rem != 0 {
+            tar_bytes.extend(std::iter::repeat_n(0u8, 512 - rem));
+        }
+        // end-of-archive: two 512-byte zero blocks
+        tar_bytes.extend(std::iter::repeat_n(0u8, 1024));
+
+        // --- Gzip-compress the tar stream ------------------------------------
+        let mut gz_buf = Vec::new();
+        {
+            let mut enc = GzEncoder::new(&mut gz_buf, Compression::best());
+            enc.write_all(&tar_bytes).expect("gz write");
+            enc.finish().expect("gz finish");
+        }
+        gz_buf
+    }
+
+    /// Assert that `extract_archive` on the archive rejects with an
+    /// `Archive` error whose message contains `keyword`, and that no file
+    /// escaped outside `dest`.
+    fn assert_traversal_rejected(archive_bytes: &[u8], keyword: &str) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path();
+
+        // Write the malicious archive to a file
+        let pack_path = dest.join("malicious.sgnt-pack");
+        std::fs::write(&pack_path, archive_bytes).expect("write malicious archive");
+
+        let result = extract_archive(&pack_path, dest);
+
+        // Must be an error
+        assert!(
+            result.is_err(),
+            "extract_archive must reject malicious archive"
+        );
+
+        let err = result.unwrap_err();
+
+        // Must be the Archive variant
+        assert!(
+            matches!(err, PackError::Archive(_)),
+            "expected PackError::Archive, got: {err}"
+        );
+
+        // Error message must contain the relevant keyword
+        let msg = err.to_string();
+        assert!(
+            msg.contains(keyword),
+            "error message should contain {keyword:?}, got: {msg:?}"
+        );
+
+        // Verify nothing escaped outside dest — the parent of dest should not
+        // have gained any new files/dirs.  We check that the parent still has
+        // exactly the same children it had before (tempfile dirs are isolated).
+        //
+        // Concretely: no file at `dest.parent()/../etc/passwd` etc.
+        // The tempdir parent is a system tmp dir; we look for the sentinel
+        // filenames used in these tests.
+        let parent = dest.parent().unwrap_or(dest);
+        let escaped = std::fs::read_dir(parent)
+            .ok()
+            .map(|rd| {
+                rd.filter_map(|e| e.ok()).any(|e| {
+                    let name = e.file_name();
+                    let s = name.to_string_lossy();
+                    // Sentinel names the malicious archives attempt to create
+                    s == "passwd" || s == "escape_target" || s.contains("escape")
+                })
+            })
+            .unwrap_or(false);
+        assert!(
+            !escaped,
+            "a file escaped outside the dest tempdir — path traversal guard failed"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // extract_archive_rejects_parent_dir_traversal
+    //
+    // Archive entry path: "../../etc/passwd"
+    // Guard: Component::ParentDir check → PackError::Archive("attempts path traversal")
+    // -------------------------------------------------------------------------
+    #[test]
+    fn extract_archive_rejects_parent_dir_traversal() {
+        // The malicious path has two ".." components — the guard catches the
+        // first `Component::ParentDir` and returns an error immediately.
+        let archive = build_malicious_archive(b"../../etc/passwd", b"pwned");
+        assert_traversal_rejected(&archive, "traversal");
+    }
+
+    // -------------------------------------------------------------------------
+    // extract_archive_rejects_single_parent_dir_traversal
+    //
+    // Archive entry path: "../escape_target"
+    // Variant: single ".." — guard catches Component::ParentDir on the first
+    // component, same code path as the double-dot variant.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn extract_archive_rejects_single_parent_dir_traversal() {
+        let archive = build_malicious_archive(b"../escape_target", b"pwned");
+        assert_traversal_rejected(&archive, "traversal");
+    }
+
+    // -------------------------------------------------------------------------
+    // extract_archive_rejects_absolute_path
+    //
+    // Archive entry path: "/tmp/foo"
+    // Guard: `relative.is_absolute()` → PackError::Archive("absolute path")
+    // -------------------------------------------------------------------------
+    #[test]
+    fn extract_archive_rejects_absolute_path() {
+        // The path starts with '/' — the `is_absolute()` guard fires first.
+        let archive = build_malicious_archive(b"/tmp/foo", b"pwned");
+        assert_traversal_rejected(&archive, "absolute");
+    }
+
+    // -------------------------------------------------------------------------
+    // extract_archive_rejects_nested_parent_dir_traversal
+    //
+    // Archive entry path: "safe/../../etc/passwd"
+    // Guard: first component is Normal("safe"), second is ParentDir — guard
+    // still catches it.
+    // -------------------------------------------------------------------------
+    #[test]
+    fn extract_archive_rejects_nested_parent_dir_traversal() {
+        // A subtler variant: the path looks safe at first glance but escapes
+        // the dest dir by embedding ".." after a normal component.
+        let archive = build_malicious_archive(b"safe/../../etc/passwd", b"pwned");
+        assert_traversal_rejected(&archive, "traversal");
+    }
 }
