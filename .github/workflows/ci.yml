@@ -45,6 +45,14 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Run ignored integration tests (Phase 27 closed-loop)
+        # Runs the plugin_closed_loop test (REQ-P27-P0-009).
+        # --test-threads=1 avoids cargo build contention: the test shells out
+        # to `cargo build -p sigint-plugin-hello` and concurrent builds on CI
+        # runners can exhaust memory or collide on the shared target/ cache.
+        # The plugin cdylib is warm-cached from the previous step (<10s extra).
+        run: cargo test --workspace -- --ignored --test-threads=1
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

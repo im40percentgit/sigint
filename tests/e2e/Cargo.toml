@@ -10,9 +10,11 @@ sigint-agents = { workspace = true }
 sigint-core = { workspace = true }
 sigint-llm = { workspace = true }
 sigint-store = { workspace = true }
+sigint-plugin = { workspace = true }
 
 axum = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+tempfile = { workspace = true }
