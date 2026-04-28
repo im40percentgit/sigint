@@ -86,6 +86,17 @@ pub enum JobStatus {
 /// Persistent record of a single fine-tuning job.
 ///
 /// Serialized as one JSON object per line in `job_dir/jobs.json`.
+///
+/// @decision DEC-P26-T6-002
+/// @title `stdout_tail` added to `JobRecord`; `Option<String>` with `serde(default)`
+/// @status accepted
+/// @rationale The job-detail drawer needs to show the bounded stdout tail captured
+/// during streaming execution. Storing it directly in `JobRecord` (rather than a
+/// sidecar file) keeps job state in a single source of truth. The field is
+/// `Option<String>` because the sync CLI path (`run_finetune`) inherits the
+/// parent's stdout and cannot capture it — those records legitimately have no tail.
+/// `#[serde(default)]` ensures old JSONL records without this field still
+/// deserialize correctly (the missing key deserializes to `None`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRecord {
     /// Unique job identifier (UUID v4).
@@ -119,6 +130,17 @@ pub struct JobRecord {
     /// Absent for Running and Success records.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
+
+    /// Last N bytes of stdout+stderr captured during streaming execution.
+    ///
+    /// Populated by `run_finetune_streaming` at job completion. The sync CLI
+    /// path (`run_finetune`) inherits stdout and cannot capture it, so this
+    /// field is `None` for CLI-initiated jobs.
+    ///
+    /// `#[serde(default)]` ensures old JSONL records that pre-date this field
+    /// still deserialize cleanly — the missing key resolves to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_tail: Option<String>,
 }
 
 // ── Command parsing ──────────────────────────────────────────────────────────
@@ -289,6 +311,8 @@ pub fn run_finetune(
         exit_code,
         status: status.clone(),
         failure_reason: failure_reason.clone(),
+        // Sync CLI path inherits stdout — no capture possible (DEC-P26-T6-002).
+        stdout_tail: None,
     };
 
     // Persist the record to jobs.json (JSONL — one object per line).
@@ -483,6 +507,16 @@ pub async fn run_finetune_streaming(
     // Wait for the drain tasks to complete before awaiting the child.
     let _ = tokio::join!(stdout_task, stderr_task);
 
+    // Capture final tail snapshot after all lines are consumed (DEC-P26-T6-002).
+    let final_tail = {
+        let tail_bytes: Vec<u8> = tail.iter().copied().collect();
+        if tail_bytes.is_empty() {
+            None
+        } else {
+            Some(utf8_safe_tail(&tail_bytes))
+        }
+    };
+
     let exit_status = child
         .wait()
         .await
@@ -509,6 +543,8 @@ pub async fn run_finetune_streaming(
         exit_code,
         status: status.clone(),
         failure_reason: failure_reason.clone(),
+        // Populated from the rolling tail accumulated during line-reading (DEC-P26-T6-002).
+        stdout_tail: final_tail,
     };
 
     persist_job(&job_dir, &record)
@@ -758,6 +794,7 @@ mod tests {
             exit_code: Some(0),
             status: JobStatus::Success,
             failure_reason: None,
+            stdout_tail: Some("line1\nline2\n".into()),
         };
         let r2 = JobRecord {
             id: "j2".into(),
@@ -769,6 +806,7 @@ mod tests {
             exit_code: None,
             status: JobStatus::Running,
             failure_reason: None,
+            stdout_tail: None,
         };
 
         let mut f = std::fs::File::create(&jobs_file).unwrap();
@@ -1041,5 +1079,138 @@ mod tests {
     #[test]
     fn utf8_safe_tail_empty() {
         assert_eq!(utf8_safe_tail(b""), "");
+    }
+
+    // ── stdout_tail field tests ───────────────────────────────────────────────
+
+    /// Verify that run_finetune_streaming persists a non-None stdout_tail in the
+    /// JobRecord after the command completes (DEC-P26-T6-002).
+    #[tokio::test]
+    async fn run_finetune_streaming_persists_stdout_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let train = tmp.path().join("train.jsonl");
+        let test = tmp.path().join("test.jsonl");
+        let out = tmp.path().join("adapter.bin");
+        let job_dir = tmp.path().join("jobs");
+
+        std::fs::write(&train, "x\n").unwrap();
+        std::fs::write(&test, "y\n").unwrap();
+
+        let cfg = TrainConfig {
+            finetune_command: "sh -c 'echo first_line; echo second_line; echo third_line'"
+                .to_string(),
+            min_eval_examples: 50,
+            job_dir: Some(job_dir.clone()),
+        };
+
+        let rec = run_finetune_streaming(
+            &cfg,
+            "tail-persist-job-id-001",
+            "llama3.2:8b",
+            &out,
+            &train,
+            &test,
+            4096,
+            |_| {},
+        )
+        .await
+        .expect("should succeed");
+
+        // The returned record must carry the tail.
+        assert!(
+            rec.stdout_tail.is_some(),
+            "streaming runner must persist a non-None stdout_tail"
+        );
+        let tail = rec.stdout_tail.as_ref().unwrap();
+        assert!(
+            tail.contains("third_line"),
+            "stdout_tail must include last emitted line; got: {:?}",
+            tail
+        );
+
+        // The persisted JSONL record must also have the field.
+        let jobs_file = job_dir.join("jobs.json");
+        let contents = std::fs::read_to_string(&jobs_file).unwrap();
+        let parsed: JobRecord = serde_json::from_str(contents.lines().next().unwrap()).unwrap();
+        assert!(
+            parsed.stdout_tail.is_some(),
+            "persisted JSONL record must have stdout_tail field"
+        );
+        assert!(
+            parsed.stdout_tail.as_ref().unwrap().contains("third_line"),
+            "persisted stdout_tail must include expected output"
+        );
+    }
+
+    /// Verify that the sync run_finetune (CLI path) leaves stdout_tail = None
+    /// because it uses Stdio::inherit() and cannot capture output (DEC-P26-T6-002).
+    #[test]
+    fn run_finetune_persists_no_stdout_tail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let train = tmp.path().join("train.jsonl");
+        let test = tmp.path().join("test.jsonl");
+        let out = tmp.path().join("adapter.bin");
+        let job_dir = tmp.path().join("jobs");
+
+        std::fs::write(&train, "x\n").unwrap();
+        std::fs::write(&test, "y\n").unwrap();
+
+        let cfg = TrainConfig {
+            finetune_command: "sh -c 'echo hello_cli; exit 0'".to_string(),
+            min_eval_examples: 50,
+            job_dir: Some(job_dir.clone()),
+        };
+
+        let rec = run_finetune(
+            &cfg,
+            "cli-no-tail-job-001",
+            "llama3.2:8b",
+            &out,
+            &train,
+            &test,
+        )
+        .expect("should succeed");
+
+        assert!(
+            rec.stdout_tail.is_none(),
+            "sync CLI runner must produce stdout_tail = None (inherits stdout)"
+        );
+
+        // Verify the JSONL record also lacks the field (not serialized when None).
+        let jobs_file = job_dir.join("jobs.json");
+        let contents = std::fs::read_to_string(&jobs_file).unwrap();
+        let line = contents.lines().next().unwrap();
+        let json: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(
+            json.get("stdout_tail").is_none(),
+            "stdout_tail must be absent in serialized JSONL when None (skip_serializing_if)"
+        );
+    }
+
+    /// Verify that old JSONL records that pre-date the stdout_tail field
+    /// still deserialize cleanly with stdout_tail = None (DEC-P26-T6-002).
+    #[test]
+    fn jobrecord_deserializes_old_format() {
+        // A minimal JSONL record in the pre-stdout_tail format (no stdout_tail key).
+        let old_line = r#"{
+            "id": "old-job-001",
+            "started_at": "2026-04-01T00:00:00Z",
+            "finished_at": "2026-04-01T00:01:00Z",
+            "command": "bash -c 'exit 0'",
+            "base_model": "llama3.2:8b",
+            "output_path": "/tmp/adapter.bin",
+            "exit_code": 0,
+            "status": {"status": "Success"}
+        }"#;
+
+        let rec: JobRecord = serde_json::from_str(old_line)
+            .expect("old-format record must deserialize without error");
+
+        assert_eq!(rec.id, "old-job-001");
+        assert!(
+            rec.stdout_tail.is_none(),
+            "old records without stdout_tail key must deserialize to None, got: {:?}",
+            rec.stdout_tail
+        );
     }
 }

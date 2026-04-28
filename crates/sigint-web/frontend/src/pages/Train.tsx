@@ -28,13 +28,16 @@
  * accumulating in wsManager's handler set.
  *
  * @decision DEC-P26-T6-002
- * @title Job-detail drawer deferred — JobRecord lacks stdout_tail field
- * @status deferred
- * @rationale P1 requires showing last 2 KiB stdout. The current JobRecord in
- * finetune.rs has no stdout_tail field. Adding it requires backend changes
- * outside T6 scope. Follow-up: add stdout_tail to JobRecord and wire a
- * GET /api/train/jobs/:id polling call in the drawer. Filed as a comment here
- * so the next implementer has the full context.
+ * @title Job-detail drawer with live stdout updates via WS subscription
+ * @status accepted
+ * @rationale Clicking a Jobs-table row opens a slide-in JobDetailDrawer.
+ * The drawer shows the full JobRecord (id, model, status, duration, exit code,
+ * stdout_tail). For running jobs it subscribes to wsManager for
+ * TrainingJobProgress events and filters by job_id, updating the displayed
+ * tail in real time without polling. The drawer unsubscribes on unmount.
+ * Backend: stdout_tail is now stored on JobRecord (Option<String>, populated
+ * by run_finetune_streaming; None for CLI-initiated jobs that use
+ * Stdio::inherit). See JobDetailDrawer.tsx for the full decision rationale.
  */
 
 import { h } from "preact";
@@ -50,6 +53,7 @@ import type {
 } from "../types";
 import { DataTable } from "../components/DataTable";
 import type { Column } from "../components/DataTable";
+import { JobDetailDrawer } from "../components/JobDetailDrawer";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -622,7 +626,13 @@ interface JobRow {
   [key: string]: unknown;
 }
 
-function JobsTable({ refreshKey }: { refreshKey: number }) {
+function JobsTable({
+  refreshKey,
+  onRowClick,
+}: {
+  refreshKey: number;
+  onRowClick: (job: TrainingJob) => void;
+}) {
   const [jobs, setJobs] = useState<TrainingJob[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -674,7 +684,7 @@ function JobsTable({ refreshKey }: { refreshKey: number }) {
       <DataTable
         columns={columns}
         data={rows}
-        onRowClick={(row) => { location.hash = `#/train/jobs/${row.id}`; }}
+        onRowClick={(row) => onRowClick(row._raw as TrainingJob)}
       />
     </div>
   );
@@ -685,6 +695,8 @@ function JobsTable({ refreshKey }: { refreshKey: number }) {
 export function Train() {
   // Incrementing this key causes JobsTable to re-fetch
   const [jobsRefreshKey, setJobsRefreshKey] = useState(0);
+  // Job-detail drawer state (DEC-P26-T6-002)
+  const [drawerJob, setDrawerJob] = useState<TrainingJob | null>(null);
 
   function refreshJobs() {
     setJobsRefreshKey(k => k + 1);
@@ -700,7 +712,14 @@ export function Train() {
       <ExportCard />
       <FinetuneCard onJobStarted={refreshJobs} />
       <EvaluateCard />
-      <JobsTable refreshKey={jobsRefreshKey} />
+      <JobsTable refreshKey={jobsRefreshKey} onRowClick={setDrawerJob} />
+
+      {drawerJob && (
+        <JobDetailDrawer
+          job={drawerJob}
+          onClose={() => setDrawerJob(null)}
+        />
+      )}
     </div>
   );
 }

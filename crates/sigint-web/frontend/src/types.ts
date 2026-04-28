@@ -336,6 +336,12 @@ export interface TrainingJob {
   /** Internally-tagged: `{"status":"Running"}` | `{"status":"Success"}` | `{"status":"Failed"}` */
   status: JobStatus;
   failure_reason?: string;
+  /**
+   * Last N bytes of stdout+stderr captured during streaming execution.
+   * Absent (undefined) for sync CLI-initiated jobs that use Stdio::inherit().
+   * Populated by run_finetune_streaming at job completion (DEC-P26-T6-002).
+   */
+  stdout_tail?: string;
 }
 
 /**
