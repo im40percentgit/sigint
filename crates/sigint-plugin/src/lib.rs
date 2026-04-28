@@ -1,8 +1,19 @@
-//! sigint-plugin — compile-time plugin registration for SIGINT tool packs.
+//! sigint-plugin — compile-time and runtime plugin system for SIGINT tool packs.
+//!
+//! # Compile-time plugins (Phase 22)
 //!
 //! Plugin crates implement `sigint_tools::Tool` and register tools via
 //! `register_tool!()`. The main binary calls `collect_plugin_tools()` at
 //! startup to discover all registered tools across linked crates.
+//!
+//! # Runtime plugins (Phase 27 — T1 foundation)
+//!
+//! `.sgnt-pack` archives contain a `manifest.json` and a platform dynamic
+//! library.  The manifest schema is defined in [`manifest`]; archive
+//! read/write helpers live in [`pack`]; the C-ABI entry-symbol contract
+//! lives in [`abi`].
+//!
+//! T3 (runtime loader) and T4 (install CLI) build on these primitives.
 //!
 //! @decision DEC-PLUGIN-001
 //! @title inventory crate for zero-boilerplate link-time tool registration
@@ -27,6 +38,39 @@
 //! convert a &'static PromptPack into that fn pointer and passes it to
 //! `orchestrator.with_prompt_override()`. No shared concrete types cross the crate
 //! boundary — only a function pointer, which is Copy + 'static + zero-cost.
+
+// ─── Phase 27 T1: manifest schema + pack format ───────────────────────────────
+
+/// C-ABI entry-symbol contract for runtime-loaded plugins.
+///
+/// Defines [`abi::PluginEntrypoint`], [`abi::PluginEntryFn`],
+/// [`abi::PLUGIN_API_VERSION`], and [`abi::DEFAULT_ENTRY_SYMBOL`].
+/// T3 (runtime loader) uses these types to resolve the entry symbol from a
+/// `dlopen`'d library.  Phase 28 wraps the call site without changing the
+/// contract (Phase 27 seam #8).
+pub mod abi;
+
+/// Plugin manifest schema — JSON v1.
+///
+/// [`manifest::PluginManifest`] is the parsed form of the `manifest.json`
+/// inside every `.sgnt-pack` archive.  [`manifest::parse_manifest`] and
+/// [`manifest::validate_manifest`] are the primary ingestion entry points.
+/// Phase 28 reserved fields (`signature`, `signed_by`, `signature_algorithm`,
+/// `library_kind`) are defined here as `Option<String>` so Phase 28 can wire
+/// signature verification without a manifest schema change (seam #1).
+pub mod manifest;
+
+/// `.sgnt-pack` archive read/write primitives.
+///
+/// [`pack::read_manifest_from_archive`] reads only the manifest from an
+/// archive without extracting anything.  [`pack::extract_archive`] fully
+/// unpacks to a destination directory.  [`pack::pack_directory`] creates a
+/// new archive from a source directory.
+pub mod pack;
+
+// Convenience re-exports for the most commonly used pack types
+pub use manifest::{library_filename, parse_manifest, validate_manifest, PluginManifest};
+pub use pack::{extract_archive, pack_directory, read_manifest_from_archive, PackError};
 
 pub use sigint_agents::prompt_pack::PromptOverrideFn;
 pub use sigint_agents::role::AgentRole;
