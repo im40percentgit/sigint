@@ -1602,16 +1602,203 @@ Product value: one-click harvest from the session list, visual progress for fine
 
 ---
 
-## Phase 27 Candidate Themes (Planning Notes)
+### Phase 27: Plugin Packaging + Local Install
+**Status:** planned
+**Branch:** feature/phase-27-plugin-pack (created at implementation time)
+**Decision IDs:** DEC-P27-001, DEC-P27-002, DEC-P27-003, DEC-P27-004, DEC-P27-005, DEC-P27-006, DEC-P27-007, DEC-P27-008
+**Requirements:** REQ-P27-GOAL-001 through REQ-P27-GOAL-004, REQ-P27-NOGO-001 through REQ-P27-NOGO-006, REQ-P27-P0-001 through REQ-P27-P0-010, REQ-P27-P1-001 through REQ-P27-P1-003, REQ-P27-P2-001 through REQ-P27-P2-004
+**Issues:** TBD (orchestrator opens after docs PR merges)
+**Depends on:** Phase 22 (compile-time plugin system, `sigint-plugin` crate, `Tool` trait, `inventory`-based registration), Phase 25 (security pass — applies to install-path validation)
 
-> Drafted 2026-04-27 after Phase 26 close. **Not yet committed to.** The user picks one (or none) and the Planner then writes the formal Phase 27 spec with REQ-IDs, decisions, and tasks. Each theme below is a problem statement + product value + rough effort, not a design. Listed in no particular order.
+#### Problem Statement
 
-### Theme A — Plugin System Maturation
-**Problem.** Phase 22 shipped a compile-time plugin system: external crates implement `sigint_tools::Tool`, register via `register_tool!()`, and the binary collects them at link time. It works, but plugins are first-party-only — distribution, versioning, signing, and runtime safety are absent. A pentester who writes a custom recon tool today can scaffold a workspace member, but cannot share it without their consumers rebuilding from source. The compile-time model also means risky/experimental tools cannot be loaded without re-deploying the binary.
+Phase 22 shipped a compile-time plugin system: external crates implement `sigint_tools::Tool`, register via `register_tool!()`, and `collect_plugin_tools()` discovers them via the `inventory` crate at link time. The model works for in-tree plugins, but it caps sigint's reach: every external contributor must fork the workspace, add their crate as a member, and rebuild the binary from source. A pentester who writes a custom recon tool cannot share it without their consumers running `cargo build --release` from source — that is not a distribution model, it is a build instruction.
 
-**Product value.** A real plugin ecosystem makes sigint extensible by the community: package format (`.sgnt-pack`?), a local registry, signing for trust, and a sandboxed loader for runtime ACL enforcement. This is the single biggest lever for the project's reach — most pentest workflows are bespoke, and a plugin marketplace would let domain experts contribute without touching the core.
+Evidence from reading `crates/sigint-plugin/src/lib.rs`: `inventory::collect!` is fundamentally a link-time mechanism. It cannot pick up crates that were not present when `cargo build` ran. There is no runtime hook to add a `ToolFactory` after the binary started. This means the existing plugin surface is closed at compile time by design. Without a runtime loading path, "plugin system" is a misnomer — it is really a "first-party tool extension scaffold".
 
-**Rough effort.** Large (3-5 weeks). Touches packaging, signing, sandboxing, CLI, web UI for plugin management, and probably Phase 25-style security hardening for untrusted plugin code.
+Phase 27 closes the local-install gap and only the local-install gap. It defines a `.sgnt-pack` package format, ships CLI commands to pack / install / list / uninstall plugins, and adds a runtime loader that surfaces installed plugins in the registry alongside compile-time ones. The format and loader decisions calcify once external developers consume them, so they must be pinned now even though the trust model (signing, sandbox) is deferred.
+
+Trusted-local and unsandboxed by design: an operator-asserted trust boundary at install time. The user runs `sigint plugin install ./my-plugin.sgnt-pack` against a binary they trust, with a plugin file they trust. Phase 28 will harden against untrusted plugins via signing, a remote registry, and sandboxed execution. Phase 27 must lay seams that Phase 28 can extend without rewriting Phase 27 surfaces.
+
+#### Goals
+
+- **REQ-P27-GOAL-001** — A plugin author packages their crate into a single `.sgnt-pack` artifact via `sigint plugin pack <crate-path>`, and a consumer installs it via `sigint plugin install <path>` without modifying the consumer's source tree or rebuilding the sigint binary.
+- **REQ-P27-GOAL-002** — Installed plugins appear in `sigint plugin list` alongside compile-time plugins and are loaded at startup so their tools are visible to agents in the same way compile-time tools are.
+- **REQ-P27-GOAL-003** — The existing `Plugin` / `Tool` trait surface and the `inventory`-based compile-time registration path remain unchanged; runtime loading is additive only.
+- **REQ-P27-GOAL-004** — Phase 28 (signing, registry, sandbox) drops into well-defined seams identified explicitly in this phase — no rework of Phase 27 surfaces.
+
+#### Non-Goals
+
+- **REQ-P27-NOGO-001** — No signing, signature verification, or trust roots. Trust is operator-asserted at install time.
+- **REQ-P27-NOGO-002** — No remote registry, discovery, or `plugin search` command. Install accepts a local file path only.
+- **REQ-P27-NOGO-003** — No runtime sandbox for plugin code. Loaded plugins run in the host process with full host privileges.
+- **REQ-P27-NOGO-004** — No cross-platform binary compatibility. Pack format is host-platform-specific (target-triple-pinned). A pack built on `x86_64-unknown-linux-gnu` is not installable on macOS.
+- **REQ-P27-NOGO-005** — No automatic update or version management. Installing an updated version requires explicit `sigint plugin uninstall` + `sigint plugin install`.
+- **REQ-P27-NOGO-006** — No hot reload. A plugin uninstalled at runtime takes effect on the next process start; a newly installed plugin is not loaded into the running process.
+
+#### Requirements
+
+**Must-Have (P0)**
+
+- **REQ-P27-P0-001** — `.sgnt-pack` is a deterministic archive containing a manifest, a single dynamic library, and optional auxiliary files.
+  Acceptance: Given any plugin crate that builds a `cdylib`, When `sigint plugin pack <crate-path>` runs, Then the output is a single `.sgnt-pack` file whose contents (when extracted) include `manifest.json`, the platform-appropriate dynamic library (`.so` / `.dylib` / `.dll`), and optionally `README.md` and `LICENSE`. The pack format is locked in DEC-P27-001.
+- **REQ-P27-P0-002** — Manifest schema is explicit and machine-validated.
+  Acceptance: Given a `.sgnt-pack` install attempt, When the manifest is missing required fields or contains unknown required fields, Then install fails with a structured error and writes nothing to the install dir. Required fields: `id` (semver-stable identifier), `version` (semver), `target_triple`, `entry_symbol`, `manifest_version`. Optional: `display_name`, `description`, `author`, `homepage`, `license`. Schema locked in DEC-P27-002.
+- **REQ-P27-P0-003** — Runtime loader uses `libloading` to `dlopen` the dynamic library and call the entry symbol.
+  Acceptance: Given an installed plugin matching the host target triple, When `AppCore::init()` runs, Then the loader (a) opens the library with `libloading::Library::new`, (b) resolves the manifest's `entry_symbol` via `Library::get`, (c) invokes the C-ABI entry function which returns a list of `Box<dyn Tool>` factories, (d) registers them in the same registry consulted by agents. The `Plugin` trait + entry-symbol C ABI is locked in DEC-P27-003.
+- **REQ-P27-P0-004** — Install location is namespaced by id+version under the platform user-data directory.
+  Acceptance: Given `sigint plugin install <path>`, When the manifest declares `id=foo` and `version=1.2.3`, Then the install dir is `${XDG_DATA_HOME:-~/.local/share}/sigint/plugins/foo-1.2.3/` (Linux), `~/Library/Application Support/sigint/plugins/foo-1.2.3/` (macOS), or `%APPDATA%/sigint/plugins/foo-1.2.3/` (Windows). The path layout is locked in DEC-P27-004.
+- **REQ-P27-P0-005** — Startup discovery scans the install dir and registers each valid plugin.
+  Acceptance: Given any number of installed plugins, When `sigint` starts, Then the loader walks the install dir, validates each manifest, attempts to load each library, and registers tools from successful loads in the runtime tool registry alongside `inventory`-collected compile-time tools. Discovery mechanism locked in DEC-P27-005.
+- **REQ-P27-P0-006** — A failing plugin logs a warning and is skipped — never crashes the binary.
+  Acceptance: Given a plugin with any failure mode (manifest invalid, target triple mismatch, library missing, `dlopen` error, missing entry symbol, panic in entry function, schema version too new), When the binary starts, Then a structured `tracing::warn!` is emitted with `plugin_id`, `plugin_path`, `failure_reason`, and the binary continues startup with that plugin skipped. Compile-time plugins and other runtime plugins still load. Failure-handling contract locked in DEC-P27-006.
+- **REQ-P27-P0-007** — `sigint plugin pack <crate-path>` produces a valid pack from a plugin crate.
+  Acceptance: Given a plugin crate that builds a `cdylib` and exports the C-ABI entry symbol, When `sigint plugin pack <crate-path>` runs, Then it (a) invokes `cargo build --release --target <host-triple>`, (b) reads the crate's `Cargo.toml` for plugin metadata under a `[package.metadata.sigint-plugin]` table, (c) writes `manifest.json`, (d) bundles the resulting dynamic library, (e) emits `<id>-<version>-<target-triple>.sgnt-pack` to the current directory or `--output <path>`. CLI surface locked in DEC-P27-008.
+- **REQ-P27-P0-008** — `sigint plugin install <path>`, `uninstall <id>`, `list`, `info <id>` cover the full lifecycle.
+  Acceptance: Given the four commands, When invoked, Then `install` validates and unpacks; `uninstall` removes the install dir for `<id>` (any version, or `--version <ver>` to disambiguate); `list` shows compile-time + installed plugins with id, version, source (`builtin` / `installed`), and load status (`loaded` / `failed: <reason>`); `info <id>` prints the full manifest plus install path. CLI surface locked in DEC-P27-008.
+- **REQ-P27-P0-009** — Closed-loop end-to-end test verifies the pack→install→use loop.
+  Acceptance: Given the test suite, When CI runs, Then a test in `tests/e2e/` or `crates/sigint-plugin/tests/` (a) writes a minimal example plugin to a temp dir, (b) runs `sigint plugin pack`, (c) runs `sigint plugin install` with `--prefix <tempdir>` to redirect the install dir, (d) starts a sigint subprocess with `SIGINT_PLUGIN_DIR=<tempdir>`, (e) verifies the plugin's tool appears in `sigint plugin list` output and that an agent can invoke it.
+- **REQ-P27-P0-010** — User docs cover plugin authoring.
+  Acceptance: Given USER_GUIDE.md, When the operator reads the plugin section, Then they find (a) a quickstart that pack→install→runs a hello-world tool from the `examples/` plugin, (b) the manifest schema reference, (c) the C-ABI entry-symbol contract, (d) the install-dir layout, (e) the failure modes and how to diagnose them, (f) an explicit "trust model: operator-asserted, no signing yet" disclaimer pointing at Phase 28.
+
+**Nice-to-Have (P1)**
+
+- **REQ-P27-P1-001** — Pack format includes a SHA-256 checksum of the dynamic library inside `manifest.json`, validated on install. Phase 28 will extend this to a signed checksum; the bare hash is a P1 hardening step that does not commit to a key infrastructure.
+- **REQ-P27-P1-002** — `--prefix` flag on install/uninstall/list to override the install dir for testing and per-engagement isolation. Drives REQ-P27-P0-009.
+- **REQ-P27-P1-003** — Example external plugin in `examples/sigint-plugin-hello/` with its own `Cargo.toml`, `lib.rs`, and `[package.metadata.sigint-plugin]` table — used by both the closed-loop test and the USER_GUIDE quickstart.
+
+**Future Consideration (P2)**
+
+- **REQ-P27-P2-001** — Multi-target packs (a single `.sgnt-pack` containing libraries for multiple target triples). Pack format is forward-compatible — `manifest.json` could grow a `targets: [{triple, library}]` array. Designed but not built.
+- **REQ-P27-P2-002** — WASM as an alternative loader. Lighter sandboxing pre-Phase-28; lower performance. Pack format leaves room for `library_kind: "native" | "wasm"` in the manifest. Designed but not built.
+- **REQ-P27-P2-003** — Signature field in manifest (`signature: <base64>`, `signed_by: <key-id>`). Phase 28 will populate this; Phase 27 reserves the schema slot.
+- **REQ-P27-P2-004** — Plugin-management web UI. Phase 28 territory; pack/install commands today are CLI-only.
+
+#### Architectural Decisions
+
+- **DEC-P27-001 — Pack format: tar+gzip archive.**
+  Options considered: (a) `.tar.gz` with a fixed internal layout, (b) `.zip`, (c) a custom binary format, (d) a directory (no archive). Trade-offs: `.tar.gz` is universal, streamable, and the Rust ecosystem has strong support (`tar` crate); `.zip` adds random access at the cost of a less-Rusty toolchain; custom format is gratuitous; raw directory loses the single-artifact distribution property. Chosen: `.tar.gz`, internal layout `manifest.json` at the root, `lib/<library-filename>` for the dynamic library, optional `README.md` and `LICENSE` at the root. Addresses: REQ-P27-P0-001. Evidence basis: well-trodden territory, no research needed.
+
+- **DEC-P27-002 — Manifest schema.**
+  Options considered: (a) JSON with a `manifest_version` discriminator, (b) TOML, (c) YAML, (d) embedded in the dynamic library as a metadata symbol. Trade-offs: JSON is the lingua franca for tool/SDK manifests, machine-validated easily, version-discriminated cleanly. TOML is more readable but the rest of sigint's runtime data is JSON. YAML invites parser drift. Embedding-as-symbol couples the manifest to the binary in a way that breaks `pack inspect` for an unloadable library. Chosen: JSON with `manifest_version: 1`. Required fields: `manifest_version`, `id`, `version`, `target_triple`, `entry_symbol`. Optional: `display_name`, `description`, `author`, `homepage`, `license`, `library_filename` (defaults to platform-derived `lib<id>.so` / `<id>.dylib` / `<id>.dll`). Schema is open for additive fields; unknown optional fields are ignored, unknown required fields fail validation. Addresses: REQ-P27-P0-002. Evidence basis: standard practice (cargo, npm, pip wheel METADATA).
+
+- **DEC-P27-003 — Loader: `libloading` + C-ABI entry symbol.**
+  Options considered: (a) `libloading` with a C-ABI entry function, (b) WASM via `wasmtime`, (c) subprocess + IPC, (d) custom dlopen wrapper. Trade-offs: `libloading` is the standard Rust dynamic-loading crate, in-process, zero-overhead, and matches the unsandboxed-trust model Phase 27 commits to. WASM brings sandboxing prematurely (Phase 28's job) and constrains plugin authors to a WASM-compatible ABI. Subprocess + IPC adds a serialization tax on every tool call. Custom dlopen wrapper reinvents `libloading`. Chosen: `libloading` for Phase 27. Entry symbol is a `extern "C" fn` named in the manifest (default `sigint_plugin_entry`) that returns a `*const PluginEntrypoint` C struct describing the plugin's tools. The full C-ABI shape lives in `crates/sigint-plugin/src/abi.rs` and is documented in USER_GUIDE.md. Addresses: REQ-P27-P0-003, REQ-P27-GOAL-003. Evidence basis: brief explicitly recommends `libloading`; alternatives (WASM) deferred to REQ-P27-P2-002. **Phase 28 seam:** swap `libloading::Library::new` for a sandboxed-loader call without changing the entry symbol contract.
+
+- **DEC-P27-004 — Install location: platform user-data dir, namespaced by id+version.**
+  Options considered: (a) flat archive stored as `<id>.sgnt-pack` in install dir, (b) unpacked to `<id>-<version>/` subdirs, (c) global system-wide install path (`/usr/local/lib/sigint/plugins/`). Trade-offs: flat archive forces re-extraction on every load; subdirs allow inspection/debugging and let multiple versions coexist; system-wide path requires root and conflicts with single-user trust model. Chosen: unpacked subdir under platform user-data dir. Linux: `${XDG_DATA_HOME:-~/.local/share}/sigint/plugins/<id>-<version>/`. macOS: `~/Library/Application Support/sigint/plugins/<id>-<version>/`. Windows: `%APPDATA%/sigint/plugins/<id>-<version>/`. The `directories` crate (already in tree via dependents) provides cross-platform paths. Addresses: REQ-P27-P0-004. Evidence basis: matches XDG and Apple platform conventions.
+
+- **DEC-P27-005 — Discovery mechanism: filesystem scan at startup, register into shared registry.**
+  Options considered: (a) scan install dir, validate each, register into the same `inventory`-backed registry compile-time plugins use, (b) build a separate runtime-plugin registry tier, (c) lazy-load on first tool invocation. Trade-offs: a single registry keeps the agent-side tool-lookup code unchanged (REQ-P27-GOAL-003); separate tiers double the lookup surface; lazy load saves startup time but defers errors and complicates `plugin list`. Chosen: shared registry, populated at startup. Implementation: `inventory` itself stays compile-time; runtime tools land in a `RuntimeToolRegistry` that the existing `collect_plugin_tools()` path is extended to consult (one merged Vec returned). The merge happens in `sigint-plugin` so callers (`AppCore::init`, agent dispatch) see one list. Addresses: REQ-P27-P0-005, REQ-P27-GOAL-003. **Phase 28 seam:** the registry-merge function is the natural insertion point for the signature-verification step.
+
+- **DEC-P27-006 — Failure mode: log-and-skip, never crash.**
+  Options considered: (a) abort startup on any plugin failure, (b) log warning and skip, (c) fail-on-startup but allow `--ignore-plugin-errors` flag. Trade-offs: aborting is safer in a security-critical model (Phase 28) but actively hostile in Phase 27's trust-the-operator model — a single broken plugin blocks the entire tool. Skipping with a structured log is the principle of least surprise for an unsandboxed local-install system. Chosen: log-and-skip with `tracing::warn!` carrying `plugin_id`, `plugin_path`, `failure_reason`. Failure categories defined: `manifest_invalid`, `target_mismatch`, `library_missing`, `dlopen_failed`, `entry_symbol_missing`, `entry_panicked`, `manifest_version_too_new`. Each has a documented diagnosis path in USER_GUIDE.md. Addresses: REQ-P27-P0-006. **Phase 28 seam:** the failure-category enum is exactly where Phase 28 adds `signature_invalid`, `signature_unknown_signer`, `sandbox_setup_failed`.
+
+- **DEC-P27-007 — Plugin metadata source-of-truth: `[package.metadata.sigint-plugin]` in `Cargo.toml`.**
+  Options considered: (a) standalone `sigint-plugin.toml` in the crate root, (b) `[package.metadata.sigint-plugin]` table in `Cargo.toml`, (c) inline attributes in `lib.rs`. Trade-offs: `Cargo.toml` metadata is the cargo-standard extension point and lets `cargo metadata` surface plugin info without a custom parser; standalone file duplicates package identity (name, version) that already lives in `Cargo.toml`; inline attributes require a proc-macro and obscure the metadata. Chosen: `[package.metadata.sigint-plugin]` table. `pack` reads `Cargo.toml`, derives the manifest from `name`+`version`+the metadata table, fills in `target_triple` from the build target, and writes `manifest.json` into the pack. Addresses: REQ-P27-P0-007. Evidence basis: cargo-deny, cargo-about, cargo-dist all use this pattern.
+
+- **DEC-P27-008 — CLI surface: `sigint plugin pack | install | uninstall | list | info`.**
+  Options considered: (a) keep all plugin commands under the existing `sigint plugin` subcommand from Phase 22, (b) split installable plugins into a separate `sigint pack` top-level command, (c) integrate into the web UI (P2). Trade-offs: keeping under `sigint plugin` is the principle of least surprise — Phase 22's `list` and `new` already live there. Adding `pack` (build a pack), `install` (consume a pack), `uninstall`, `info` extends the set without renaming. The Phase 22 `new` command (scaffold a workspace-member plugin) becomes the recommended starting point for plugin authors who'll then `pack` their crate. Each subcommand emits structured `--help` per clap idioms, matching the rest of the sigint CLI. Addresses: REQ-P27-P0-007, REQ-P27-P0-008.
+
+#### Phase 28 Seams (explicit, do-not-rework list)
+
+These are the surfaces Phase 27 deliberately leaves room for so Phase 28 (signing, registry, sandbox) can extend without rewriting:
+
+1. **Manifest schema reservation** — `signature`, `signed_by`, `signature_algorithm`, `library_kind` are reserved optional fields. Phase 27 ignores them. Phase 28 populates them.
+2. **Manifest version discriminator** — `manifest_version: 1` for Phase 27. Phase 28 introduces `manifest_version: 2` (signed) without breaking v1 packs.
+3. **Loader insertion point** — the call site of `libloading::Library::new` in the runtime loader is the single natural seam for inserting a sandbox-setup step. Phase 27 calls `Library::new` directly; Phase 28 wraps it in a `SandboxedLibrary::new` that performs `seccomp` / WASM init.
+4. **Registry-merge function** — the function that merges `inventory`-collected and runtime-loaded tools into one list is the insertion point for the signature-verification gate. Phase 27 merges unconditionally; Phase 28 inserts a verifier before merge.
+5. **Failure-category enum** — extensible enum for skip reasons. Phase 28 adds `signature_invalid`, `signature_unknown_signer`, `sandbox_setup_failed`.
+6. **Install command argument shape** — `sigint plugin install <path>` accepts a path. Phase 28 will accept `sigint plugin install <id>@<version>` from a registry; the command is the same, the argument parser dispatches on prefix.
+7. **Install-dir layout** — `<id>-<version>/` subdirs are stable. Phase 28 may add a sibling `<id>-<version>.sig` file or extend the manifest, never restructure the layout.
+8. **C-ABI entry symbol** — the entry symbol contract (`extern "C" fn` returning a `*const PluginEntrypoint`) is locked in Phase 27. Phase 28 sandboxing wraps the call site, never the contract.
+
+#### Definition of Done
+
+- REQ-P27-GOAL-001 satisfied: a plugin author runs `sigint plugin pack examples/sigint-plugin-hello/`, gets `sigint-plugin-hello-0.1.0-x86_64-unknown-linux-gnu.sgnt-pack`, ships it; consumer runs `sigint plugin install sigint-plugin-hello-0.1.0-x86_64-unknown-linux-gnu.sgnt-pack`, sees it in `sigint plugin list`, and an agent invokes its tool successfully.
+- REQ-P27-GOAL-002 satisfied: `sigint plugin list` shows both compile-time and installed plugins; tools from both are reachable by agents.
+- REQ-P27-GOAL-003 satisfied: `crates/sigint-plugin/src/lib.rs` Phase 22 surface (`Tool` trait, `register_tool!`, `collect_plugin_tools`) is unchanged; runtime loading is purely additive.
+- REQ-P27-GOAL-004 satisfied: the eight Phase 28 seams above are documented in this section and reserved in code comments at each seam point.
+- All P0 acceptance criteria pass.
+- Closed-loop e2e test (REQ-P27-P0-009) green in CI.
+- USER_GUIDE.md plugin chapter merged (REQ-P27-P0-010).
+- README plugin section updated to reference USER_GUIDE.md.
+- `cargo check --workspace`, `cargo clippy --all-targets -D warnings`, `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo audit` all clean.
+- MASTER_PLAN.md Decision Log populated by Guardian after merge.
+
+#### Tasks (target: 5–7 PR-sized chunks; orchestrator opens issues after this docs PR merges)
+
+- **T1 — Manifest schema + pack format library (no CLI yet).**
+  Files: `crates/sigint-plugin/src/manifest.rs` (new), `crates/sigint-plugin/src/pack.rs` (new), `crates/sigint-plugin/src/abi.rs` (new — C-ABI entry-symbol contract), `crates/sigint-plugin/src/lib.rs` (re-exports).
+  Adds: `Manifest` struct + `serde` impls, `manifest_version=1` discriminator, schema validation, `Pack::read(path)` and `Pack::write(manifest, library_path, output)` helpers (tar+gzip), `PluginEntrypoint` C struct + entry-symbol typedef.
+  Acceptance: unit tests for manifest round-trip, unknown-required-field rejection, target-triple parsing, pack archive round-trip. No CLI surface in this task. Anchors DEC-P27-001, DEC-P27-002, DEC-P27-003 (entry-symbol shape only).
+  Depends on: nothing.
+
+- **T2 — `sigint plugin pack <crate-path>` CLI.**
+  Files: `crates/sigint-cli/src/plugin.rs` (extend), `crates/sigint-cli/src/main.rs` (subcommand wiring).
+  Adds: `pack` subcommand that runs `cargo build --release --target <host-triple>`, reads `[package.metadata.sigint-plugin]`, writes `manifest.json`, bundles the cdylib, emits `<id>-<version>-<triple>.sgnt-pack` to cwd or `--output`.
+  Acceptance: integration test packs the example plugin from T7 and verifies the resulting archive's manifest + library are byte-identical to expectations. Anchors DEC-P27-007, DEC-P27-008 (`pack` only).
+  Depends on: T1 (manifest + pack lib), T7 (example plugin to pack).
+
+- **T3 — Runtime loader + startup discovery.**
+  Files: `crates/sigint-plugin/src/loader.rs` (new), `crates/sigint-plugin/src/registry.rs` (new), `crates/sigint-plugin/src/lib.rs` (extend `collect_plugin_tools` to merge runtime + compile-time), `crates/sigint-core/src/app.rs` (call loader at `AppCore::init`).
+  Adds: `RuntimeToolRegistry`, install-dir scan, `libloading`-based dlopen, entry-symbol resolution, failure-category enum, `tracing::warn!` skip path, merged registry returned by `collect_plugin_tools`.
+  Acceptance: unit tests for each failure mode (manifest invalid, target mismatch, dlopen fail, missing symbol, panicking entry, wrong manifest_version). Integration test loads a fixture plugin from a temp dir. Anchors DEC-P27-003, DEC-P27-005, DEC-P27-006.
+  Depends on: T1.
+
+- **T4 — `sigint plugin install` + `uninstall` CLI.**
+  Files: `crates/sigint-cli/src/plugin.rs` (extend), `crates/sigint-cli/src/main.rs` (subcommand wiring).
+  Adds: `install` subcommand that validates the pack, resolves install dir via the `directories` crate, unpacks into `<install-dir>/<id>-<version>/`, supports `--prefix <path>` for testing; `uninstall <id>` removes the install dir, supports `--version <ver>` for disambiguation. Refuses to install over an existing version unless `--force`.
+  Acceptance: integration tests for happy path, target-triple mismatch (error), bad manifest (error), `--prefix` redirection, uninstall, uninstall of non-existent (error). Anchors DEC-P27-004, DEC-P27-008 (install/uninstall only).
+  Depends on: T1.
+
+- **T5 — `sigint plugin list` + `info <id>` CLI.**
+  Files: `crates/sigint-cli/src/plugin.rs` (extend the existing Phase 22 `list`), `crates/sigint-cli/src/main.rs` (`info` wiring).
+  Adds: `list` extended to show compile-time plugins (`source: builtin`) + installed plugins (`source: installed`, with `loaded` / `failed: <reason>` status); `info <id>` prints full manifest + install path + load status.
+  Acceptance: integration tests for list with mixed-source plugins, info on installed and missing ids, `--prefix` support. Anchors DEC-P27-008 (list/info only).
+  Depends on: T3 (load status comes from the runtime loader), T4 (install dir resolution).
+
+- **T6 — Documentation: USER_GUIDE plugin chapter + README plugin section.**
+  Files: `USER_GUIDE.md` (new chapter), `README.md` (plugin section update), `crates/sigint-plugin/src/lib.rs` (top-level rustdoc with quickstart link).
+  Adds: pack→install→use quickstart referencing T7's example, manifest schema reference, C-ABI entry-symbol contract, install-dir layout, failure modes + diagnosis, "trust model: operator-asserted, no signing yet — see Phase 28" disclaimer.
+  Acceptance: a fresh reader follows the quickstart end-to-end against the T7 example without consulting the source. Anchors REQ-P27-P0-010.
+  Depends on: T2, T3, T4, T5, T7.
+
+- **T7 — Example external plugin: `examples/sigint-plugin-hello/`.**
+  Files: `examples/sigint-plugin-hello/Cargo.toml`, `examples/sigint-plugin-hello/src/lib.rs`, `examples/sigint-plugin-hello/README.md`.
+  Adds: minimal plugin crate (`crate-type = ["cdylib"]`), `[package.metadata.sigint-plugin]` table, one tool (e.g., `HelloEcho`), the C-ABI entry symbol exporting it, README describing what it does.
+  Acceptance: builds standalone (`cd examples/sigint-plugin-hello && cargo build --release`); used by T2's integration test, T3's loader test, and T6's quickstart. Anchors REQ-P27-P1-003.
+  Depends on: T1 (entry-symbol contract).
+
+- **T8 — Closed-loop e2e + CI gates.**
+  Files: `tests/e2e/tests/plugin_pack_install.rs` (new) or `crates/sigint-plugin/tests/e2e.rs` (new — single-crate test if no external bins needed).
+  Adds: e2e test that drives the full pack→install→list→agent-invoke loop end-to-end against the T7 example, using a tempdir + `--prefix` + `SIGINT_PLUGIN_DIR` env override.
+  Acceptance: green in CI. Phase DoD line REQ-P27-P0-009 is this test.
+  Depends on: T2, T3, T4, T5, T7.
+
+Parallelization: T1 and T7 can land first (T7 stubs out the entry symbol against a placeholder if needed). T2, T3 are parallel after T1. T4, T5 run after T3. T6, T8 run last after the runtime stack is in.
+
+Effort estimate: ~2 weeks for the full eight tasks at the project's existing PR cadence.
+
+### Planned Decisions
+
+- DEC-P27-001: Pack format is `.tar.gz` with fixed internal layout (`manifest.json` at root, `lib/<library>`, optional `README.md`/`LICENSE`) — universal, streamable, strong Rust toolchain support — Addresses: REQ-P27-P0-001
+- DEC-P27-002: Manifest schema is JSON with `manifest_version: 1` discriminator and required `id`/`version`/`target_triple`/`entry_symbol` fields — JSON is the lingua franca for SDK manifests, schema-evolvable, machine-validated easily — Addresses: REQ-P27-P0-002
+- DEC-P27-003: Loader uses `libloading` + a C-ABI entry symbol (`extern "C" fn` returning `*const PluginEntrypoint`) — standard Rust dynamic-loading crate, in-process zero-overhead, matches unsandboxed-trust model; WASM deferred to REQ-P27-P2-002 — Addresses: REQ-P27-P0-003, REQ-P27-GOAL-003
+- DEC-P27-004: Install dir is platform user-data dir (`directories` crate) namespaced `<install-dir>/<id>-<version>/` — XDG/Apple/Windows conventions, single-user trust, multiple versions coexist for inspection — Addresses: REQ-P27-P0-004
+- DEC-P27-005: Discovery is filesystem scan at startup, runtime tools merged into the same list `collect_plugin_tools` returns — single registry preserves agent-side tool-lookup contract; Phase 28 inserts the signature gate at the merge function — Addresses: REQ-P27-P0-005, REQ-P27-GOAL-003
+- DEC-P27-006: Failure mode is log-and-skip via `tracing::warn!` with structured `failure_reason` enum — principle of least surprise for unsandboxed local-install; Phase 28 extends the enum with signature/sandbox failure categories — Addresses: REQ-P27-P0-006
+- DEC-P27-007: Plugin metadata lives in `[package.metadata.sigint-plugin]` of the crate's `Cargo.toml` — cargo-standard extension point, no duplicate package identity, surfaceable via `cargo metadata` — Addresses: REQ-P27-P0-007
+- DEC-P27-008: CLI surface extends Phase 22's `sigint plugin` with `pack`, `install`, `uninstall`, `info`; existing `list` and `new` retained — principle of least surprise, single command tree for all plugin operations — Addresses: REQ-P27-P0-007, REQ-P27-P0-008
+
+### Decision Log
+<!-- Guardian appends here after Phase 27 completes -->
+
+---
+
+## Backlog: Future Phase Themes
+
+> Carryover from the Phase 27 candidate-themes planning notes. The user picked Theme A (split into Phase 27 + Phase 28 above). The remaining themes are preserved here so the analysis isn't lost — each is a problem statement + product value + rough effort, not a design. Pick one when scoping the next phase.
 
 ### Theme B — Continuous Evaluation & Model Drift Detection
 **Problem.** Phase 24-26 turned fine-tuning into an interactive, web-driven workflow — a user can promote a model and roll back if it underperforms. But once a model is promoted, it stays promoted. There's no scheduled re-evaluation, no regression alarm if the model's accuracy on new corpora drifts, and no longitudinal tracking of which model version produced which findings. Operators learn about drift through field surprises, not telemetry.
