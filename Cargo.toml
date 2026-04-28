@@ -110,3 +110,6 @@ fs2 = "0.4"
 flate2 = "1"
 tar = "0.4"
 tempfile = "3"
+
+# Runtime plugin loading (Phase 27 T3)
+libloading = "0.8"

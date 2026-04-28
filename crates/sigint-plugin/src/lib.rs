@@ -15,6 +15,14 @@
 //!
 //! T3 (runtime loader) and T4 (install CLI) build on these primitives.
 //!
+//! # Runtime loader (Phase 27 — T3)
+//!
+//! [`loader::discover_installed`] scans the install dir at startup and loads
+//! every valid installed plugin via `dlopen`.  The returned `Vec<LoadedPlugin>`
+//! must be kept alive for the process lifetime.  Runtime tools are merged into
+//! the same `Vec<Box<dyn Tool>>` as compile-time tools via
+//! [`loader::list_runtime_plugin_tool_names`], so agents see one unified list.
+//!
 //! @decision DEC-PLUGIN-001
 //! @title inventory crate for zero-boilerplate link-time tool registration
 //! @status accepted
@@ -68,9 +76,27 @@ pub mod manifest;
 /// new archive from a source directory.
 pub mod pack;
 
+/// Runtime plugin loader — startup discovery and `dlopen` integration.
+///
+/// [`loader::discover_installed`] walks the install directory, validates each
+/// plugin, `dlopen`s its library, calls the C-ABI entry symbol, and registers
+/// any tools.  Failed plugins are logged and skipped (DEC-P27-006).
+///
+/// Phase 28 seams live in this module:
+/// - Seam #3: [`loader::dlopen_library`] (sandboxed loader insertion point)
+/// - Seam #4: [`loader::validate_and_merge`] (signature-verification gate)
+/// - Seam #5: [`loader::LoaderError`] (`#[non_exhaustive]` failure enum)
+pub mod loader;
+
 // Convenience re-exports for the most commonly used pack types
 pub use manifest::{library_filename, parse_manifest, validate_manifest, PluginManifest};
 pub use pack::{extract_archive, pack_directory, read_manifest_from_archive, PackError};
+
+// Loader re-exports for startup integration
+pub use loader::{
+    default_install_dir, discover_installed, list_runtime_plugin_tool_names, LoadedPlugin,
+    LoaderError,
+};
 
 pub use sigint_agents::prompt_pack::PromptOverrideFn;
 pub use sigint_agents::role::AgentRole;
