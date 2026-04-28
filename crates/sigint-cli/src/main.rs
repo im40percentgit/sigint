@@ -24,6 +24,7 @@ mod campaign;
 mod chat;
 mod diff;
 mod doctor;
+mod install;
 mod log;
 mod model;
 mod pack;
@@ -274,6 +275,45 @@ enum PluginCommands {
         #[arg(long)]
         force: bool,
     },
+    /// Install a plugin from a `.sgnt-pack` file.
+    ///
+    /// Plugin source: a `.sgnt-pack` file path.
+    /// (Phase 28: `<id>@<version>` registry lookup not yet supported.)
+    ///
+    /// The plugin is extracted to:
+    ///   `<target-dir>/<plugin-id>-<plugin-version>/`
+    ///
+    /// where `<target-dir>` defaults to `~/.local/share/sigint/plugins/`.
+    Install {
+        /// Plugin source: path to a `.sgnt-pack` file.
+        /// Phase 28 will extend this to also accept `<id>@<version>` for
+        /// registry-based install.
+        source: String,
+        /// Override the install root directory.
+        /// Defaults to `~/.local/share/sigint/plugins/` (XDG on Linux,
+        /// `~/Library/Application Support/sigint/plugins/` on macOS).
+        #[arg(long)]
+        target_dir: Option<String>,
+        /// Overwrite an existing install or bypass a target-triple mismatch.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Uninstall a previously installed plugin.
+    ///
+    /// Removes the `<target-dir>/<plugin-id>-<plugin-version>/` directory.
+    /// If multiple versions are installed and `--version` is omitted, the
+    /// command lists the available versions and exits with an error.
+    Uninstall {
+        /// Plugin id to uninstall (e.g. `com.example.recon-foo`).
+        id: String,
+        /// Override the install root directory.
+        #[arg(long)]
+        target_dir: Option<String>,
+        /// Specific version to uninstall.  Required when multiple versions are
+        /// installed.
+        #[arg(long)]
+        version: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -502,6 +542,26 @@ async fn main() {
                 )
                 .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string()))
             }
+            PluginCommands::Install {
+                source,
+                target_dir,
+                force,
+            } => install::run_install(
+                std::path::Path::new(&source),
+                target_dir.as_deref().map(std::path::Path::new),
+                force,
+            )
+            .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
+            PluginCommands::Uninstall {
+                id,
+                target_dir,
+                version,
+            } => install::run_uninstall(
+                &id,
+                target_dir.as_deref().map(std::path::Path::new),
+                version.as_deref(),
+            )
+            .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
         },
         Commands::Train { command } => match command {
             TrainCommands::Export {
