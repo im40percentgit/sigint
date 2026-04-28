@@ -895,3 +895,427 @@ The web UI and CLI share all training artefacts via the filesystem:
 You can mix CLI and web operations freely. For example, run `sigint train export`
 from the terminal, then use the web UI to launch the fine-tune job and monitor
 progress via the workbench — or vice versa.
+
+---
+
+## Plugins
+
+SIGINT supports a runtime plugin system that lets you distribute and install
+custom tool packs without rebuilding the sigint binary from source. A plugin
+is a Rust `cdylib` crate compiled to a platform-native shared library (`.so`,
+`.dylib`, or `.dll`) and packaged with a JSON manifest into a single
+`.sgnt-pack` file.
+
+### What sigint plugins are
+
+#### Compile-time vs runtime plugins
+
+SIGINT has two plugin mechanisms. The older mechanism, introduced in Phase 22,
+is compile-time: external crates implement the `sigint_tools::Tool` trait and
+register tools via the `register_tool!()` macro. The `inventory` crate collects
+all registered factories at link time, and the binary calls
+`collect_plugin_tools()` at startup to get the full list. This model requires
+the plugin crate to be a workspace member and the binary to be rebuilt from
+source — it is not a distribution format.
+
+The Phase 27 mechanism is runtime: a plugin is packaged as a `.sgnt-pack` file
+that can be installed on any machine running a compatible sigint binary. At
+startup, sigint scans the install directory, `dlopen`s each plugin's shared
+library, and merges its tools into the same list that compile-time plugins
+populate. Agents see one unified tool registry with no distinction between
+built-in, compile-time-plugin, and runtime-installed tools.
+
+#### Trust model
+
+Phase 27 uses an operator-asserted trust model. There is no signature
+verification, no remote registry, and no plugin sandbox. Installed plugins run
+inside the sigint process with full host privileges. **Only install plugins you
+obtained from a source you trust.** Phase 28 will introduce package signing,
+a remote registry, and sandboxed execution; for now the trust boundary is
+entirely under your control.
+
+See the [Phase 28 limitations](#phase-28-limitations) section for a full list
+of what is deferred.
+
+---
+
+### Installing a plugin from a `.sgnt-pack`
+
+#### Basic install
+
+```bash
+sigint plugin install ./my-plugin-0.1.0.sgnt-pack
+```
+
+The command:
+
+1. Reads the manifest embedded in the archive.
+2. Validates it: `manifest_version` must be 1, all required fields must be
+   present, and the `target_triple` in the manifest must match the host triple.
+3. Unpacks the archive to the install directory.
+4. Confirms success with the installed path.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--target-dir <dir>` | Override the install root (default: `~/.local/share/sigint/plugins/`) |
+| `--force` | Overwrite an existing install, or bypass a target-triple mismatch |
+
+#### Install directory layout
+
+Plugins are unpacked to a versioned subdirectory:
+
+```
+~/.local/share/sigint/plugins/
+  <plugin-id>-<plugin-version>/
+    manifest.json
+    lib/
+      lib<plugin-name>.so    # (or .dylib / .dll)
+```
+
+For example, installing `com.example.recon-foo` version `1.2.0` on Linux
+produces:
+
+```
+~/.local/share/sigint/plugins/
+  com.example.recon-foo-1.2.0/
+    manifest.json
+    lib/
+      librecon_foo.so
+```
+
+Multiple versions of the same plugin can coexist in the install directory.
+
+#### Discovery at startup
+
+When sigint starts, the plugin loader walks the install directory and
+processes each subdirectory:
+
+1. Reads `manifest.json` and validates the manifest.
+2. Checks that the `target_triple` matches the running host.
+3. Calls `dlopen` on the dynamic library found under `lib/`.
+4. Resolves the entry symbol named in the manifest (default:
+   `sigint_plugin_entry`).
+5. Calls the entry function and registers any tools it returns.
+
+Tools from loaded plugins are merged into the same list as compile-time tools
+and become visible to agents immediately. No process restart is required after
+the loader runs — but the loader only runs at startup, so plugins installed
+while sigint is running take effect on the next launch.
+
+#### Failure modes
+
+| Failure | What happens | How to diagnose |
+|---------|-------------|-----------------|
+| `target_mismatch` | Host triple differs from manifest | Rebuild the plugin for the correct target; use `rustc -vV \| grep host` |
+| `already_installed` | Directory exists | Use `--force` to overwrite, or `sigint plugin uninstall` first |
+| `manifest_invalid` | Required field missing or wrong type | Run `sigint plugin info <id>` and inspect the manifest |
+| `library_missing` | `.so` / `.dylib` absent in `lib/` | The pack may be corrupt; re-pack from source |
+| `dlopen_failed` | Dynamic linker error | Check library ABI compatibility; confirm same Rust toolchain |
+| `entry_symbol_missing` | `sigint_plugin_entry` not exported | Confirm `#[no_mangle]` on the entry function and check `nm -D` output |
+| `manifest_version_too_new` | `manifest_version` > 1 | Upgrade sigint to a version that supports the new manifest version |
+
+All failures emit a structured `warn!` log entry and skip the failing plugin.
+Other plugins and the rest of sigint startup are unaffected.
+
+---
+
+### Listing and inspecting plugins
+
+#### List all plugins
+
+```bash
+sigint plugin list
+```
+
+Shows built-in tools, compile-time plugin tools, and runtime-installed plugins
+in a single aligned table. Each row shows the tool name, version (for installed
+plugins), and source.
+
+Filter by source:
+
+```bash
+sigint plugin list --source built-in    # only built-in tools
+sigint plugin list --source installed   # only installed runtime plugins
+sigint plugin list --source all         # all (default)
+```
+
+To override the install root:
+
+```bash
+sigint plugin list --target-dir /opt/sigint/plugins
+```
+
+#### Inspect a specific plugin
+
+```bash
+sigint plugin info <id>
+```
+
+For an installed plugin, prints the full manifest (all fields), the install
+path, the library filename, the library file size, and whether the library
+file currently exists on disk.
+
+For a built-in tool, prints the tool name and description.
+
+If the id matches both an installed plugin and a built-in tool name, both
+records are shown.
+
+```bash
+# Example
+sigint plugin info com.sigint.example.hello
+```
+
+To inspect a specific installed version when multiple versions are present:
+
+```bash
+sigint plugin info com.example.recon-foo --version 1.2.0
+```
+
+---
+
+### Uninstalling a plugin
+
+```bash
+sigint plugin uninstall <id>
+```
+
+Removes the `<id>-<version>/` directory from the install root. The plugin's
+tools are no longer loaded at the next startup.
+
+#### Version disambiguation
+
+If multiple versions of the same plugin are installed and `--version` is not
+provided, the command lists the available versions and exits with a non-zero
+status. Provide `--version` to select one:
+
+```bash
+sigint plugin uninstall com.example.recon-foo --version 1.2.0
+```
+
+To use a non-default install root:
+
+```bash
+sigint plugin uninstall com.example.recon-foo --target-dir /opt/sigint/plugins
+```
+
+---
+
+### Authoring a plugin
+
+The canonical example is `examples/sigint-plugin-hello/` in this repository.
+Clone or copy it as a starting point for any new plugin.
+
+#### Step 1 — Set up your crate
+
+Your plugin is a standard Rust crate that produces a C-compatible shared
+library. The minimum `Cargo.toml` shape:
+
+```toml
+[package]
+name = "my-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# cdylib produces the .so / .dylib / .dll loaded by sigint at runtime.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sigint-plugin = "0.1"   # provides abi::PluginEntrypoint
+
+# Declare plugin metadata here; sigint plugin pack reads this.
+[package.metadata.sigint-plugin]
+id = "com.example.my-plugin"
+description = "My custom sigint plugin."
+# version defaults to [package].version
+# author defaults to [package].authors[0]
+# license defaults to [package].license
+# entry_symbol defaults to "sigint_plugin_entry"
+# library_filename defaults to "libmy_plugin.so" (Linux)
+```
+
+The `[package.metadata.sigint-plugin]` table is the metadata source for
+`sigint plugin pack`. The only required field is `id` (the semver-stable
+plugin identifier used in the install directory name and manifest). All other
+fields fall back to `[package]` values when absent.
+
+Alternatively, place a `manifest.json` file in the crate root; `sigint plugin
+pack` merges it with the Cargo metadata (the JSON file takes priority).
+
+#### Step 2 — Implement the entry symbol
+
+Every plugin must export one C-ABI function. The sigint loader resolves it by
+name at startup:
+
+```rust
+use sigint_plugin::abi::{PluginEntrypoint, PLUGIN_API_VERSION};
+
+static ENTRYPOINT: PluginEntrypoint = PluginEntrypoint {
+    api_version: PLUGIN_API_VERSION,
+    plugin_id:   c"com.example.my-plugin".as_ptr().cast::<u8>(),
+    display_name: c"My Plugin".as_ptr().cast::<u8>(),
+};
+
+#[no_mangle]
+pub unsafe extern "C" fn sigint_plugin_entry() -> *const PluginEntrypoint {
+    &raw const ENTRYPOINT
+}
+```
+
+Key rules for the entry symbol:
+
+- It must be `#[no_mangle]` with the name declared in `entry_symbol`
+  (default: `sigint_plugin_entry`).
+- It must have exactly the signature `unsafe extern "C" fn() -> *const PluginEntrypoint`.
+- The returned pointer must point to memory valid for the lifetime of the
+  loaded library. Using a `static` (as above) is the simplest and safest
+  approach; `Box::leak` also works but is less readable.
+- `PluginEntrypoint::api_version` must equal `PLUGIN_API_VERSION` (currently
+  `1`). The loader rejects mismatches.
+- String fields (`plugin_id`, `display_name`) must be null-terminated
+  UTF-8. Use `c"..."` literals (Rust 1.77+) and `.cast::<u8>()`.
+
+The full ABI contract is defined in `crates/sigint-plugin/src/abi.rs`.
+
+#### Step 3 — Build
+
+```bash
+# From the workspace root (or any directory that can resolve the crate):
+cargo build --release -p my-plugin
+
+# Verify the entry symbol is exported (Linux):
+nm -D target/release/libmy_plugin.so | grep sigint_plugin_entry
+# Expected output:  <address> T sigint_plugin_entry
+```
+
+The `T` means the symbol is defined in the text (code) section and exported.
+
+#### Step 4 — Pack
+
+```bash
+sigint plugin pack path/to/my-plugin-crate/
+```
+
+This command:
+
+1. Reads `Cargo.toml` and the `[package.metadata.sigint-plugin]` table.
+2. Runs `cargo build --release` for the plugin crate.
+3. Writes `manifest.json` (filling in `target_triple` from the build host).
+4. Assembles a `.tar.gz` archive named `<id>-<version>.sgnt-pack`.
+
+Useful flags:
+
+| Flag | Description |
+|------|-------------|
+| `-o / --output <path>` | Output file path (default: `<id>-<version>.sgnt-pack` in the current directory) |
+| `--debug` | Build in debug mode instead of release |
+| `--manifest <path>` | Explicit `manifest.json` overriding the auto-generated one |
+| `--force` | Overwrite the output file if it already exists |
+
+#### Step 5 — Install and verify
+
+```bash
+# Install the pack you just built
+sigint plugin install ./my-plugin-0.1.0.sgnt-pack
+
+# Confirm it appears in the list
+sigint plugin list --source installed
+
+# Inspect the installed manifest
+sigint plugin info com.example.my-plugin
+```
+
+#### Worked example: sigint-plugin-hello
+
+The `examples/sigint-plugin-hello/` directory is the canonical example used
+by the Phase 27 closed-loop test. Follow it end-to-end:
+
+```bash
+# 1. Build the example plugin
+cargo build --release -p sigint-plugin-hello
+
+# 2. Verify the entry symbol
+nm -D target/release/libsigint_plugin_hello.so | grep sigint_plugin_entry
+
+# 3. Pack it
+sigint plugin pack examples/sigint-plugin-hello/ \
+    --output sigint-plugin-hello-0.1.0.sgnt-pack
+
+# 4. Install it
+sigint plugin install sigint-plugin-hello-0.1.0.sgnt-pack
+
+# 5. Confirm it loaded
+sigint plugin list --source installed
+sigint plugin info com.sigint.example.hello
+
+# 6. Uninstall when done
+sigint plugin uninstall com.sigint.example.hello
+```
+
+#### Manifest schema reference
+
+`manifest.json` (inside the `.sgnt-pack` archive) contains:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `manifest_version` | Yes | Schema version — must be `1` |
+| `id` | Yes | Semver-stable identifier, e.g. `"com.example.my-plugin"` |
+| `version` | Yes | Semver version string, e.g. `"0.1.0"` |
+| `target_triple` | Yes | Rust target triple, e.g. `"x86_64-unknown-linux-gnu"` |
+| `entry_symbol` | Yes | Exported C-ABI function name (default: `"sigint_plugin_entry"`) |
+| `display_name` | No | Human-readable plugin name shown in `sigint plugin list` |
+| `description` | No | Short description of the plugin |
+| `author` | No | Author name and email |
+| `homepage` | No | Plugin homepage URL |
+| `license` | No | SPDX license identifier, e.g. `"MIT"` |
+| `library_filename` | No | Filename under `lib/` (default: `lib<id>.so` / `.dylib` / `.dll`) |
+
+The manifest schema is designed for forward compatibility: unknown fields are
+captured and round-trip through old installs without causing validation failure.
+
+Phase 28 reserves the following optional fields (present in the schema but
+ignored in Phase 27): `signature`, `signed_by`, `signature_algorithm`,
+`library_kind`.
+
+---
+
+### Signing and Trust
+
+**Phase 28 seam.** This section is a placeholder. Phase 28 will introduce
+package signing (ed25519 signatures over the library binary), a trusted-key
+registry, and sandboxed execution (seccomp-bpf, or optionally WASM). The
+`manifest.json` schema already reserves the relevant fields (`signature`,
+`signed_by`, `signature_algorithm`) so Phase 27 packs remain forward-compatible.
+
+Until Phase 28 lands:
+
+- `sigint plugin install` performs no cryptographic verification.
+- The `signature` / `signed_by` fields in a manifest are parsed and stored but
+  never validated.
+- Installed plugin code runs in-process with full host privileges.
+- **Trust is entirely operator-asserted.** If you install a plugin, you are
+  asserting that you trust its author and its contents.
+
+---
+
+### Phase 28 limitations
+
+The following capabilities are intentionally deferred to Phase 28:
+
+| Capability | Status |
+|------------|--------|
+| Package signing and signature verification | Phase 28 |
+| Trusted-key registry and key pinning | Phase 28 |
+| Sandboxed plugin execution (seccomp-bpf / WASM) | Phase 28 |
+| Remote registry and `sigint plugin search` | Phase 28 |
+| Multi-target packs (one archive, multiple target triples) | Phase 28 |
+| Plugin management web UI | Phase 28 |
+| Hot reload (install without restart) | Phase 28 |
+| Automatic version updates | Phase 28 |
+
+All Phase 27 pack archives (`manifest_version: 1`) will remain installable
+after Phase 28 lands. The manifest version discriminator ensures old packs
+produce a clear upgrade error when a future version requires
+`manifest_version: 2`.

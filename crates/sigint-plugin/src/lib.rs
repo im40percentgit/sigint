@@ -1,5 +1,10 @@
 //! sigint-plugin — compile-time and runtime plugin system for SIGINT tool packs.
 //!
+//! For user-facing documentation — quickstart, manifest schema, C-ABI contract,
+//! install-dir layout, failure modes, and the Phase 28 trust-model disclaimer —
+//! see the **Plugins** chapter in `USER_GUIDE.md` and the worked example in
+//! `examples/sigint-plugin-hello/`.
+//!
 //! # Compile-time plugins (Phase 22)
 //!
 //! Plugin crates implement `sigint_tools::Tool` and register tools via
@@ -12,8 +17,6 @@
 //! library.  The manifest schema is defined in [`manifest`]; archive
 //! read/write helpers live in [`pack`]; the C-ABI entry-symbol contract
 //! lives in [`abi`].
-//!
-//! T3 (runtime loader) and T4 (install CLI) build on these primitives.
 //!
 //! # Runtime loader (Phase 27 — T3)
 //!
