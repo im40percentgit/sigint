@@ -240,8 +240,34 @@ enum TrainCommands {
 
 #[derive(Subcommand, Debug)]
 enum PluginCommands {
-    /// List all registered tools and prompt packs (built-in + plugins).
-    List,
+    /// List all registered tools and installed plugins.
+    ///
+    /// Shows built-in tools, compile-time plugin tools, and runtime-installed
+    /// plugins in a single aligned table.  Use `--source` to filter.
+    List {
+        /// Override the install root directory.
+        /// Defaults to `~/.local/share/sigint/plugins/`.
+        #[arg(long)]
+        target_dir: Option<String>,
+        /// Filter output: built-in, installed, or all (default: all).
+        #[arg(long, default_value = "all")]
+        source: String,
+    },
+    /// Show detailed information about a plugin.
+    ///
+    /// For installed plugins, prints all manifest fields, install path, library
+    /// filename, size, and whether the library file exists.  For built-in tools,
+    /// prints the tool name and description.  If the id matches both, shows both.
+    Info {
+        /// Plugin id to inspect (e.g. `com.example.recon-foo` or a built-in tool name).
+        id: String,
+        /// Override the install root directory.
+        #[arg(long)]
+        target_dir: Option<String>,
+        /// Select a specific installed version (required when multiple are installed).
+        #[arg(long)]
+        version: Option<String>,
+    },
     /// Scaffold a new plugin crate in the workspace.
     New {
         /// Plugin name (will be prefixed with "sigint-" if not already).
@@ -520,8 +546,22 @@ async fn main() {
             ModelCommands::Rollback => model::run_rollback(core).await,
         },
         Commands::Plugin { command } => match command {
-            PluginCommands::List => plugin::run_list()
-                .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
+            PluginCommands::List { target_dir, source } => plugin::ListSource::from_str(&source)
+                .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string()))
+                .and_then(|src| {
+                    plugin::run_list(target_dir.as_deref().map(std::path::Path::new), src)
+                        .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string()))
+                }),
+            PluginCommands::Info {
+                id,
+                target_dir,
+                version,
+            } => plugin::run_info(
+                &id,
+                target_dir.as_deref().map(std::path::Path::new),
+                version.as_deref(),
+            )
+            .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
             PluginCommands::New { name } => plugin::run_new(&name)
                 .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
             PluginCommands::Pack {

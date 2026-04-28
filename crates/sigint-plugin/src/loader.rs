@@ -445,6 +445,97 @@ pub fn list_runtime_plugin_tool_names() -> Vec<String> {
     registry.iter().map(|t| t.name().to_owned()).collect()
 }
 
+/// Scan `install_dir` and return all installed plugin manifests WITHOUT dlopening.
+///
+/// This is the read-only companion to [`discover_installed`] — it reads and
+/// parses every `<id>-<version>/manifest.json` it finds but does NOT open the
+/// shared library.  It is intended for UI commands (`sigint plugin list`,
+/// `sigint plugin info`) where the full cost of `dlopen` is unacceptable.
+///
+/// # Failure handling
+///
+/// Entries that cannot be read or parsed are silently skipped (consistent with
+/// [`discover_installed`]'s log-and-skip policy — DEC-P27-006).  The caller
+/// receives only the successfully-parsed manifests.
+///
+/// Returns a [`Vec`] of `(manifest, plugin_dir)` pairs sorted by `(id, version)`.
+///
+/// # Phase 28 seam (DEC-P27-005)
+///
+/// The Phase 28 registry-merge step operates on loaded tools.  This function
+/// is display-only and is exempt from the merge step — it surfaces what is
+/// *installed* on disk, not what is *loaded* in memory.
+pub fn list_installed_manifests(install_dir: &Path) -> Vec<(PluginManifest, PathBuf)> {
+    let mut result = Vec::new();
+
+    let entries = match std::fs::read_dir(install_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(
+                    install_dir = %install_dir.display(),
+                    failure_reason = %e,
+                    "list_installed_manifests: could not read install directory"
+                );
+            }
+            return result;
+        }
+    };
+
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(failure_reason = %e, "list_installed_manifests: error reading entry");
+                continue;
+            }
+        };
+
+        let plugin_dir = entry.path();
+        if !plugin_dir.is_dir() {
+            continue;
+        }
+
+        // Skip staging / garbage dirs (e.g. `.installing-*`, `.removed-*`)
+        let dir_name = plugin_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if dir_name.starts_with('.') {
+            continue;
+        }
+
+        let manifest_path = plugin_dir.join("manifest.json");
+        let bytes = match std::fs::read(&manifest_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let manifest = match crate::manifest::parse_manifest(&bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(
+                    plugin_path = %plugin_dir.display(),
+                    failure_reason = %e,
+                    "list_installed_manifests: manifest invalid, skipping"
+                );
+                continue;
+            }
+        };
+
+        result.push((manifest, plugin_dir));
+    }
+
+    // Stable sort: (id, version) ascending.
+    result.sort_by(|a, b| {
+        a.0.id
+            .cmp(&b.0.id)
+            .then_with(|| a.0.version.cmp(&b.0.version))
+    });
+
+    result
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /// Default install directory for sigint plugins.
@@ -811,6 +902,121 @@ mod tests {
             s.contains("sigint") && s.contains("plugins"),
             "default install dir should contain 'sigint/plugins': {s}"
         );
+    }
+
+    // ── list_installed_manifests ──────────────────────────────────────────────
+
+    fn write_full_manifest(dir: &Path, id: &str, version: &str) {
+        let json = serde_json::json!({
+            "manifest_version": 1,
+            "id": id,
+            "version": version,
+            "target_triple": HOST_TRIPLE,
+            "entry_symbol": "sigint_plugin_entry",
+        });
+        fs::write(dir.join("manifest.json"), json.to_string()).unwrap();
+    }
+
+    #[test]
+    fn list_installed_manifests_empty_dir_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let result = list_installed_manifests(tmp.path());
+        assert!(
+            result.is_empty(),
+            "empty install dir should return empty list"
+        );
+    }
+
+    #[test]
+    fn list_installed_manifests_nonexistent_dir_returns_empty() {
+        let result = list_installed_manifests(Path::new("/nonexistent/sigint/plugins/xyz"));
+        assert!(
+            result.is_empty(),
+            "nonexistent dir should return empty, not panic"
+        );
+    }
+
+    #[test]
+    fn list_installed_manifests_skips_invalid_manifests() {
+        let tmp = TempDir::new().unwrap();
+
+        // Valid plugin dir
+        let valid_dir = plugin_subdir(&tmp, "com.example.valid-1.0.0");
+        write_full_manifest(&valid_dir, "com.example.valid", "1.0.0");
+
+        // Invalid: corrupt JSON
+        let bad_dir = plugin_subdir(&tmp, "com.example.bad-0.1.0");
+        fs::write(bad_dir.join("manifest.json"), b"not json").unwrap();
+
+        let result = list_installed_manifests(tmp.path());
+        assert_eq!(
+            result.len(),
+            1,
+            "only the valid manifest should be returned"
+        );
+        assert_eq!(result[0].0.id, "com.example.valid");
+    }
+
+    #[test]
+    fn list_installed_manifests_returns_multiple_versions() {
+        let tmp = TempDir::new().unwrap();
+
+        let d1 = plugin_subdir(&tmp, "com.example.multi-1.0.0");
+        write_full_manifest(&d1, "com.example.multi", "1.0.0");
+
+        let d2 = plugin_subdir(&tmp, "com.example.multi-2.0.0");
+        write_full_manifest(&d2, "com.example.multi", "2.0.0");
+
+        let result = list_installed_manifests(tmp.path());
+        assert_eq!(result.len(), 2, "both versions should be returned");
+        let versions: Vec<&str> = result.iter().map(|(m, _)| m.version.as_str()).collect();
+        assert!(
+            versions.contains(&"1.0.0") && versions.contains(&"2.0.0"),
+            "all versions present: {:?}",
+            versions
+        );
+    }
+
+    #[test]
+    fn list_installed_manifests_skips_staging_dirs() {
+        let tmp = TempDir::new().unwrap();
+
+        // Real plugin
+        let real_dir = plugin_subdir(&tmp, "com.example.real-1.0.0");
+        write_full_manifest(&real_dir, "com.example.real", "1.0.0");
+
+        // Staging dirs that should be ignored
+        let staging = plugin_subdir(&tmp, ".installing-abc123");
+        write_full_manifest(&staging, "com.example.staging", "0.1.0");
+
+        let removed = plugin_subdir(&tmp, ".removed-xyz-abc");
+        write_full_manifest(&removed, "com.example.removed", "0.1.0");
+
+        let result = list_installed_manifests(tmp.path());
+        assert_eq!(result.len(), 1, "staging/removed dirs should be skipped");
+        assert_eq!(result[0].0.id, "com.example.real");
+    }
+
+    #[test]
+    fn list_installed_manifests_sorted_by_id_then_version() {
+        let tmp = TempDir::new().unwrap();
+
+        let db = plugin_subdir(&tmp, "com.example.beta-1.0.0");
+        write_full_manifest(&db, "com.example.beta", "1.0.0");
+
+        let da2 = plugin_subdir(&tmp, "com.example.alpha-2.0.0");
+        write_full_manifest(&da2, "com.example.alpha", "2.0.0");
+
+        let da1 = plugin_subdir(&tmp, "com.example.alpha-1.0.0");
+        write_full_manifest(&da1, "com.example.alpha", "1.0.0");
+
+        let result = list_installed_manifests(tmp.path());
+        assert_eq!(result.len(), 3, "all three plugins returned");
+        assert_eq!(result[0].0.id, "com.example.alpha");
+        assert_eq!(result[0].0.version, "1.0.0");
+        assert_eq!(result[1].0.id, "com.example.alpha");
+        assert_eq!(result[1].0.version, "2.0.0");
+        assert_eq!(result[2].0.id, "com.example.beta");
     }
 
     // ── live dlopen test ──────────────────────────────────────────────────────
