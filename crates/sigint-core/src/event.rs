@@ -204,6 +204,8 @@ pub enum Event {
         eval_id: String,
         report_path: String,
     },
+    /// An evaluation run failed (e.g. provider factory error, runtime error).
+    EvaluationFailed { eval_id: String, error: String },
     /// The active model was promoted from one provider/model to a new one.
     ModelPromoted {
         old_provider: String,

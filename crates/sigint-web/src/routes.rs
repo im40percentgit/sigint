@@ -884,7 +884,7 @@ pub struct EvaluateRequest {
 ///
 /// Spawns a tokio task that calls `run_comparison_with_progress`,
 /// emitting EvaluationStarted at start, EvaluationProgress after each
-/// example, and EvaluationCompleted (or TrainingJobFailed on error) on done.
+/// example, and EvaluationCompleted (or EvaluationFailed on error) on done.
 /// The handler generates `eval_id` and returns it immediately with `202 Accepted`.
 ///
 /// The final report is persisted to `<job_dir>/last_eval.json` via
@@ -966,8 +966,8 @@ pub async fn train_run_eval(
             Ok(p) => p,
             Err(e) => {
                 tracing::error!(eval_id = %eval_id_task, error = %e, "failed to build base provider");
-                bus.emit(sigint_core::event::Event::TrainingJobFailed {
-                    job_id: eval_id_task,
+                bus.emit(sigint_core::event::Event::EvaluationFailed {
+                    eval_id: eval_id_task,
                     error: format!("failed to build base provider: {e}"),
                 });
                 return;
@@ -977,8 +977,8 @@ pub async fn train_run_eval(
             Ok(p) => p,
             Err(e) => {
                 tracing::error!(eval_id = %eval_id_task, error = %e, "failed to build candidate provider");
-                bus.emit(sigint_core::event::Event::TrainingJobFailed {
-                    job_id: eval_id_task,
+                bus.emit(sigint_core::event::Event::EvaluationFailed {
+                    eval_id: eval_id_task,
                     error: format!("failed to build candidate provider: {e}"),
                 });
                 return;
@@ -1018,8 +1018,8 @@ pub async fn train_run_eval(
             }
             Err(e) => {
                 tracing::error!(eval_id = %eval_id_task, error = %e, "evaluation failed");
-                bus.emit(sigint_core::event::Event::TrainingJobFailed {
-                    job_id: eval_id_task,
+                bus.emit(sigint_core::event::Event::EvaluationFailed {
+                    eval_id: eval_id_task,
                     error: "evaluation failed — see server logs".to_string(),
                 });
             }
