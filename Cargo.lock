@@ -3396,6 +3396,7 @@ dependencies = [
  "async-trait",
  "flate2",
  "inventory",
+ "libloading",
  "serde",
  "serde_json",
  "sigint-agents",
@@ -3405,6 +3406,8 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
