@@ -94,8 +94,8 @@ pub use pack::{extract_archive, pack_directory, read_manifest_from_archive, Pack
 
 // Loader re-exports for startup integration
 pub use loader::{
-    default_install_dir, discover_installed, list_runtime_plugin_tool_names, LoadedPlugin,
-    LoaderError,
+    default_install_dir, discover_installed, list_installed_manifests,
+    list_runtime_plugin_tool_names, LoadedPlugin, LoaderError,
 };
 
 pub use sigint_agents::prompt_pack::PromptOverrideFn;
