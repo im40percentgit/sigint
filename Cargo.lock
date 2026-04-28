@@ -3347,8 +3347,10 @@ dependencies = [
  "sigint-agents",
  "sigint-core",
  "sigint-llm",
+ "sigint-plugin",
  "sigint-store",
  "sigint-web",
+ "tempfile",
  "tokio",
  "uuid",
 ]
