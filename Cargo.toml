@@ -15,6 +15,7 @@ members = [
     "crates/sigint-report",
     "crates/sigint-train",
     "tests/e2e",
+    "examples/sigint-plugin-hello",
 ]
 resolver = "2"
 

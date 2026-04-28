@@ -1,0 +1,12 @@
+{
+  "manifest_version": 1,
+  "id": "com.sigint.example.hello",
+  "version": "0.1.0",
+  "target_triple": "x86_64-unknown-linux-gnu",
+  "entry_symbol": "sigint_plugin_entry",
+  "display_name": "Hello Plugin",
+  "description": "Example plugin demonstrating the .sgnt-pack format and C-ABI entry contract.",
+  "author": "sigint",
+  "license": "MIT OR Apache-2.0",
+  "library_filename": "libsigint_plugin_hello.so"
+}

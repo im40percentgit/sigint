@@ -1,0 +1,15 @@
+[package]
+name = "sigint-plugin-hello"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Example sigint runtime plugin demonstrating the .sgnt-pack format and C-ABI entry contract."
+license = "MIT OR Apache-2.0"
+
+[lib]
+# cdylib produces a C-compatible shared library (.so/.dylib/.dll) that the
+# sigint runtime loader can dlopen at startup.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sigint-plugin = { path = "../../crates/sigint-plugin" }
