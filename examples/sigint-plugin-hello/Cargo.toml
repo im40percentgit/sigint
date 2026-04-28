@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 description = "Example sigint runtime plugin demonstrating the .sgnt-pack format and C-ABI entry contract."
 license = "MIT OR Apache-2.0"
+authors = ["sigint"]
 
 [lib]
 # cdylib produces a C-compatible shared library (.so/.dylib/.dll) that the
@@ -13,3 +14,16 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 sigint-plugin = { path = "../../crates/sigint-plugin" }
+
+# DEC-P27-007: Plugin metadata readable by `sigint plugin pack` without a
+# separate manifest.json.  Fields here supplement or replace the manifest.json
+# when building a .sgnt-pack.  The `id` field is the canonical plugin
+# identifier; `version` defaults to [package].version when absent.
+[package.metadata.sigint-plugin]
+id = "com.sigint.example.hello"
+description = "Example plugin demonstrating the .sgnt-pack format and C-ABI entry contract."
+# version defaults to package.version ("0.1.0")
+# author defaults to package.authors[0] ("sigint")
+# license defaults to package.license ("MIT OR Apache-2.0")
+# entry_symbol defaults to "sigint_plugin_entry"
+# library_filename defaults to "libsigint_plugin_hello.so"
