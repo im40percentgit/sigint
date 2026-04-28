@@ -45,13 +45,16 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-      - name: Run ignored integration tests (Phase 27 closed-loop)
+      - name: Run Phase 27 closed-loop e2e test
         # Runs the plugin_closed_loop test (REQ-P27-P0-009).
+        # Scoped to the e2e crate's plugin_loop test by name — workspace-wide
+        # `--ignored` would also run integration tests requiring external
+        # services (Ollama, network), which are intentionally ignored.
         # --test-threads=1 avoids cargo build contention: the test shells out
         # to `cargo build -p sigint-plugin-hello` and concurrent builds on CI
         # runners can exhaust memory or collide on the shared target/ cache.
         # The plugin cdylib is warm-cached from the previous step (<10s extra).
-        run: cargo test --workspace -- --ignored --test-threads=1
+        run: cargo test -p sigint-e2e --test plugin_loop -- --ignored --test-threads=1 plugin_closed_loop
 
   clippy:
     name: Clippy
