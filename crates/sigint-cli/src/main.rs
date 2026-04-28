@@ -26,6 +26,7 @@ mod diff;
 mod doctor;
 mod log;
 mod model;
+mod pack;
 mod plugin;
 mod recon;
 mod report;
@@ -245,6 +246,34 @@ enum PluginCommands {
         /// Plugin name (will be prefixed with "sigint-" if not already).
         name: String,
     },
+    /// Package a cdylib crate into a distributable `.sgnt-pack` archive.
+    ///
+    /// The crate must have `crate-type = ["cdylib"]` in its `[lib]` section.
+    /// Manifest metadata is resolved from (in priority order):
+    ///   1. `--manifest <path>` if provided.
+    ///   2. A `manifest.json` in the crate root.
+    ///   3. `[package.metadata.sigint-plugin]` in the crate's Cargo.toml.
+    Pack {
+        /// Path to the plugin crate directory (must contain Cargo.toml).
+        crate_path: String,
+        /// Output path for the `.sgnt-pack` file.
+        /// Defaults to `<crate-name>-<version>.sgnt-pack` in the current directory.
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Build in release mode (default: release).
+        #[arg(long, default_value = "true")]
+        release: bool,
+        /// Build in debug mode instead of release.
+        #[arg(long, conflicts_with = "release")]
+        debug: bool,
+        /// Path to an explicit manifest.json (overrides crate-root manifest.json
+        /// and [package.metadata.sigint-plugin]).
+        #[arg(long)]
+        manifest: Option<String>,
+        /// Overwrite the output file if it already exists.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -455,6 +484,24 @@ async fn main() {
                 .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
             PluginCommands::New { name } => plugin::run_new(&name)
                 .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string())),
+            PluginCommands::Pack {
+                crate_path,
+                output,
+                release,
+                debug,
+                manifest,
+                force,
+            } => {
+                let use_release = !debug && release;
+                pack::run_pack(
+                    std::path::Path::new(&crate_path),
+                    output.as_deref().map(std::path::Path::new),
+                    use_release,
+                    manifest.as_deref().map(std::path::Path::new),
+                    force,
+                )
+                .map_err(|e: anyhow::Error| sigint_core::Error::Other(e.to_string()))
+            }
         },
         Commands::Train { command } => match command {
             TrainCommands::Export {
