@@ -2,9 +2,14 @@
  * Sessions — full list of all sessions with a trainable toggle column.
  *
  * Fetches all sessions on mount and renders them in a DataTable.
- * The "Harvest" column shows a toggle that calls api.train.harvest / unharvest.
- * Optimistic UI: the row flips immediately; on error the flip reverts and an
- * inline error banner is shown.
+ * The "Harvest" column shows a per-row toggle that calls api.train.harvest /
+ * unharvest. Optimistic UI: the row flips immediately; on error the flip
+ * reverts and an inline error banner is shown.
+ *
+ * Bulk-harvest: when ≥1 row is selected via the DataTable row-selection
+ * primitive, a sticky action bar appears at the bottom of the table offering
+ * "Harvest selected" and "Unharvest selected" buttons. Calls are dispatched
+ * in parallel (Promise.allSettled) so a single failure never blocks the rest.
  *
  * @decision DEC-P26-T5-001
  * @title Sessions page uses optimistic toggle with revert-on-error
@@ -14,6 +19,16 @@
  * any backend error (network, 404) reverts the row to its pre-click state and
  * surfaces a banner. The banner is dismissed on the next successful action or
  * on manual close, keeping the UI uncluttered for the happy path.
+ *
+ * @decision REQ-P26-P1-002-bulk
+ * @title Bulk harvest uses Promise.allSettled + frontend loop (option a)
+ * @status accepted
+ * @rationale For typical N < 50 sessions the per-request overhead is under
+ * 100 ms each against a local SQLite backend. Adding a batch endpoint would
+ * require a new route, handler, and backend tests for negligible UX gain.
+ * Promise.allSettled is preferred over Promise.all so a single failure
+ * (e.g. one session no longer exists) does not cancel the rest. The caller
+ * receives a full success/failure breakdown and surfaces a clear count banner.
  */
 
 import { h } from "preact";
@@ -21,7 +36,7 @@ import { useState, useEffect, useCallback } from "preact/hooks";
 import { api } from "../api";
 import type { Session } from "../types";
 import { DataTable } from "../components/DataTable";
-import type { Column } from "../components/DataTable";
+import type { Column, RowSelectionProps } from "../components/DataTable";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -89,14 +104,109 @@ function HarvestToggle({ session, onToggle, pending }: HarvestToggleProps) {
   );
 }
 
+// ── Bulk-action bar ────────────────────────────────────────────────────────
+
+interface BulkActionBarProps {
+  selectedCount: number;
+  allHarvested: boolean;
+  bulkPending: boolean;
+  onHarvest: () => void;
+  onUnharvest: () => void;
+  onClear: () => void;
+}
+
+function BulkActionBar({
+  selectedCount,
+  allHarvested,
+  bulkPending,
+  onHarvest,
+  onUnharvest,
+  onClear,
+}: BulkActionBarProps) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "12px",
+        padding: "10px 14px",
+        marginTop: "8px",
+        background: "var(--bg-elevated, var(--card-bg, #161b22))",
+        border: "1px solid var(--accent)",
+        borderRadius: "var(--radius-sm)",
+        fontSize: "12px",
+        flexWrap: "wrap",
+      }}
+      role="toolbar"
+      aria-label="Bulk session actions"
+    >
+      <span style={{ color: "var(--text)", fontWeight: 600 }}>
+        {selectedCount} session{selectedCount !== 1 ? "s" : ""} selected
+      </span>
+
+      <div style={{ display: "flex", gap: "8px", marginLeft: "auto" }}>
+        <button
+          class="btn btn-primary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          disabled={bulkPending}
+          onClick={onHarvest}
+          title="Add all selected sessions to the harvest pool"
+        >
+          {bulkPending ? "Working…" : "Harvest selected"}
+        </button>
+
+        {allHarvested && (
+          <button
+            class="btn"
+            style={{
+              fontSize: "12px",
+              padding: "4px 10px",
+              background: "none",
+              border: "1px solid var(--border)",
+              color: "var(--text-secondary)",
+            }}
+            disabled={bulkPending}
+            onClick={onUnharvest}
+            title="Remove all selected sessions from the harvest pool"
+          >
+            Unharvest selected
+          </button>
+        )}
+
+        <button
+          class="btn"
+          style={{
+            fontSize: "12px",
+            padding: "4px 10px",
+            background: "none",
+            border: "1px solid var(--border)",
+            color: "var(--text-secondary)",
+          }}
+          disabled={bulkPending}
+          onClick={onClear}
+          aria-label="Clear selection"
+          title="Clear selection"
+        >
+          Clear selection
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function Sessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Track which session IDs have an in-flight toggle request
+  // Track which session IDs have an in-flight per-row toggle request
   const [pending, setPending] = useState<Set<string>>(new Set());
+
+  // Bulk-selection state (controlled by this component, passed into DataTable)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkPending, setBulkPending] = useState(false);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -111,6 +221,8 @@ export function Sessions() {
         setLoading(false);
       });
   }, []);
+
+  // ── Per-row toggle ──────────────────────────────────────────────────────
 
   const handleToggle = useCallback(
     async (sessionId: string, newValue: boolean) => {
@@ -147,6 +259,85 @@ export function Sessions() {
     },
     []
   );
+
+  // ── Bulk harvest / unharvest ────────────────────────────────────────────
+
+  const handleBulkAction = useCallback(
+    async (targetValue: boolean) => {
+      if (selectedIds.size === 0) return;
+      setBulkPending(true);
+      setBulkResult(null);
+      setError(null);
+
+      const ids = Array.from(selectedIds);
+
+      // Optimistic: flip all selected rows immediately
+      setSessions((prev) =>
+        prev.map((s) =>
+          selectedIds.has(s.id) ? { ...s, trainable: targetValue } : s
+        )
+      );
+
+      // Fire all requests in parallel; allSettled so one failure doesn't abort others
+      const results = await Promise.allSettled(
+        ids.map((id) =>
+          targetValue ? api.train.harvest(id) : api.train.unharvest(id)
+        )
+      );
+
+      // Collect failed IDs and their error messages in a single pass
+      const failedIds = new Set<string>();
+      const failureMessages: string[] = [];
+      results.forEach((r, idx) => {
+        if (r.status === "rejected") {
+          failedIds.add(ids[idx]);
+          const msg =
+            r.reason instanceof Error ? r.reason.message : String(r.reason);
+          failureMessages.push(`${ids[idx].slice(0, 8)}: ${msg}`);
+        }
+      });
+
+      const successCount = results.length - failedIds.size;
+
+      if (failedIds.size > 0) {
+        // Revert only the rows whose requests failed
+        setSessions((prev) =>
+          prev.map((s) =>
+            failedIds.has(s.id) ? { ...s, trainable: !targetValue } : s
+          )
+        );
+        setError(
+          `${successCount} of ${ids.length} succeeded; ${failedIds.size} failed: ${failureMessages.join(", ")}`
+        );
+      } else {
+        const verb = targetValue ? "Harvested" : "Unharvested";
+        setBulkResult(`${verb} ${successCount} session${successCount !== 1 ? "s" : ""}`);
+      }
+
+      setSelectedIds(new Set());
+      setBulkPending(false);
+    },
+    [selectedIds]
+  );
+
+  // ── Derived state for bulk bar ──────────────────────────────────────────
+
+  // "Unharvest selected" only shown when ALL selected rows are currently trainable
+  const allSelectedHarvested =
+    selectedIds.size > 0 &&
+    Array.from(selectedIds).every(
+      (id) => sessions.find((s) => s.id === id)?.trainable === true
+    );
+
+  // ── Row selection config ────────────────────────────────────────────────
+
+  const rowSelection: RowSelectionProps<Session> = {
+    selectedIds,
+    onChange: setSelectedIds,
+    getRowId: (row) => row.id,
+  };
+
+  // ── Columns ──────────────────────────────────────────────────────────────
 
   const columns: Column<Session>[] = [
     {
@@ -199,6 +390,8 @@ export function Sessions() {
     },
   ];
 
+  // ── Render ──────────────────────────────────────────────────────────────
+
   return (
     <div class="page">
       <div class="page-header">
@@ -238,16 +431,62 @@ export function Sessions() {
         </div>
       )}
 
+      {bulkResult && (
+        <div
+          style={{
+            color: "var(--success)",
+            background: "rgba(63,185,80,0.08)",
+            border: "1px solid var(--success)",
+            borderRadius: "var(--radius-sm)",
+            padding: "8px 12px",
+            marginBottom: "16px",
+            fontSize: "12px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span>{bulkResult}</span>
+          <button
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--success)",
+              cursor: "pointer",
+              fontSize: "14px",
+              padding: "0 4px",
+            }}
+            onClick={() => setBulkResult(null)}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <p style={{ color: "var(--text-secondary)" }}>Loading sessions…</p>
       ) : (
-        <DataTable
-          columns={columns}
-          data={sessions}
-          onRowClick={(row) => {
-            window.location.hash = `#/sessions/${row.id}`;
-          }}
-        />
+        <>
+          <DataTable
+            columns={columns}
+            data={sessions}
+            rowSelection={rowSelection}
+            onRowClick={(row) => {
+              window.location.hash = `#/sessions/${row.id}`;
+            }}
+          />
+          {selectedIds.size > 0 && (
+            <BulkActionBar
+              selectedCount={selectedIds.size}
+              allHarvested={allSelectedHarvested}
+              bulkPending={bulkPending}
+              onHarvest={() => void handleBulkAction(true)}
+              onUnharvest={() => void handleBulkAction(false)}
+              onClear={() => setSelectedIds(new Set())}
+            />
+          )}
+        </>
       )}
     </div>
   );
